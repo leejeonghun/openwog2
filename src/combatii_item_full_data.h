@@ -1,0 +1,13 @@
+// combatii_item_full_data.h: strings for sub_1888D (item slots full), extracted from COMBATII.EXE.
+// Strings are Johab byte sequences.
+#pragma once
+
+// VA 0x7702F: "Your backpack is full."
+static const char kItemFullMsgFull[] = "\xa4\x81\x90\x77\xb7\xa1\x20\x8d\xc2\xc0\x65\x20\xac\x77\xc8\x81\xb7\xb3\x93\xa1\x94\x61\x2e";
+
+// VA 0x77047: "Send the ITEM to storage."
+static const char kItemFullChoiceNew[] = "\x49\x54\x45\x4d\xb7\x69\x20\xc0\x77\x89\xa1\x9d\xa1\x20\xa5\xa1\x90\x93\x93\xa1\x94\x61\x2e";
+
+// VA 0x7705F: "Move the backpack copy to storage and keep this one in its place."
+static const char kItemFullChoiceOld[] = "\xa4\x81\x90\x77\x88\xf5\xb7\x65\x20\xc0\x77\x89\xa1\x9d\xa1\x2c\x8b\x61\x20\xb8\x61\x9f\xa1\xb5\x41\x20\x90\xfd\xb7\x71\x2e";
+
