@@ -1120,10 +1120,9 @@ bool CombatII::battle_ai_3e251_dest(int unit_index, int& out_x, int& out_y, int&
 // Candidate destinations around a hostile, scored by sub_49ADF (manhattan distance from
 // the actor). The wc<=3 arm walks the sub_1A452 facing strip and applies sub_16699; the
 // wc6..0x13 arms scan the sub_1A452 band / sub_1AC08 diamond and require an empty cell
-// through sub_11DB2. wc 4 uses loc_3D976's single sub_16699 candidate per facing; wc 5 and
-// wc 0xB/0xC still use the previous adjacent-tile approximation because their arms go
-// through sub_1A7BA and the WC5 1CB53/1C685 distance-mode chain, which are not modelled
-// here yet.
+// through sub_11DB2. wc 4 uses loc_3D976's single sub_16699 candidate per facing; wc 0xB/0xC
+// use the sub_1A7BA mode-3 distance band; wc 5 uses the WC5 1CB53/1C685 distance chain
+// when the caller supplies its E8 diffusion, and the adjacent fallback otherwise.
 int CombatII::battle_ai_3d7b2_dest(int unit_index, int hx, int hy, int& out_x,
                                    int& out_y, const std::vector<int>* e8) const {
     out_x = out_y = -1;
@@ -1140,6 +1139,19 @@ int CombatII::battle_ai_3d7b2_dest(int unit_index, int hx, int hy, int& out_x,
     }
     static constexpr int kStepX[4] = { 0, -1, 0, 1 };  // S,W,N,E (sub_49ABC)
     static constexpr int kStepY[4] = { 1, 0, -1, 0 };
+    if (wc == 0xB || wc == 0xC) {
+        // loc_3DBDA: 1B7D4(7FFFh/F0B84_hi, 3) + 1A7BA mode 3; the outer keeps the strict
+        // minimum, so the shared chain ends at the best distance and its last destination.
+        const int K = (wc == 0xB) ? 9 : 7;
+        int chain = 0x7FFF, cx = -1, cy = -1;
+        for (int f = 0; f < 4; ++f) {
+            const int x0 = hx + kStepX[f], y0 = hy + kStepY[f];
+            battle_ai_1a7ba_distance(unit_index, x0, y0, f, K, chain, cx, cy);
+        }
+        if (chain == 0x7FFF) return 0x7FFF;
+        out_x = cx; out_y = cy;
+        return chain;
+    }
     auto empty_for_11db2 = [&](int x, int y) {
         const int o = battle_unit_index_at(x, y);
         return o < 0 || o == unit_index;  // sub_11EE4 released the actor footprint
@@ -1185,7 +1197,9 @@ int CombatII::battle_ai_3d7b2_dest(int unit_index, int hx, int hy, int& out_x,
             if (battle_ai_candidate_tile_legal_1x1(x, y, unit_index, mobility))
                 consider(x, y);
         }
-    } else if (wc == 5 || wc == 0xB || wc == 0xC) {
+    } else if (wc == 5) {
+        // Adjacent fallback only when the caller has no E8 diffusion for the 1C685 mode-3
+        // chain (the mage and sub_40295 callers pass one).
         for (int f = 0; f < 4; ++f) {
             const int x = hx + kStepX[f], y = hy + kStepY[f];
             if (battle_ai_terrain_bucket_compatible(hx, hy, x, y) &&

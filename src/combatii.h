@@ -1535,6 +1535,11 @@ private:
     // sub_3D7B2 loc_3D9D7 wc5 distance mode (F0B8E==3) over the supplied E8 diffusion.
     int battle_ai_wc5_3d7b2(int unit_index, int hx, int hy,
                             const std::vector<int>& e8, int& out_x, int& out_y) const;
+    // sub_1A7BA F0B8E==3 (sub_3D7B2 wc 0xB/0xC): two-pass sub_1A452 band geometry, scored
+    // by the strict minimum sub_49ADF distance and gated by sub_16699. chain is F0B84_hi
+    // and is shared across facings (7FFFh on facing 0).
+    int battle_ai_1a7ba_distance(int unit_index, int x0, int y0, int d, int K,
+                                 int& chain, int& bx, int& by) const;
     // sub_3E01B: among empty cells within radius r, the one with the best allied-density (+10 per
     // cell) and distance score, plus the most common facing among allies.
     bool battle_ai_3e01b_dest(int unit_index, int radius, int& out_x, int& out_y,
