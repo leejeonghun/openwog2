@@ -2079,6 +2079,66 @@ static bool ai_band_next(AiBandIter& it, int& ox, int& oy) {
     return true;
 }
 
+// sub_1A7BA with F0B8E==3 (sub_3D7B2 wc 0xB/0xC). This is the same two-pass sub_1A452
+// band geometry as the mode-2 3CA3C arm (jump table at off_1A79A, the slotA/slotB row
+// test and the pass-start adjustment), but the candidate score is the strict minimum
+// sub_49ADF distance from the actor, gated by sub_16699 instead of sub_13CBD/sub_165C2.
+// No E8 read is needed on this path. F0B84_hi (chain) is shared across facings.
+int CombatII::battle_ai_1a7ba_distance(int unit_index, int x0, int y0, int d, int K,
+                                       int& chain, int& bx, int& by) const {
+    if (unit_index < 0 || (size_t)unit_index >= units_.size()) return chain;
+    if (map_w_ == 0 || map_h_ == 0) return chain;
+    static constexpr int kStepX[4] = { 0, -1, 0, 1 };  // S,W,N,E (sub_49ABC)
+    static constexpr int kStepY[4] = { 1, 0, -1, 0 };
+    const int map_w = (int)map_w_, map_h = (int)map_h_;
+    const auto& actor = units_[(size_t)unit_index];
+    const int ax = (int)(int8_t)actor.x, ay = (int)(int8_t)actor.y;
+    const int mobility = battle_ai_mobility_selector(actor);
+    auto attr_at = [&](int x, int y) -> int {  // sub_1093D
+        if (x < 0 || y < 0 || x >= map_w || y >= map_h) return 0;
+        const size_t i = (size_t)y * (size_t)map_w + (size_t)x;
+        return i < tile_attr_.size() ? (int)tile_attr_[i] : 0;
+    };
+    const int X = x0 + kStepX[(d + 2) & 3];  // back to the hostile cell
+    const int Y = y0 + kStepY[(d + 2) & 3];
+    const int raw0 = attr_at(X, Y);
+    const int coarse0 = raw0 >= 0x64 ? raw0 - 0x64 : raw0;
+    const int base = coarse0 & 0xF0;           // var_10
+    const int base_hi = (base + 0x10) & 0xFF;  // var_8
+    int x1 = X, y1 = Y, slotA = 0, slotB = 0, slotC = 0;
+    if (d == 0)      { x1 -= 1; y1 -= 1; slotA = x1;     slotC = 6; }
+    else if (d == 1) { slotB = y1 + 1;    x1 += 1;       slotC = 6; }
+    else if (d == 2) { slotA = x1 - 1;    y1 += 1;       slotC = 4; }
+    else             { slotB = y1 + 1;    x1 -= 1; y1 += 1; slotC = 4; }
+    for (int pass = 0; pass < 2; ++pass) {
+        const int rng = K + (slotC >> 1);
+        int varC = base, var4 = base_hi, edi = 0;
+        AiBandIter it;
+        ai_band_init(it, x1, y1, d, 2, rng);
+        int cx, cy;
+        while (ai_band_next(it, cx, cy)) {
+            const int raw = attr_at(cx, cy);
+            const int al = raw >= 0x64 ? raw - 0x64 : raw;
+            if (al == 0) break;
+            if (al == varC + 8) break;
+            if (al < varC) { if (base_hi != var4) break; }
+            if (al > var4) { varC = var4; var4 = (var4 + 0x10) & 0xFF; }
+            if (++edi <= slotC) continue;
+            if ((d & 1) == 0) { if (cx != slotA) continue; }
+            else { if (cy != slotB) continue; }
+            const int dist = std::abs(ax - cx) + std::abs(ay - cy);
+            if (dist >= chain) continue;  // strict minimum
+            if (!battle_ai_candidate_tile_legal_1x1(cx, cy, unit_index, mobility)) continue;
+            bx = cx; by = cy; chain = dist;
+        }
+        if (d == 0)      { x1 += 1; slotA = x1; }
+        else if (d == 1) { y1 -= 1; slotB = y1; }
+        else if (d == 2) { slotA = x1; x1 += 1; }
+        else             { y1 -= 1; slotB = y1; }
+    }
+    return chain;
+}
+
 // Scores one input cell (a hostile position) for the sub_3CA3C arms: wc <= 3
 // (loc_3CB73), wc == 4 (loc_3CC3A), wc == 5 (loc_3CC91) and wc 6..0x13
 // (loc_3CE1E/CF86/CFFC/D091/D12B/D1D4/D2E3).
