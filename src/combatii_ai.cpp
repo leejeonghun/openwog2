@@ -1185,7 +1185,8 @@ bool CombatII::battle_ai_wc5_165c2_gate(const std::vector<int>& grid, int nx,
 }
 
 // sub_1C685 body. Takes the adjacent tile, facing and range, runs the flood, then
-// updates F0B84 (destination and score) in st. Only F0B8E==2 (WC5) is supported.
+// updates F0B84 (destination and score) in st. F0B8E==2 (E8 score) and ==3 (the
+// sub_3D7B2 distance path) are supported.
 void CombatII::battle_ai_wc5_1c685(std::vector<int>& grid, Wc5Iter& it,
                                     Wc5Score& st, int adj_x, int adj_y, int f,
                                     int rng, int unit_index) const {
@@ -1310,7 +1311,21 @@ void CombatII::battle_ai_wc5_1c685(std::vector<int>& grid, Wc5Iter& it,
             continue;
         }
         if (wc5_s16(it.n_lo) <= 1) continue;
-        if (st.b8e != 2) continue;  // DIST path is not ported (fail closed)
+        if (st.b8e != 2) {
+            // loc_1C90A (sub_3D7B2 wc5, F0B8E==3): strict minimum sub_49ADF distance
+            // from the actor, then the sub_16699 1x1 gate. F0B84_hi carries the best
+            // distance across the four facings.
+            const auto& actor = units_[(size_t)unit_index];
+            const int ax = (int)(int8_t)actor.x, ay = (int)(int8_t)actor.y;
+            const int dist = std::abs(ax - x) + std::abs(ay - y);
+            if (dist >= wc5_s16(st.b84s)) continue;
+            const int mobility = battle_ai_mobility_selector(actor);
+            if (!battle_ai_candidate_tile_legal_1x1(x, y, unit_index, mobility)) continue;
+            st.b84x = wc5_s16(x);
+            st.b84s = wc5_s16(dist);
+            st.b82 = wc5_s16(y);
+            continue;
+        }
         if (si < -15028) {
             si = wc5_s16(-(si + 0x3A98));
             battle_ai_wc5_diff_write(grid, x, y, si);
@@ -1368,6 +1383,49 @@ int CombatII::battle_ai_wc5_hostile_score(std::vector<int>& grid, Wc5Iter& it,
     out_dy = best_y;
     out_attack_facing = attack_facing;
     return score;
+}
+
+// sub_3D7B2 loc_3D9D7: WC5 distance-mode arm. 1CB53 snapshot and 1CBB1 restore bracket
+// the 1C685 flood for each facing; 1B7D4 sets F0B8E=3 (distance) and keeps F0B84_hi
+// across facings, resetting it to 7FFF only on facing 0. The epilogue adds
+// 0x5A - sub_49ADF(actor, hostile) when sub_1AEF3 reports 5.
+int CombatII::battle_ai_wc5_3d7b2(int unit_index, int hx, int hy,
+                                   const std::vector<int>& e8,
+                                   int& out_x, int& out_y) const {
+    out_x = out_y = -1;
+    if (unit_index < 0 || (size_t)unit_index >= units_.size()) return 0x7FFF;
+    if (map_w_ == 0 || map_h_ == 0) return 0x7FFF;
+    if (e8.size() != (size_t)map_w_ * (size_t)map_h_) return 0x7FFF;
+    const auto& actor = units_[(size_t)unit_index];
+    const int rng = battle_ai_wc5_aef3((int)actor.combat_class);
+    static constexpr int kAdjX[4] = { 0, -1, 0, 1 };
+    static constexpr int kAdjY[4] = { 1, 0, -1, 0 };
+    std::vector<int> grid = e8;
+    Wc5Iter it;
+    Wc5Score st;
+    st.snap.assign(256, 0);
+    battle_ai_wc5_state_init(st, 0x7FFF, unit_index);
+    st.b8e = 3;  // sub_1B7D4(actor, 7FFFh, 3) on facing 0
+    int best = 0x7FFF, bx = -1, by = -1;
+    for (int f = 0; f < 4; ++f) {
+        const int ax = hx + kAdjX[f], ay = hy + kAdjY[f];
+        battle_ai_wc5_snapshot(grid, it, st, ax, ay, 3, f, rng + 1);
+        battle_ai_wc5_1c685(grid, it, st, ax, ay, f, rng, unit_index);
+        battle_ai_wc5_restore(grid, it, st, ax, ay, 3, f, rng + 1);
+        const int cand = wc5_s16(st.b84s);
+        if (cand < best) {
+            best = cand;
+            bx = wc5_s16(st.b84x);
+            by = wc5_s16(st.b82);
+        }
+    }
+    if (best == 0x7FFF) return 0x7FFF;
+    if (rng == 5) {
+        const int actor_x = (int)(int8_t)actor.x, actor_y = (int)(int8_t)actor.y;
+        best += 0x5A - (std::abs(actor_x - hx) + std::abs(actor_y - hy));
+    }
+    out_x = bx; out_y = by;
+    return best;
 }
 
 // sub_3E65E: pick the hostile with the strict maximum score (first wins ties).
