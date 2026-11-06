@@ -3007,9 +3007,9 @@ bool CombatII::battle_defense_3c4c1(int unit_index) {
 // sub_43CF0 only uses facing 0 with d > 0 (top-left origin, count cells along +x, then
 // +y). sub_1A1F8 is the sub_11DB2 guard plus the sub_1201D hostility test (inversion
 // included).
-// Unported presentation slots (28422/28883/F13C8/F13D8/F13E4/56BD4/57F18/22AF9/45559)
-// only log; gameplay (targets, damage, state, sub_197AD) is equivalent. F13D8 (sub_29722)
-// for sprites 185..187 is unported, so it falls through as -1 (the confuse chain).
+// Presentation: 56BD4/57F18/22AF9 and the F13C8/F13D8/F13E4 spell limbs are wired to
+// their ported drivers (2A75A/29722); gameplay (targets, damage, state, sub_197AD) is
+// equivalent.
 bool CombatII::battle_ai_class_special_43cf0(int unit_index) {
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return true;
     if (map_w_ == 0 || map_h_ == 0) return true;
@@ -3069,10 +3069,11 @@ bool CombatII::battle_ai_class_special_43cf0(int unit_index) {
         for (int row = 0; row < 6; ++row)
             for (int col = 0; col < 3; ++col) add_by_army(ax - 1 + col, ay + 2 + row);
         if (battle_target_list_.empty()) {
-            camera_center_on(ax, ay);
-            if (battle_trace_)
-                fprintf(stderr, "COMBAT: AI unit=%d class=5C 43CF0 empty -> 28422(1)/28883(1)/F13C8/28422(0) (spell limb stub)\n",
-                        units_[(size_t)unit_index].id);
+            // loc_43F54: F13C8 = sub_2B822 -> sub_2A75A(kind 0, k=1).
+            battle_spell_name_ = kSpellNames[19];                // off_74288 (Meteor k=1)
+            battle_item_2a75a(unit_index, 0, 1);
+            if (should_exit_) return true;
+            battle_item_2a75a_fx(unit_index, 0, 1, ax, ay);
             return true;
         }
         if (battle_trace_)
@@ -3092,9 +3093,9 @@ bool CombatII::battle_ai_class_special_43cf0(int unit_index) {
         battle_resolve_list(unit_index, true, nullptr);                 // 1DDF0
         camera_center_on(ax, ay);                              // 1124A(actor)
         battle_unit_label(unit_index, "Magma Fire!");            // 48612
-        if (battle_trace_)                                     // sub_56BD4 presentation stub
-            fprintf(stderr, "COMBAT: AI unit=%d class=5D 43CF0 Magma Fire! (56BD4 stub)\n",
-                    units_[(size_t)unit_index].id);
+        // sub_43CF0 loc_43FDB: sub_56BD4(eax=x, edx=y) after the damage and label.
+        battle_fx_56bd4(unit_index, ax, ay, 0);                 // sub_56BD4 (hellfire)
+        if (should_exit_) return true;
         camera_center_on(camx, camy);                          // 1124A(cam+6)
         return true;
     }
@@ -3106,9 +3107,11 @@ bool CombatII::battle_ai_class_special_43cf0(int unit_index) {
         collect_diamond7(ax, ay);
         camera_center_on(ax, ay);
         if (battle_target_list_.empty()) {
-            if (battle_trace_)
-                fprintf(stderr, "COMBAT: AI unit=%d spr=184 43CF0 empty -> 28422(1)/28883(1)/F13E4/28422(0) (spell limb stub)\n",
-                        units_[(size_t)unit_index].id);
+            // loc_4410F: F13E4 = sub_2B8F3 -> sub_2A75A(kind 1, k=1).
+            battle_spell_name_ = kSpellNames[40];                // off_742DC (Star Tearer k=1)
+            battle_item_2a75a(unit_index, 1, 1);
+            if (should_exit_) return true;
+            battle_item_2a75a_fx(unit_index, 1, 1, ax, ay);
             return true;
         }
         if (battle_trace_)
@@ -3117,9 +3120,9 @@ bool CombatII::battle_ai_class_special_43cf0(int unit_index) {
         battle_resolve_list(unit_index, true, nullptr);                 // 1DDF0
         units_[(size_t)unit_index].anim_frame = 6;             // [64h]=6
         battle_unit_label(unit_index, "Sea Blizzard");           // 48612
-        if (battle_trace_)                                     // sub_57F18 presentation stub
-            fprintf(stderr, "COMBAT: AI unit=%d spr=184 43CF0 Sea Blizzard (57F18 stub)\n",
-                    units_[(size_t)unit_index].id);
+        // sub_43CF0 loc_440BA: sub_57F18(eax=unit) after the damage and label.
+        battle_fx_57f18(unit_index, ax, ay, 0);                // sub_57F18 (blizzard)
+        if (should_exit_) return true;
         units_[(size_t)unit_index].anim_frame = 0;             // [64h]=0 (before sub_1ED45)
         return true;
     }
@@ -3127,40 +3130,46 @@ bool CombatII::battle_ai_class_special_43cf0(int unit_index) {
         if (combat_rand(3) != 0) return true;                  // sub_499BD(3) != 0
         units_[(size_t)unit_index].anim_frame = 5;             // [64h]=5
         for (int v = 0; v < 2; ++v) {
-            // sub_45559 (sub_454B3 + sub_5E9E8, camera refresh) plus sub_499DA(0x10).
+            // sub_45559 (sub_454B3 + sub_5E9E8) then sub_499DA(0x10).
+            present_cutscene_frame();
+            if (should_exit_) return true;
             game_timer_set(0x10);
             units_[(size_t)unit_index].anim_frame = (uint8_t)(v + 6); // [64h]=6,7
         }
         camera_center_on(ax, ay);
-        // 28422(1)/28883(2)/F13D8/28422(0): sub_29722 (the Sea Mist body) is unported, so
-        // fall through as -1 and run the confuse chain inline.
-        if (battle_trace_)
-            fprintf(stderr, "COMBAT: AI unit=%d spr=%d 43CF0 Sea Mist spell limb (F13D8=29722 stub, ret=-1 fall-through)\n",
-                    units_[(size_t)unit_index].id, spr);
-        battle_unit_label(unit_index, "Sea Mist");               // 48612
-        if (battle_trace_)                                     // sub_22AF9 presentation stub
-            fprintf(stderr, "COMBAT: AI unit=%d 43CF0 Sea Mist 22AF9(%d,%d,2) stub\n",
-                    units_[(size_t)unit_index].id, ax, ay);
-        // CC968[0] chain (approximated by effective army, self included) confuse:
-        // c = clamp(0x1E + lvl_a - lvl_t, 10, 0x46); rand(100) < c sets [1E] = (&F8)|2,
-        // [1F] = 0x64 and calls sub_197AD.
-        const int actor_eff = battle_effective_army(units_[(size_t)unit_index]);
-        const int actor_lvl = (int)units_[(size_t)unit_index].combat_level_2b;
-        for (size_t i = 0; i < units_.size(); ++i) {
-            auto& t = units_[i];
-            if (!t.active || t.hp <= 0) continue;
-            if (battle_effective_army(t) != actor_eff) continue;
-            int c = 0x1E + actor_lvl - (int)t.combat_level_2b;
-            if (c < 10) c = 10;
-            else if (c > 0x46) c = 0x46;
-            if (combat_rand(100) >= c) continue;               // sub_28947
-            if (t.sprite_type >= 0x12C) continue;
-            t.combat_flags_1e = (uint8_t)((t.combat_flags_1e & 0xF8) | 2);
-            t.ail_1f = 0x64;
-            battle_remove_from_ready_queue((int)i);            // sub_197AD
-            if (battle_trace_)
-                fprintf(stderr, "COMBAT: 43CF0 Sea Mist confuse unit=%d c=%d [1E]|2 [1F]=100 197AD\n",
-                        t.id, c);
+        // F13D8 = sub_2B86C: i-fist.ssp + sub_29722(row 1, k=2). The handler owns the
+        // damage and the 29437 confuse status; the Sea Mist fallback below runs only when
+        // sub_29722 returns -1 (no target).
+        battle_spell_name_ = kSpellNames[32];                    // off_742BC (Diamond Fist k=2)
+        bool wave_hit = false;
+        const int wave_rc = battle_spell_wave(unit_index, 1, 2, ax, ay, true, &wave_hit);
+        if (should_exit_) return true;
+        if (!wave_hit || wave_rc != 0) {
+            battle_unit_label(unit_index, "Sea Mist");           // 48612
+            // sub_43CF0 loc_44238: F13D8 returned -1, so play 22AF9(x, y, 2) before the chain.
+            battle_fx_22af9(unit_index, ax, ay, 2);             // sub_22AF9 (icetypho)
+            if (should_exit_) return true;
+            // CC968[0] chain (approximated by effective army, self included) confuse:
+            // c = clamp(0x1E + lvl_a - lvl_t, 10, 0x46); rand(100) < c sets [1E] = (&F8)|2,
+            // [1F] = 0x64 and calls sub_197AD.
+            const int actor_eff = battle_effective_army(units_[(size_t)unit_index]);
+            const int actor_lvl = (int)units_[(size_t)unit_index].combat_level_2b;
+            for (size_t i = 0; i < units_.size(); ++i) {
+                auto& t = units_[i];
+                if (!t.active || t.hp <= 0) continue;
+                if (battle_effective_army(t) != actor_eff) continue;
+                int c = 0x1E + actor_lvl - (int)t.combat_level_2b;
+                if (c < 10) c = 10;
+                else if (c > 0x46) c = 0x46;
+                if (combat_rand(100) >= c) continue;           // sub_28947
+                if (t.sprite_type >= 0x12C) continue;
+                t.combat_flags_1e = (uint8_t)((t.combat_flags_1e & 0xF8) | 2);
+                t.ail_1f = 0x64;
+                battle_remove_from_ready_queue((int)i);        // sub_197AD
+                if (battle_trace_)
+                    fprintf(stderr, "COMBAT: 43CF0 Sea Mist confuse unit=%d c=%d [1E]|2 [1F]=100 197AD\n",
+                            t.id, c);
+            }
         }
         units_[(size_t)unit_index].anim_frame = 0;             // [64h]=0
         return true;
@@ -4288,7 +4297,8 @@ bool CombatII::battle_ai_40295_move(int unit_index, int wc) {
     const bool wc1_threat_found = false; // sub_4016A already handled scanning and attacks
 
     if (wc1_class) {
-        // sub_40295 may continue into the unported patrol/movement state machine.
+        // The full sub_40295 state machine is in battle_ai_40295_body; this fallback only
+        // runs when the conservative WC1 occupancy gate is withheld.
         const int watch_state = battle_ai_watch_state(unit_index);
         if (wc1_directional_scan) {
             // Original second-sub_3E18B branch (loc_4062D/loc_40664): state > 0 runs the

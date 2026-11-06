@@ -1875,19 +1875,20 @@ private:
     // ---- Sub-ring graphics (sub_4C72A/4CDBD/4CAA3) and the two-level 4D06E ring ----
     //   Same final layout as the original: 36 px radius ellipse (ry = 36*0.83), start angle 90
     //   degrees (top), 2*pi/N counter-clockwise, hit test centre +/-12 px (sub_4AC8A). Icons use the
-    //   same logical-to-file rule as the main ring (logical*4+frame; MAGIC g -> g, d -> g*7+d,
-    //   k -> k; SKILL dx; SPECIAL entry/si; AI_CTRL id). Open (4B8EB) 0 -> 36 over 9 frames and
-    //   hide (4B9D7) 36 -> 0 over 9 frames use the same sfx, timing and +10 deg/frame rotation as
-    //   the main ring.
-    //   sub_4C72A is three-level (g -> d -> k, R = g*21+d*3+k); sub_4CDBD/sub_4CAA3 are one-level
+    //   same logical-to-file rule as the main ring (logical*4+frame; MAGIC uses the
+    //   sub_4BFCA ids 1..7 / {0,8..14} / {0,15..21}; SKILL dx; SPECIAL entry/si; AI_CTRL id).
+    //   Open (4B8EB) 0 -> 36 over 9 frames and hide (4B9D7) 36 -> 0 over 9 frames use the
+    //   same sfx, timing and +10 deg/frame rotation as the main ring.
+    //   sub_4C72A is three-level (sub_4BFCA ids -> unk_74FA8 table; R = (v-1)+kind);
+    //   sub_4CDBD/sub_4CAA3 are one-level
     //   (dx/si); sub_4D06E is two-level (level-1 ids -> level-2 values, with
     //   [6Ch]/[6Dh]/[6Eh]/[80h]/[82h] and 4CE1F).
     //   The older text paging and hotkeys (M/I/V/digits) remain as a verification fallback.
     enum class SubRingKind {
         None = 0,
-        MagicG = 1,   // sub_4C72A level 1: group g (learned group)
-        MagicD = 2,   // sub_4C72A level 2: spell d (0..6)
-        MagicK = 3,   // sub_4C72A level 3: level k (0..2)
+        MagicG = 1,   // sub_4C72A level 1: sub_4BFCA ids 1..7 (group = id-1)
+        MagicD = 2,   // sub_4C72A level 2: sub_4BFCA ids {0,8..14} (b = 0->7, id-8)
+        MagicK = 3,   // sub_4C72A level 3: sub_4BFCA ids {0,15..21} (c = 0->7, id-15)
         Item = 4,     // sub_4CDBD: dx (4C19D list)
         Weapon = 5,   // sub_4CAA3: si (4C03E position)
         AI1 = 6,      // sub_4D06E level 1: 4C4F9 ids
@@ -1903,8 +1904,8 @@ private:
     int ring_sub_hover_frame_ = 0; // frame of the hovered sub-ring descriptor (sub_4AD6F equivalent)
     double ring_sub_hover_last_us_ = 0.0;
     bool ring_sub_open_ = false;
-    int ring_sub_magic_g_ = -1;   // g chosen at level 1
-    int ring_sub_magic_d_ = -1;   // d chosen at level 2
+    int ring_sub_magic_g_ = -1;   // group 0..6 (sub_4BFCA id - 1) chosen at level 1
+    int ring_sub_magic_d_ = -1;   // b 0..7 chosen at level 2 (-2 = level-2 stage active)
     int ring_sub_ai_first_ = -1;  // id chosen at AI level 1 (selects the level-2 options)
     const SPRParser* ring_sub_icons() const; // ICO per kind (MAGIC/SPECIAL/SKILL/AI_CTRL)
     SPRParser* ring_sub_icons_mut();
@@ -1918,7 +1919,7 @@ private:
     void ring_sub_set_hover(int pos);              // sub-ring equivalent of sub_4AC8A
     void render_sub_ring();                       // sub-ring icons and hover
     bool ring_sub_handle_click(int unit_index, int mx, int my, int& out_opt); // equivalent of the 4BA7F click
-    std::vector<int> battle_magic_group_options(int unit_index) const; // 4C72A level 1: learned g
+    std::vector<int> battle_magic_group_options(int unit_index) const; // learned groups for the magic menu gate
     std::vector<int> battle_ai_first_ids(int unit_index) const; // sub_4C4F9 equivalent
     std::vector<int> battle_ai_second_ids(int unit_index, int first_id) const; // 4D06E level 1 -> level 2
     void battle_ai_apply_second(int unit_index, int second_id); // 4D06E off_4D03A equivalent (apply level-2 value)
@@ -2053,7 +2054,8 @@ private:
     int battle_spell_2c468(int unit_index, int k, int tx, int ty);                 // 2C468 DNA Change
     int battle_spell_2c566(int unit_index, int k, int tx, int ty);                 // 2C566 Black Hole
     int battle_spell_field(int unit_index, int g, int k, int tx, int ty);          // 29514
-    int battle_spell_wave(int unit_index, int g, int k, int tx, int ty);           // 29722
+    int battle_spell_wave(int unit_index, int g, int k, int tx, int ty,
+                          bool play_visual = false, bool* out_had_targets = nullptr); // 29722
     // ---- Spell effects (sub_4F460 SSP / sub_1FEA4 NSP / sub_287AF hit pacing) ----
     // An NSP frame is a flat block of "[w][h] plus w*h pixels (0FFh transparent)", the same layout
     // sub_5EE51 takes.
@@ -2170,6 +2172,7 @@ private:
     int battle_fx_25dfe(int unit_index, int k);                   // sub_25DFE healwind (Wide Heal effect)
     int battle_fx_25c88(int unit_index, int tx, int ty, int k);   // sub_25C88 cure.nsp particles
     int battle_fx_2d5a3(int unit_index);                          // sub_2D5A3 counter.nsp (counterattack)
+    int battle_fx_2d527(int unit_index);                          // sub_2D527 restrain.nsp (F1474 restrain)
     int battle_fx_2d684(int unit_index);                          // sub_2D684 critical.nsp (critical hit)
     int battle_fx_2d7d2(int unit_index, int k);                   // sub_2D7D2 swstr.nsp (sword strike)
     int battle_fx_2dfc1(int unit_index, int k);                   // sub_2DFC1 madaxe.nsp

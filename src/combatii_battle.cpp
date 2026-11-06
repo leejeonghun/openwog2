@@ -12,6 +12,14 @@
 #include <cstdio>
 #include <cstring>
 
+// sub_4C72A tail: read unk_74FA8 after the sub_4BFCA id normalization.
+// Returns the 1-based spell id, or 0 for an empty/non-base slot.
+static int battle_magic_ring_value(int g, int b, int c) {
+    if (g < 0 || g > 6 || b < 0 || b > 7 || c < 0 || c > 7) return 0;
+    const int v = (int)kMagicRingMap[g][b][c];
+    return (v != 0 && (v - 1) % 3 == 0) ? v : 0;
+}
+
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
@@ -3987,29 +3995,38 @@ bool CombatII::battle_player_input() {
             // Hit: confirm per level.
             switch (ring_subkind_) {
                 case SubRingKind::MagicG: {
-                    ring_sub_magic_g_ = opt;
+                    // sub_4BFCA stage 0 returns id 1..7; g = id-1.
+                    ring_sub_magic_g_ = opt - 1;
                     if (battle_trace_)
-                        fprintf(stderr, "COMBAT: magic g=%d (4C72A level 1)\n", opt);
+                        fprintf(stderr, "COMBAT: magic a=%d g=%d (4C72A level 1)\n", opt, ring_sub_magic_g_);
                     ring_sub_open(SubRingKind::MagicD, ui);
                     return false;
                 }
                 case SubRingKind::MagicD: {
-                    ring_sub_magic_d_ = opt;
+                    // sub_4C72A: id 0 -> b=7, ids 8..14 -> b=0..6.
+                    ring_sub_magic_d_ = (opt == 0) ? 7 : opt - 8;
                     if (battle_trace_)
-                        fprintf(stderr, "COMBAT: magic g=%d d=%d (4C72A level 2)\n",
-                                ring_sub_magic_g_, opt);
+                        fprintf(stderr, "COMBAT: magic g=%d id=%d b=%d (4C72A level 2)\n",
+                                ring_sub_magic_g_, opt, ring_sub_magic_d_);
                     ring_sub_open(SubRingKind::MagicK, ui);
                     return false;
                 }
                 case SubRingKind::MagicK: {
-                    const int g = ring_sub_magic_g_, d = ring_sub_magic_d_, k = opt;
-                    const int r = g * 21 + d * 3 + k;
+                    // sub_4C72A: id 0 -> c=7, ids 15..21 -> c=0..6; then unk_74FA8.
+                    const int g = ring_sub_magic_g_, b = ring_sub_magic_d_;
+                    const int c = (opt == 0) ? 7 : opt - 15;
+                    const int v = battle_magic_ring_value(g, b, c);
+                    const int kind = (v != 0) ? battle_spell_kind(u, (v - 1) / 21) : -1;
+                    const int r = (v != 0) ? (v - 1) + kind : -1;
                     if (battle_trace_)
-                        fprintf(stderr, "COMBAT: magic R=%d (g=%d d=%d k=%d, 4C72A level 3)\n", r, g, d, k);
-                    // 4C72A tail: the kind check belongs to 4C605 (Wrong Spell). Out of
-                    // range (R >= 147) backs out to level 2 as for -1.
-                    if (r < 0 || r >= 147) {
-                        ring_sub_open(SubRingKind::MagicD, ui);
+                        fprintf(stderr, "COMBAT: magic g=%d b=%d c=%d v=%d kind=%d R=%d (4C72A level 3)\n",
+                                g, b, c, v, kind, r);
+                    // Empty/non-base slot: sub_4C72A returns -1 and sub_4D442 passes it to
+                    // sub_4C605 (Wrong Spell). For a valid slot, run 4C605's kind gate now;
+                    // the cursor opens only when it passes.
+                    if (v == 0 || r < 0 || battle_spell_kind(u, r / 21) != r % 3) {
+                        battle_cast_magic(ui, -1, -1, -1);
+                        back_to_ring();
                         return false;
                     }
                     battle_magic_pending_r_ = r;
@@ -4072,6 +4089,7 @@ bool CombatII::battle_player_input() {
                         }
                         if (battle_trace_)
                             fprintf(stderr, "COMBAT: first=13 [83h]=0 -> manual (equivalent to sub_4D06E returning 1)\n");
+                        battle_used_bits_ = (uint16_t)(battle_used_bits_ | 0x01); // var_28 |= 1
                         ring_sub_close();
                         back_to_ring();
                         return false;
@@ -4089,12 +4107,8 @@ bool CombatII::battle_player_input() {
                         return false;
                     }
                     if (opt == 10) {
-                        // loc_4D337: 4C72A -> [80h] = R/3 (= g*7 + d).
-                        auto groups = battle_magic_group_options(ui);
-                        if (groups.empty()) {
-                            sfx(0x02);
-                            return false;
-                        }
+                        // loc_4D337: 4C72A -> [80h] = R/3 (= g*7 + d). The original
+                        // has no learned-group gate here; sub_4C72A shows ids 1..7.
                         ring_sub_magic_g_ = -1;
                         ring_sub_magic_d_ = -1;
                         ring_subkind_ = SubRingKind::AIMagic;
@@ -4125,27 +4139,36 @@ bool CombatII::battle_player_input() {
                     return false;
                 }
                 case SubRingKind::AIMagic: {
-                    // AIMagic level 3 (g -> d -> k): g==-1 confirms g, d==-2 confirms d,
-                    // otherwise k -> [80h].
+                    // AIMagic level 3 (group -> b -> c): sub_4BFCA ids and unk_74FA8.
                     if (ring_sub_magic_g_ < 0) {
-                        ring_sub_magic_g_ = opt;
+                        ring_sub_magic_g_ = opt - 1; // stage-0 id 1..7
                         ring_sub_magic_d_ = -2;
                         ring_sub_compute_layout(ui);
                         if (battle_trace_)
-                            fprintf(stderr, "COMBAT: AI magic g=%d\n", opt);
+                            fprintf(stderr, "COMBAT: AI magic a=%d g=%d\n", opt, ring_sub_magic_g_);
                     } else if (ring_sub_magic_d_ == -2) {
-                        ring_sub_magic_d_ = opt;
+                        ring_sub_magic_d_ = (opt == 0) ? 7 : opt - 8;
                         ring_sub_compute_layout(ui);
                         if (battle_trace_)
-                            fprintf(stderr, "COMBAT: AI magic g=%d d=%d\n",
-                                    ring_sub_magic_g_, opt);
+                            fprintf(stderr, "COMBAT: AI magic g=%d id=%d b=%d\n",
+                                    ring_sub_magic_g_, opt, ring_sub_magic_d_);
                     } else {
-                        const int g = ring_sub_magic_g_, d = ring_sub_magic_d_, k = opt;
-                        const int q1 = g * 7 + d; // (g*21+d*3+k)/3 truncating k (loc_4D337 idiv)
-                        u.ai_field_80 = (uint8_t)(q1 & 0xFF);
-                        if (battle_trace_)
-                            fprintf(stderr, "COMBAT: AI magic g=%d d=%d k=%d -> [80h]=%d (q1)\n",
-                                    g, d, k, q1);
+                        const int g = ring_sub_magic_g_, b = ring_sub_magic_d_;
+                        const int c = (opt == 0) ? 7 : opt - 15;
+                        const int v = battle_magic_ring_value(g, b, c);
+                        const int r = (v == 0) ? -1
+                            : (v - 1) + battle_spell_kind(u, (v - 1) / 21);
+                        // loc_4D337: R < 0 leaves [80h] untouched and returns to AI1;
+                        // otherwise [80h] = R/3 (= g*7+d).
+                        if (r >= 0) u.ai_field_80 = (uint8_t)(r / 3);
+                        if (battle_trace_) {
+                            if (r >= 0)
+                                fprintf(stderr, "COMBAT: AI magic g=%d b=%d c=%d v=%d R=%d -> [80h]=%d\n",
+                                        g, b, c, v, r, r / 3);
+                            else
+                                fprintf(stderr, "COMBAT: AI magic g=%d b=%d c=%d v=%d R=%d -> [80h] unchanged\n",
+                                        g, b, c, v, r);
+                        }
                         ring_sub_magic_g_ = -1;
                         ring_sub_magic_d_ = -1;
                         ring_subkind_ = SubRingKind::AI1;
@@ -4513,9 +4536,10 @@ bool CombatII::battle_player_input() {
             return false;
         }
         if (battle_weapon_select_ && (size_t)k < battle_weapon_options_.size()) {
-            // 4C98A(si=k): gate, execute, back to the ring (TP charged only on success).
+            // 4C98A(si = 4C03E menu id): gate, execute, back to the ring (TP charged only on
+            // success). The digit selects the list position, the id is what 4C98A expects.
             battle_weapon_select_ = false;
-            battle_use_weapon(ui, k);
+            battle_use_weapon(ui, battle_weapon_options_[(size_t)k]);
             if (battle_tp_changed() && (size_t)ui < units_.size())
                 units_[(size_t)ui].combat_acc57 = 0; // 83317
             // 4A483 target cursor pending: do not reopen the ring.
@@ -4792,12 +4816,15 @@ std::vector<int> CombatII::battle_player_menu_ids(int unit_index) {
     if (battle_player_can_attack(unit_index) && tp >= 0x28) ids.push_back(0);
     // Ids 1..5 by weapon class: TP >= 70, code_b == 0, type < 0x12C, HP > 500, kind < 4.
     if (tp >= 0x46 && u.code_b == 0 && u.sprite_type < 0x12C && hp_raw > 500 && kind < 4) {
+        // off_4BD0E jump table (80858..80870): index 0 -> class 2Fh/30h adds 5,
+        // 1 -> [38h] adds 1, 2 -> nothing, 3 -> [39h] adds 2, 4 -> [3Ah] adds 3,
+        // 5 -> [3Bh] adds 4. The counts sit one weapon class higher than the id.
         int sub = -1;
         if (wc == 0 && (u.combat_class == 0x2F || u.combat_class == 0x30)) sub = 5;
         else if (wc == 1 && u.weap_cnt_38 > 0) sub = 1;
-        else if (wc == 2 && u.weap_cnt_39 > 0) sub = 2;
-        else if (wc == 3 && u.weap_cnt_3a > 0) sub = 3;
-        else if (wc == 4 && u.weap_cnt_3b > 0) sub = 4;
+        else if (wc == 3 && u.weap_cnt_39 > 0) sub = 2;
+        else if (wc == 4 && u.weap_cnt_3a > 0) sub = 3;
+        else if (wc == 5 && u.weap_cnt_3b > 0) sub = 4;
         if (sub >= 0) ids.push_back(sub);
     }
     // Id 6 (magic): MP > 0, TP >= 50, [1Eh]&8 == 0, kind < 4 and some g with kind >= 0.
@@ -6851,8 +6878,22 @@ int CombatII::battle_item_3c548(int unit_index, int form) {
     u.ail_1f = u.ail_23 = u.ail_25 = u.ail_27 = 0xFFFF;                      // [16h..27h] = FFFF
     camera_center_on((int)(int8_t)u.x, (int)(int8_t)u.y);                   // sub_1124A
     battle_wc1_occupancy_preserve_or_close("recall transform");             // sub_11EE4/119B6/1198D/11E04 (large-sprite occupancy)
+    // Presentation: 61147(1) -> 1124A -> 10971/10988(+0Ch) -> 1FEA4("recall.nsp") ->
+    //   4F460("regen.ssp")/4F460("summon.ssp") -> 21944(x, y, [60h]) -> 11E04 ->
+    //   61115 -> 1FFCD -> 12124 -> 45559. The shared 21944 driver is battle_fx_21944;
+    //   61147/61115 are the tint-LUT setup/restore, covered by its tinted blits in the port.
+    if (battle_nsp_load("recall.nsp")) {                                    // sub_1FEA4
+        battle_ssp_play("regen.ssp");                                       // sub_4F460(32h)
+        battle_ssp_play("summon.ssp");                                      // sub_4F460(33h)
+        // 21944 receives [60h] (image slot); the port driver derives the D66A8 entry from
+        // sprite_type, so this argument is informational.
+        battle_fx_21944(unit_index, (int)(int8_t)u.x, (int)(int8_t)u.y,
+                        (int)u.slot_hint);                                  // sub_21944
+        battle_nsp_release();                                               // sub_1FFCD
+        if (should_exit_) return 1;
+    }
     reset_unit_pose(u);                                                     // sub_12124
-    present_cutscene_frame();                                               // sub_45559 (the recall.nsp presentation is skipped)
+    present_cutscene_frame();                                               // sub_45559
     if (battle_trace_)
         fprintf(stderr, "COMBAT: recall unit=%d form=%d class=%u type=%d hp=%d (sub_3C548)\n",
                 u.id, form, (unsigned)u.combat_class, u.sprite_type, u.hp);
@@ -7936,7 +7977,8 @@ int CombatII::battle_spell_field(int unit_index, int g, int k, int tx, int ty) {
 //   dword_28352 word table {15000,10000,12000}[bx] (`mov ecx,[esp+1Eh]>>16` = bx,
 //   `mov edx,[esp+ecx*2+6]>>16`).
 //   28728(ebx=0x1E, ecx=bx) and 29437(edx=bx==2?4:bx+1, ebx=0x1E, ecx=k).
-int CombatII::battle_spell_wave(int unit_index, int g, int k, int tx, int ty) {
+int CombatII::battle_spell_wave(int unit_index, int g, int k, int tx, int ty,
+                                bool play_visual, bool* out_had_targets) {
     (void)tx; (void)ty;
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return 4;
     auto& u = units_[(size_t)unit_index];
@@ -7980,9 +8022,22 @@ int CombatII::battle_spell_wave(int unit_index, int g, int k, int tx, int ty) {
             }
         }
     }
+    if (out_had_targets) *out_had_targets = !victims.empty();
+    if (victims.empty()) return 4;                                // 29722 loc_2976F -> -1
     battle_spell_announce(unit_index, battle_spell_name_);       // 29722 -> sub_28889
+    if (should_exit_) return 0;
+    if (play_visual) {
+        // AI F13D8 has no separate battle_magic_fx call: run the original row-3 handler's
+        // 4F460 + 21114/2132B/215FE limb here, after the announcement and before damage.
+        const int r_code = g * 21 + 9 + k; // wave row is d=3 (q1 3/10/17)
+        battle_ssp_play(battle_spell_ssp(r_code));
+        battle_fx_driver(r_code, unit_index, (int)(int8_t)u.x, (int)(int8_t)u.y);
+        if (should_exit_) return 0;
+    }
     static constexpr int kWaveDamage[3] = { 15000, 10000, 12000 };
     battle_apply_spell_hit(unit_index, victims, kWaveDamage[bx < 0 ? 0 : (bx > 2 ? 2 : bx)], 0x1E, bx);
+    if (should_exit_) return 0;
+    if (play_visual) battle_spell_pace_287af();                  // 287AF before 29437
     battle_spell_status_29437(unit_index, victims, sel, 0x1E, k);
     if (!should_exit_ && (size_t)unit_index < units_.size())
         reset_unit_pose(units_[(size_t)unit_index]);
@@ -8807,15 +8862,13 @@ std::vector<int> CombatII::battle_item_menu_ids(int unit_index) {
         ((u.id == 2 && u.combat_type_5b == 0x20 && battle_fd8bc_ == 0) ||
          (u.id == 0x16 && u.combat_type_5b == 0x3B && battle_fd8be_ == 0) ||
          (u.id == 0x1D && u.combat_type_5b == u.id && battle_fd8c0_ == 0))) ids.push_back(16);
-    if (cap(1)) {
-        // + terrain gate (sub_1093D: raw <= 100, otherwise (raw-100) nibble != 8).
+    if (cap(1) == 1 && sce_map_kind_ < 2) {
+        // loc_4C281 (81410..81430): unk_731AD == 1, kind < 2, class 26h needs [0Dh] == 1,
+        // then sub_1093D(x,y): raw > 100 subtracts 100 and the low nibble must not be 8.
         const size_t ti = (size_t)(int8_t)u.y * map_w_ + (size_t)(int8_t)u.x;
         int attr = (!tile_attr_.empty() && ti < tile_attr_.size()) ? (int)tile_attr_[ti] : 0;
-        int nib = attr;
-        if (nib > 0x64) nib -= 0x64;
-        if (attr <= 0x64 || (nib & 0xF) != 8) {
-            if (!(cls == 0x26 && u.unit_kind_0d != (uint8_t)cls)) ids.push_back(1);
-        }
+        if (attr > 0x64) attr -= 0x64;
+        if ((attr & 0xF) != 8 && !(cls == 0x26 && u.unit_kind_0d != 1)) ids.push_back(1);
     }
     if (cap(2)) ids.push_back(3);
     if (cap(3)) ids.push_back(6);
@@ -9138,9 +9191,10 @@ int CombatII::battle_weapon_f1474(int unit_index, int idx, int dx) {
     }
     if (idx == 1 || idx == 7) { // loc_2F4DE (restrain.nsp, F14D8 auto approximation)
         // The original fills F0648 with a 1AC08 diamond of radius 2D4EB+2CBFB
-        // (ITEM[5Bh][0x38]+dx) through 1AC59/1A1F8 and then runs 2D527 (presentation stub)
-        // plus 197AD (queue removal) per target, with no damage. The port matches only the
-        // diamond collection and 197AD. An empty collection returns -1.
+        // (ITEM[5Bh][0x38]+dx) through 1AC59/1A1F8 and then runs 2D527 (restrain.nsp)
+        // plus 197AD (queue removal) per target, with no damage. The port matches the
+        // diamond collection, 2CBA1/dim, the per-target 2D527 loop and 197AD. An empty
+        // collection returns -1.
         if (dx < 1 || dx > 3) {
             if (battle_trace_) fprintf(stderr, "COMBAT: warning: f1474[%d]=2F4DE unit=%d dx=%d invalid -> -1\n",
                                         idx, u.id, dx);
@@ -9154,20 +9208,28 @@ int CombatII::battle_weapon_f1474(int unit_index, int idx, int dx) {
                                         idx, u.id, dx, radius);
             return -1;
         }
-        if (battle_trace_) fprintf(stderr, "COMBAT: f1474[%d]=2F4DE unit=%d dx=%d radius=%d targets=%zu (restrain, presentation stub)\n",
+        if (battle_trace_) fprintf(stderr, "COMBAT: f1474[%d]=2F4DE unit=%d dx=%d radius=%d targets=%zu (restrain)\n",
                                     idx, u.id, dx, radius, battle_target_list_.size());
-        auto& A = units_[(size_t)unit_index];
-        camera_center_on(A.x, A.y);
-        A.anim_frame = 5;
-        sfx(0x32);
+        // loc_2E80C: 2CBA1 register -> 44D6E(1,0) -> per target {4F4CD(32h), 2D527, 197AD}
+        // -> 44D6E(0) -> 44D75 -> 12124 -> 1FFCD. 2D527 itself is 24 frames of restrain.nsp.
+        battle_highlight_add_depth(unit_index);                 // sub_2CBA1
+        battle_dim_row0_ = true;                                // sub_44D6E(1,0)
+        const bool have_restrain = battle_nsp_load("restrain.nsp"); // sub_1FEA4
         for (int ti : battle_target_list_) {
             if (ti < 0 || (size_t)ti >= units_.size()) continue;
             if (!units_[(size_t)ti].active) continue;
-            battle_remove_from_ready_queue(ti); // sub_197AD
+            sfx(0x32);                                         // sub_4F4CD(32h)
+            if (have_restrain) battle_fx_2d527(ti);             // sub_2D527
+            if (should_exit_) break;
+            battle_remove_from_ready_queue(ti);                // sub_197AD
+            if (should_exit_) break;
         }
+        battle_dim_row0_ = false;                               // sub_44D6E(0)
+        battle_highlight_clear();                               // sub_44D75
         battle_target_list_.clear();
-        reset_unit_pose(units_[(size_t)unit_index]);
-        game_timer_set(6);
+        if (!should_exit_ && (size_t)unit_index < units_.size())
+            reset_unit_pose(units_[(size_t)unit_index]);        // sub_12124
+        if (have_restrain) battle_nsp_release();                 // sub_1FFCD
         return 1;
     }
     if (idx == 3 || idx == 9 || idx == 21) { // sub_2F592/2F6EB/2FF36 -> sub_2EB61 (single 1D770+2CACA, add 3000/3000/0)
@@ -9202,7 +9264,7 @@ int CombatII::battle_weapon_f1474(int unit_index, int idx, int dx) {
         const int add2eb = (idx == 21) ? 0 : 3000; // 2F6FB: ecx = high word of 744A0+2/744BE (idx21 = 744C0 = 0)
         const int tmp = add2eb + base;
         const int fin = battle_weapon_2caca(unit_index, tmp);
-        if (battle_trace_) fprintf(stderr, "COMBAT: f1474[%d]=2EB61 unit=%d dx=%d -> target=%d base=%d tmp=%d final=%d (presentation stub)\n",
+        if (battle_trace_) fprintf(stderr, "COMBAT: f1474[%d]=2EB61 unit=%d dx=%d -> target=%d base=%d tmp=%d final=%d (2DA5E)\n",
                                     idx, u.id, dx, units_[(size_t)ti].id, base, tmp, fin);
         camera_center_on(A.x, A.y);
         A.anim_frame = 5;

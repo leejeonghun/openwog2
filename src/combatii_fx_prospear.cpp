@@ -105,6 +105,14 @@ int CombatII::battle_fx_21944(int unit_index, int tx, int ty, int k) {
     // sub_21944 never loads an NSP itself: the caller (299DA/3C548/4426D) has already loaded
     // the table (unk_F0DAA), so the port reuses the current magic_frames_.
     if (magic_frames_.empty()) return 0;
+    // sub_21944+1B..+2B: sub_44D6E(1, [60h]); the matching sub_44D6E(0) is at the tail.
+    // battle_dim_row0_ is the port's row-0 approximation used by the other drivers; the
+    // guard also restores it on an early should_exit_ return.
+    struct DimGuard {
+        bool& dim;
+        explicit DimGuard(bool& d) : dim(d) { dim = true; }
+        ~DimGuard() { dim = false; }
+    } dim_guard(battle_dim_row0_);
 
     camera_center_on(tx, ty);                        // camera already set by 299DA/3C548/4426D
     int sx = 0, sy = 0;

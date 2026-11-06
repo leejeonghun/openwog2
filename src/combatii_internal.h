@@ -235,7 +235,7 @@ inline int battle_weapon_match_4bc3c(int id) {
         if (al < 0x12) {
             if (al < 1) return -1;
             if (al == 1) return 12;
-            return -1; // al==2: the ZF carried through jmp leaves jz untaken
+            return 3; // al==2: `cmp al,2; jmp loc_4BCA7; jz` keeps the ZF and returns 3
         }
         if (al == 0x12) return 1;
         if (al < 0x1D) return (al == 0x16) ? 5 : -1;
