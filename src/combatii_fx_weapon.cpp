@@ -193,7 +193,9 @@ void CombatII::fx_pal_mix(int start, int end, int color_index, int pct) {
     }
 }
 
-// sub_5EE51: blit one unk_F0DAA frame transparent at (x, y).
+// sub_5EE51 / sub_5EFB9: blit one unk_F0DAA frame transparent at (x, y). Most NSP sites use
+// 5EFB9, whose 13Fh/C7h clip is reproduced here (5EE51 itself is unclipped; the port keeps
+// the same safe clip for it).
 void CombatII::fx_blit_nsp(int frame, int x, int y) {
     if (frame < 0 || (size_t)frame >= magic_frames_.size()) return;
     const MagicFxFrame& fr = magic_frames_[(size_t)frame];
@@ -203,7 +205,7 @@ void CombatII::fx_blit_nsp(int frame, int x, int y) {
     buf[0] = (uint8_t)(fr.w & 0xFF); buf[1] = (uint8_t)(fr.w >> 8);
     buf[2] = (uint8_t)(fr.h & 0xFF); buf[3] = (uint8_t)(fr.h >> 8);
     std::memcpy(buf.data() + 4, fr.flat.data(), fr.flat.size());
-    blit_flat_transparent(x, y, buf.data());
+    blit_flat_clip319(x, y, buf.data());
 }
 
 // sub_6106C(page=3, colour, brightness%): the shade LUT used by 341C7 (9).

@@ -136,7 +136,7 @@ int CombatII::battle_fx_377a6_anim(int unit_index) {
                 }
             }
         }
-        blit_flat_transparent(x, y, buf.data());
+        blit_flat_clip319(x, y, buf.data());        // 5EFB9/5F0CF/5F1AB clip at 13Fh/C7h
     };
     // Facing 3 = 5F0CF (mirror X), facing 2 = 5F1AB (mirror Y), otherwise 5EFB9.
     auto blit = [&](int frame_no, int bx, int by) {

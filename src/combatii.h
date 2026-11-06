@@ -258,6 +258,7 @@ enum class VmEventType {
     Face,           // 0x66 sub_52848 make two units face each other; facing depends on the
                     //  unit's current tile, so it is computed at playback, not at parse time
     Magic,          // 0x08 / 0x6C sub_51E8B scripted spell/weapon effect
+    Item,           // 0x06 sub_5196F give/equip an item to the forced/random receiver
     FactionTransform // 0x0C sub_52463 action 1..4: inline 0x88 record / type change
 };
 
@@ -346,6 +347,11 @@ struct VmEvent {
     int hp_delta = 0;                     // 0 = instant death (sub_1DB1D), 0x7FFF = full heal, negative = damage
     int hp_dir = 0;                       // tail byte = knockback direction (sub_45ED2 dl)
     int hp_killer = -1;                   // sub_1DB1D killer (units_ index, -1 = none); the other side of the death event at HP<=0
+    // Item (0x06 sub_5196F): [kind][item] and the receiver resolved at parse time (forced
+    // target, otherwise the sub_499BD(3) random walk of the CC968 list).
+    int item_unit = -1;
+    uint8_t item_kind = 0;
+    uint8_t item_id = 0;
 };
 
 struct CombatDialogueEntry {
@@ -1039,6 +1045,9 @@ private:
     // sub_5EE51 equivalent: flat w/h + pixels (0xFF transparent) blit, used only for TIME_GRA.SYB
     // (not RLE). data[0..1]=w, data[2..3]=h, data[4..]=w*h flat, clipped to the screen.
     void blit_flat_transparent(int x, int y, const uint8_t* flat_data);
+    // sub_5EFB9: flat w/h + pixels, 0xFF transparent, clipped at 13Fh/C7h (columns 319 and
+    // rows 199 are never written); a negative x/y becomes a source offset.
+    void blit_flat_clip319(int x, int y, const uint8_t* flat_data);
     // RLE blitter: outputs only the top scan_limit scanlines (sub_5F4AF, foot-burial clipping)
     void blit_sprite_rle_clipped(int x, int y, const uint8_t* rle_data, int scan_limit);
     // sub_5F3FD equivalent: draws RLE with the 480 px scratch-canvas stride (WEA_EFFC/BATTLE
@@ -1514,6 +1523,9 @@ private:
     // lowest approach score (false when none).
     bool battle_ai_3df3b_dest(int unit_index, int radius, int& out_x, int& out_y,
                               int& out_hx, int& out_hy) const;
+    // sub_3D7B2: minimum sub_49ADF distance from the actor to a destination next to the
+    // hostile at (hx,hy). Returns 0x7FFF when no candidate passes the occupancy/16699 gate.
+    int battle_ai_3d7b2_dest(int unit_index, int hx, int hy, int& out_x, int& out_y) const;
     // sub_3E01B: among empty cells within radius r, the one with the best allied-density (+10 per
     // cell) and distance score, plus the most common facing among allies.
     bool battle_ai_3e01b_dest(int unit_index, int radius, int& out_x, int& out_y,
@@ -1621,6 +1633,8 @@ private:
     void battle_crit_collect_19061(int attacker_index, int radius);  // sub_19061 diamond collection
     void battle_crit_collect_190c3(int attacker_index);              // sub_190C3 front 3x10 collection
     void play_retreat(const VmEvent& ev);                            // late sub_51449 + sub_17071
+    void play_retreat_pillar_508e6(const VmEvent& ev, int edd74);    // sub_508E6(4) light-pillar retreat
+    void battle_force_retreat_50aa7(const VmEvent& ev);              // sub_50AA7 removal modes 2/3/4
     void camera_center_on(int tx, int ty);                           // sub_1124A (camera alignment)
     void play_unit_pose(const VmEvent& ev);                          // sub_51C74 loc_51E34
     void play_hp_change(const VmEvent& ev);                          // sub_5211D
@@ -2099,6 +2113,9 @@ private:
     // alpha-blend it over the background).
     void battle_fx_blit(int frame, int x, int y);
     void battle_fx_blit_tinted(int frame, int x, int y, int tint_pct);
+    // sub_13669: fill the live unit's pose-0 frame with `color` (5F517). When [77h] exists and
+    // [5Ch] <= 6, the stored record's sprite is filled at the live unit's anchor too.
+    void battle_fx_silhouette_13669(int unit_index, int color);
     void battle_fx_present();                                  // sub_454B3 + sub_5E9E8
     void blit_frame_tinted(int x, int y, const MagicFxFrame& fr, int tint_pct); // sub_5F305
     int  battle_fx_frame_count() const { return (int)magic_frames_.size(); }
@@ -2186,6 +2203,9 @@ private:
     // ---- Low-level primitives (combatii_fx_gfx.cpp) ----
     void blit_scale_expand(int x, int y, const uint8_t* data, int dst_w, int dst_h); // sub_5F570
     void blit_scale_shrink(int x, int y, const uint8_t* data, int dst_w, int dst_h); // sub_5F611
+    void battle_fx_46710(int unit_index);                          // sub_46710 8-pass pixel wipe
+    void battle_fx_468BC(int unit_index);                          // sub_468BC horizontal shrink wipe
+    void battle_fx_46a11(int unit_index);                          // sub_46A11 large-unit dissolve
     void battle_fx_blit_scaled(int frame, int x, int y, int dst_w, int dst_h,
                                bool expand_only = false);                            // 5F570/5F611 draw request
     void pal_snapshot_range(int start, int end, uint8_t* out);         // sub_5F945 (DAC -> buffer)
@@ -2216,7 +2236,7 @@ private:
     //   to 4F4CD.
     int battle_weapon_2cc3a(int unit_index, int variant, int sfx_id = 1);
     int battle_weapon_2ca40(int unit_index); // sub_2CA40 (V-weapon branch 1..3, updates [+36]/[+37])
-    int battle_weapon_f1474(int unit_index, int idx, int dx); // sub_2F47F.. (all 13 F1474 vectors ported, effect stubbed)
+    int battle_weapon_f1474(int unit_index, int idx, int dx); // sub_2F47F.. (all 25 F1474 vectors ported)
     int battle_weapon_302e6(int unit_index, int edi); // sub_302E6 (V-lead branch over 13 bodies; plays the SSP and returns)
     // The 13 sub_302E6 bodies (308EE..3AEE8). Gameplay (targeting, damage, death, triggers) is
     // identical across them and all 13 are ported as literal translations of the effect body:

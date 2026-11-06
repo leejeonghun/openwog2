@@ -34,6 +34,28 @@ struct FxPoint { int x = 0; int y = 0; };
 
 } // namespace
 
+// sub_13669(eax=unit, edx=colour): solid silhouette of the unit's pose-0 D66A8 frame via
+//   5F517, at 10971(x)+0Ch / 10988(y)-2 plus the sprite entry [4]/[5] and the unit's [65h]/[66h].
+//   When [unit+77h] != 0 and [unit+5Ch] <= 6 the stored record's sprite is filled at the same
+//   live-unit anchor, using the live unit's facing/pose.
+void CombatII::battle_fx_silhouette_13669(int unit_index, int color) {
+    if (unit_index < 0 || (size_t)unit_index >= units_.size()) return;
+    const CombatUnitPlacement& u = units_[(size_t)unit_index];
+    auto draw = [&](int sprite_type) {
+        const NC2Frame* fr = nc2_frame_for(sprite_type, u.facing & 3, u.anim_frame);
+        if (!fr || fr->pixels.empty()) return;
+        DrawEntry e{};
+        e.x = (u.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + UNIT_ANCHOR_X + u.walk_off_x;
+        e.y = (u.y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + UNIT_ANCHOR_Y + u.walk_off_y;
+        e.type = 3;                                   // sub_5F517 solid fill
+        e.idx = color & 0xFF;
+        e.nc2 = fr;
+        blit_draw_entry(e);                           // adds fr->x_off/y_off
+    };
+    draw(u.sprite_type);
+    if (u.stored_77 && u.code_b <= 6) draw(u.stored_77->sprite_type);
+}
+
 // sub_204E8(eax=ty, edx=tx, ebx=N, ecx=flag, [esp+4]=repeat count): "magic<N>.nsp" enchant.
 //   Two callers:
 //     - sub_29273+DD (X.Blade family): eax=y, edx=x, ebx=k+8, ecx=1, push 1

@@ -245,6 +245,32 @@ void CombatII::blit_flat_transparent(int x, int y, const uint8_t* flat_data) {
     }
 }
 
+// sub_5EFB9: same [w][h]+flat layout, but clipped at 13Fh/C7h. The original computes the
+// left/top source offsets from a negative x/y and the right/bottom trims from x+w-13Fh /
+// y+h-C7h, so column 319 and row 199 are never written.
+void CombatII::blit_flat_clip319(int x, int y, const uint8_t* flat_data) {
+    if (!flat_data) return;
+    uint8_t* dest = video_.get_backbuffer();
+    if (!dest) return;
+    const int src_w = flat_data[0] | (flat_data[1] << 8);
+    const int src_h = flat_data[2] | (flat_data[3] << 8);
+    if (src_w <= 0 || src_h <= 0 || src_w > SCREEN_W || src_h > SCREEN_H) return;
+    int w = src_w, h = src_h;
+    if (x + w > 0x13F) w -= x + w - 0x13F;
+    if (y + h > 0xC7) h -= y + h - 0xC7;
+    int left = 0, top = 0;
+    if (x < 0) { left = -x; x = 0; w -= left; }
+    if (y < 0) { top = -y; y = 0; h -= top; }
+    if (w <= 0 || h <= 0) return;
+    const uint8_t* src = flat_data + 4;
+    for (int row = 0; row < h; ++row) {
+        const uint8_t* srow = src + (size_t)(top + row) * (size_t)src_w + (size_t)left;
+        uint8_t* drow = dest + (size_t)(y + row) * SCREEN_W + (size_t)x;
+        for (int col = 0; col < w; ++col)
+            if (srow[col] != 0xFF) drow[col] = srow[col];
+    }
+}
+
 // sub_5F4AF: stop decoding the RLE stream as soon as the row passes scan_limit.
 // The original decrements edx (the clip height) on each scanline and leaves the decode loop at 0.
 // Used for foot sinking: scanlines below a unit's feet are never drawn.
