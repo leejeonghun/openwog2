@@ -43,16 +43,21 @@
 // stage runs sub_4B0F5 -> sub_4BFCA (stage list) -> sub_4AD69 -> sub_4B8EB (stage 1
 // also calls sub_4B744 -> sub_4B18F for info) -> "MP %d" text -> sub_4AC28 icons ->
 // sub_4BA7F (stores into var_14[stage]) -> sub_4B9D7. Cancel at stage 1 returns -2,
-// at a later stage it steps back (var_8--). After all three it forms R = g*21+d*3+k
-// from var_14[0..2] + unk_74FA8, validates with sub_28429(kind) and returns R, or -1.
-// The port builds R from three clicks (group, d..0..6, k..0..2) and battle_cast_magic
+// at a later stage it steps back (var_8--). sub_4BFCA builds ids 1..7 at stage 0,
+// {0,8..14} at stage 1 and {0,15..21} at stage 2; sub_4C72A normalizes them to
+// a=1..7, b=(id==0?7:id-8), c=(id==0?7:id-15), reads unk_74FA8, requires
+// v==1 (mod 3) and returns R = (v-1) + sub_28429(unit, (v-1)/21), or -1.
+// The port uses the same 7/8/8 lists, icon ids and table lookup; battle_cast_magic
 // (sub_4C605: Wrong/NoTP/NoMP gates) does the final validation.
 // sub_4CDBD (skill.ico, unk_FD93E) is a one-stage ring that picks from the sub_4C19D
 // list (dx) via sub_4B0F5 -> sub_4AD69 -> sub_4B8EB(ebx=0) -> sub_4BA7F -> sub_4B9D7;
 // cancel returns -1. The port uses battle_item_menu_ids(dx) as the ring options.
-// sub_4CAA3 (special.ico, unk_FDA12) is a one-stage ring over the sub_4C03E list (si
-// position); an empty list buzzes sfx 2 and returns -1. The port uses the
-// battle_weapon_list_4c03e positions as ring options.
+// The main ring ids follow sub_4BD26's off_4BD0E: weapon ids 1..5 come from WC1..WC5
+// ([38h]/[39h]/[3Ah]/[3Bh] plus the 2Fh/30h class case for 5); WC2 adds nothing.
+// sub_4CAA3 (special.ico, unk_FDA12) is a one-stage ring over the sub_4C03E list; an empty
+// list buzzes sfx 2 and returns -1. sub_4BA7F yields the sub_4C03E menu id (0 or start+i),
+// which sub_4C98A takes as si (dec si / si==0), so the port stores those ids, not the icon
+// positions, as the ring options.
 // sub_4C4F9 builds the AI first-stage ring: [6Ch]==3 -> 1 else 0; wc==2 skips the
 // weapon entry, else [6Dh]==1 -> 4, ==2 -> 5, else 3; [6Eh]==1 -> 7, ==4 -> 8, else
 // 6; MP>0 adds [80h]==FF -> 9 else 10; wc<6 && wc!=2 adds [82h]==FF -> 11 else 12;
@@ -445,19 +450,24 @@ void CombatII::ring_sub_compute_layout_at(int unit_index, double radius, double 
     std::vector<int> opts;
     switch (ring_subkind_) {
         case SubRingKind::MagicG:
-            opts = battle_magic_group_options(unit_index);
+            // sub_4BFCA stage 0: ids 1..7 (all groups; unlearned picks end in Wrong Spell).
+            for (int a = 1; a <= 7; ++a) opts.push_back(a);
             break;
         case SubRingKind::MagicD:
-            for (int d = 0; d < 7; ++d) opts.push_back(d);
+            // sub_4BFCA stage 1: id 0 then 8..14 (b = 0->7, 8..14->0..6).
+            opts = {0, 8, 9, 10, 11, 12, 13, 14};
             break;
         case SubRingKind::MagicK:
-            for (int k = 0; k < 3; ++k) opts.push_back(k);
+            // sub_4BFCA stage 2: id 0 then 15..21 (c = 0->7, 15..21->0..6).
+            opts = {0, 15, 16, 17, 18, 19, 20, 21};
             break;
         case SubRingKind::Item:
             opts = battle_item_options_;
             break;
         case SubRingKind::Weapon:
-            for (size_t i = 0; i < battle_weapon_options_.size(); ++i) opts.push_back((int)i);
+            // sub_4CAA3 returns the sub_4BA7F menu id (start+i / 0), not the icon position;
+            // sub_4C98A indexes its tables with si-1 (or si==0 for the V-weapon slot).
+            opts = battle_weapon_options_;
             break;
         case SubRingKind::AI1:
             opts = battle_ai_first_ids(unit_index);
@@ -466,16 +476,17 @@ void CombatII::ring_sub_compute_layout_at(int unit_index, double radius, double 
             opts = battle_ai_second_ids(unit_index, ring_sub_ai_first_);
             break;
         case SubRingKind::AIMagic: {
-            if (ring_sub_magic_g_ < 0) opts = battle_magic_group_options(unit_index);
-            else if (ring_sub_magic_d_ == -2) {
-                for (int d = 0; d < 7; ++d) opts.push_back(d);
+            if (ring_sub_magic_g_ < 0) {
+                for (int a = 1; a <= 7; ++a) opts.push_back(a);
+            } else if (ring_sub_magic_d_ == -2) {
+                opts = {0, 8, 9, 10, 11, 12, 13, 14};
             } else {
-                for (int k = 0; k < 3; ++k) opts.push_back(k);
+                opts = {0, 15, 16, 17, 18, 19, 20, 21};
             }
             break;
         }
         case SubRingKind::AIWeapon:
-            for (size_t i = 0; i < battle_weapon_options_.size(); ++i) opts.push_back((int)i);
+            opts = battle_weapon_options_;
             break;
         default:
             return;
@@ -646,25 +657,16 @@ void CombatII::render_sub_ring() {
     if (!video_.get_backbuffer()) return;
     // Sub-ring icon mapping: sub_4AA42 looks the descriptor up by the logical
     // [ring+pos+6] id, and the file index is logical*4 + frame as on the main ring.
-    //   MagicG: logical g; MagicD: logical g*7+d (within 88); MagicK: logical k;
+    //   Magic stages use sub_4BFCA's ids directly (1..7, {0,8..14}, {0,15..21});
     //   Item: logical dx; Weapon/AIWeapon: logical entry or si;
-    //   AI1/AI2: logical id; AIMagic: logical g.
+    //   AI1/AI2: logical id.
     // Out-of-range entries are skipped, like the off-screen skip in sub_4AA42.
     for (size_t i = 0; i < ring_sub_layout_.size(); ++i) {
         const int opt = ring_sub_layout_[i].id;
-        int logical = opt;
-        if (ring_subkind_ == SubRingKind::MagicD && ring_sub_magic_g_ >= 0)
-            logical = ring_sub_magic_g_ * 7 + opt;
-        else if (ring_subkind_ == SubRingKind::AIMagic) {
-            // Group stage uses logical g, spell stage g*7+d, level stage k.
-            if (ring_sub_magic_g_ < 0) logical = opt;
-            else if (ring_sub_magic_d_ == -2) logical = ring_sub_magic_g_ * 7 + opt;
-            else logical = opt;
-        } else if (ring_subkind_ == SubRingKind::Weapon) {
-            if ((size_t)opt < battle_weapon_options_.size()) logical = battle_weapon_options_[(size_t)opt];
-        } else if (ring_subkind_ == SubRingKind::AIWeapon) {
-            if ((size_t)opt < battle_weapon_options_.size()) logical = battle_weapon_options_[(size_t)opt];
-        }
+        // Magic options already are the original icon ids (sub_4BFCA).
+        const int logical = opt;
+        // Weapon/AIWeapon options are already sub_4C03E menu ids (0 or start+i), so the icon
+        // descriptor id is the option itself (sub_4AA42 looks it up from [ring+pos+6]).
         const int frame = ((int)i == ring_sub_hover_) ? (ring_sub_hover_frame_ & 3) : 0;
         const int file_idx = logical * 4 + frame;
         const SpriteEntry* sp = (file_idx >= 0 && file_idx < icons->count()) ? icons->get(file_idx) : nullptr;
@@ -690,7 +692,8 @@ bool CombatII::ring_sub_handle_click(int unit_index, int mx, int my, int& out_op
     return true;
 }
 
-// sub_4C72A stage 1: the learned groups g (sub_28429 kind >= 0).
+// Learned magic groups (sub_28429 kind >= 0), used to gate the magic menu/AI entry.
+// The ring itself follows sub_4BFCA stage 0 (ids 1..7), including unlearned groups.
 std::vector<int> CombatII::battle_magic_group_options(int unit_index) const {
     std::vector<int> out;
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return out;
@@ -909,7 +912,7 @@ bool CombatII::battle_ring_dispatch(int unit_index, int menu_id) {
                 back_to_ring();
                 return true;
             }
-            // Enter the sub_4CAA3 graphic ring (special.ico); waits for a si position.
+            // Enter the sub_4CAA3 graphic ring (special.ico); waits for a si menu id.
             battle_weapon_select_ = true;
             battle_attack_cancel();
             battle_magic_select_ = false;
@@ -974,8 +977,10 @@ bool CombatII::battle_ring_dispatch(int unit_index, int menu_id) {
             battle_player_end_turn(false);
             return true;
         }
-        case 11: // loc_4D53B: 493A3, returns 0
+        case 11: // loc_4D53B: 493A3, returns 0 -> 4D93E reopens the ring when TP >= var18
             battle_show_info(ui);
+            if (should_exit_) return true;
+            back_to_ring();
             return true;
         case 12: { // loc_4D546: 45B4E(60), returns 2
             battle_consume_tp(ui, 0x3C);

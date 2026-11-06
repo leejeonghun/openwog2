@@ -74,6 +74,29 @@ int CombatII::battle_fx_2d5a3(int unit_index) {
     return 1;
 }
 
+// ---- sub_2D527 (40460..40503): restrain.nsp hold ----
+//   135EB(target centre) -> 24 frames: 1033B(0Ah), frame = i%8,
+//   454B3 + 1FFFE + 5E9E8 + 499E4. The caller (F1474 loc_2E80C) loads restrain.nsp and
+//   owns the 2CBA1 registration, 44D6E dim, 197AD queue removal and 1FFCD release.
+int CombatII::battle_fx_2d527(int unit_index) {
+    if (unit_index < 0 || (size_t)unit_index >= units_.size()) return 0;
+    if (!battle_fx_loaded()) return 0;
+    int fx = 0, fy = 0;
+    unit_screen_center(units_[(size_t)unit_index], fx, fy);  // sub_135EB
+    const int nframes = (int)magic_frames_.size();
+    for (int i = 0; i < 0x18 && !should_exit_; ++i) {        // cmp cx,18h
+        game_timer_set(0x0A);                                // sub_1033B(0Ah)
+        const int f = i % 8;                                 // `idiv 8` remainder, *0Ch entry stride
+        if (f < nframes) {
+            const MagicFxFrame& fr = magic_frames_[(size_t)f];
+            battle_fx_blit(f, fx + fr.xo, fy + fr.yo);       // sub_1FFFE
+        }
+        battle_fx_present();                                 // 454B3 + 5E9E8
+        wait_game_tick();                                    // sub_499E4
+    }
+    return 1;
+}
+
 // ---- sub_2D684 (40571..40677): critical.nsp critical hit effect ----
 //   (1) 10 frames: frame = i/2 (0..4). From the 135EB centre the coordinates are
 //       x+32h-5i, y-46h+7i each frame, so the sprite flows from the upper right to the lower
