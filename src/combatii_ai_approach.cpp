@@ -700,15 +700,17 @@ bool CombatII::battle_ai_40295_body(int unit_index, int wc) {
         // loc_4062D: still undecided -> 3E251 (ws > 0) or 3DF3B (radius 0x1E)
         if (di == -1) {
             bool have_dest = true;
+            std::vector<int> dest_e8 = battle_ai_build_diffusion(unit_index, budget4);
+            const std::vector<int>* dest_grid = dest_e8.empty() ? nullptr : &dest_e8;
             if (ws > 0) {
                 int rx = -1, ry = -1;
-                if (!battle_ai_3e251_dest(unit_index, dest_x, dest_y, rx, ry)) have_dest = false;
+                if (!battle_ai_3e251_dest(unit_index, dest_x, dest_y, rx, ry, dest_grid)) have_dest = false;
                 ref_x = rx; ref_y = ry;
             } else {
                 if (ws == -1 || ws == -2) return finish(kExitTurnEnd);       // loc_40664
                 if (k6c == 5 || k6c == 6) return finish(kExitTurnEnd);
                 int hx = -1, hy = -1;
-                if (!battle_ai_3df3b_dest(unit_index, 0x1E, dest_x, dest_y, hx, hy)) have_dest = false;
+                if (!battle_ai_3df3b_dest(unit_index, 0x1E, dest_x, dest_y, hx, hy, dest_grid)) have_dest = false;
                 // sub_3DF3B returns 0 when the best destination is the current tile.
                 if (have_dest && dest_x == (int)(int8_t)units_[(size_t)unit_index].x &&
                     dest_y == (int)(int8_t)units_[(size_t)unit_index].y)

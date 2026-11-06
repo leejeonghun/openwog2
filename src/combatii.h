@@ -1276,8 +1276,9 @@ private:
     // score = si + (90 - dist) + (facing match ? 4 : 0). The E8F46 scratch is snapshotted and
     // restored per facing/hostile from the caller's diffusion copy, and the 1C685 flood residue
     // is left behind exactly as DOS leaves it. 165C2 tests only the 1x1 gate (unoccupied, or self
-    // with diffusion >= 0); F0B8E != 2 (the DIST path), non-1x1 units and large footprints are
-    // not ported. Machine-code emulation matched the E8F46 end state. On the 1-5 sample the DOS
+    // with diffusion >= 0); F0B8E==2 (E8 score) and ==3 (sub_3D7B2 distance) are supported,
+    // while non-1x1 units and large footprints are not ported. Machine-code emulation matched
+    // the E8F46 end state. On the 1-5 sample the DOS
     // observation (A -> id3, C -> Hammil) differs for A (Mark instead of id3) and C (keeps
     // Hammil instead of id4), so the port keeps the verified original target choice and records
     // this as a deviation.
@@ -1518,14 +1519,22 @@ private:
                          int& out_facing) const;
     // sub_3E251 approximation: among radius-9 candidates around the watched target or home, the
     // legal cell with the smallest dist + 18 - 2*ad2e.
-    bool battle_ai_3e251_dest(int unit_index, int& out_x, int& out_y, int& out_rx, int& out_ry) const;
+    bool battle_ai_3e251_dest(int unit_index, int& out_x, int& out_y, int& out_rx, int& out_ry,
+                              const std::vector<int>* e8 = nullptr) const;
     // sub_3DF3B approximation: among hostile-occupied cells within radius r, the one with the
     // lowest approach score (false when none).
     bool battle_ai_3df3b_dest(int unit_index, int radius, int& out_x, int& out_y,
-                              int& out_hx, int& out_hy) const;
+                              int& out_hx, int& out_hy,
+                              const std::vector<int>* e8 = nullptr) const;
     // sub_3D7B2: minimum sub_49ADF distance from the actor to a destination next to the
     // hostile at (hx,hy). Returns 0x7FFF when no candidate passes the occupancy/16699 gate.
-    int battle_ai_3d7b2_dest(int unit_index, int hx, int hy, int& out_x, int& out_y) const;
+    // e8 is the caller's F0B8E/F0B84 diffusion; the wc5 arm needs it for the 1CB53/1C685
+    // distance-mode chain.
+    int battle_ai_3d7b2_dest(int unit_index, int hx, int hy, int& out_x, int& out_y,
+                             const std::vector<int>* e8 = nullptr) const;
+    // sub_3D7B2 loc_3D9D7 wc5 distance mode (F0B8E==3) over the supplied E8 diffusion.
+    int battle_ai_wc5_3d7b2(int unit_index, int hx, int hy,
+                            const std::vector<int>& e8, int& out_x, int& out_y) const;
     // sub_3E01B: among empty cells within radius r, the one with the best allied-density (+10 per
     // cell) and distance score, plus the most common facing among allies.
     bool battle_ai_3e01b_dest(int unit_index, int radius, int& out_x, int& out_y,
