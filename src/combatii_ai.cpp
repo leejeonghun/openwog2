@@ -1626,67 +1626,31 @@ void CombatII::battle_ai_wc1_pursuit(int unit_index, int watch_state) {
 }
 
 // Radius-30 approach taken when second-sub_3E18B (loc_4062D/loc_40664) reports state 0.
-// The sub_3DF3B outer pass picks the hostile tile with the strict minimum score over a
-// radius-30 diamond in y-then-x order (initial 0x7FFF). The WC1 sub_3D7B2 inner arm
-// evaluates the four cells around that hostile in facing order 0,1,2,3 (S,W,N,E) and
-// takes the first cell that passes the sub_1A2FE terrain bucket, the strict minimum
-// sub_49ADF distance and sub_16699 1x1 legality (cost and padding). The path is BFS only;
-// the sub_1419C/sub_1499C/sub_15342/sub_15523/sub_14FA4 route, diffusion restore and
-// tactic evaluation are not ported.
+// sub_3DF3B scans the radius-30 diamond in y-then-x order and keeps the hostile whose
+// sub_3D7B2 destination has the strict minimum sub_49ADF distance. The walk then reuses
+// the shared sub_1419C/1499C/15342/15523/14FA4 route pipeline.
 void CombatII::battle_ai_wc1_radius30_pursuit(int unit_index) {
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return;
     if (map_w_ == 0 || map_h_ == 0) return;
     const int actor_id = units_[(size_t)unit_index].id;
     const int actor_x = (int)(int8_t)units_[(size_t)unit_index].x;
     const int actor_y = (int)(int8_t)units_[(size_t)unit_index].y;
-    const int mobility = battle_ai_mobility_selector(units_[(size_t)unit_index]);
-    static constexpr int kRadius = 30; // sub_3DF3B: `mov edx,1Eh`
-    // Facing order from the sub_49ABC bl dispatch: 0 S (y+1), 1 W (x-1), 2 N (y-1), 3 E (x+1).
-    static constexpr int kAdjX[4] = { 0, -1, 0, 1 };
-    static constexpr int kAdjY[4] = { 1, 0, -1, 0 };
-    int best_score = 0x7FFF; // sub_3DF3B starts [ebp+0] at 7FFFh for the outer strict minimum
-    int best_hx = -1, best_hy = -1, dest_x = -1, dest_y = -1;
-    for (int dy = -kRadius; dy <= kRadius; ++dy) {
-        const int half = kRadius - (dy < 0 ? -dy : dy);
-        for (int dx = -half; dx <= half; ++dx) {
-            // Centre cell included: hostile_occupied reflects the sub_1201D xor inversion.
-            const int x = actor_x + dx, y = actor_y + dy;
-            if (!battle_ai_hostile_occupied(x, y, unit_index)) continue;
-            // WC1 sub_3D7B2 inner arm: the four cells adjacent to hostile (x,y) in facing
-            // order; sub_1A452 (range 1, WC != 3) plus sub_1A552 yield one cell per facing.
-            // The sub_1A2D7 base is the hostile cell; order is bucket, distance, sub_16699.
-            int inner_best = 0x7FFF, inner_x = -1, inner_y = -1; // sub_3D7B2 loads edi with 7FFFh
-            for (int f = 0; f < 4; ++f) {
-                const int nx = x + kAdjX[f], ny = y + kAdjY[f];
-                if (!battle_ai_terrain_bucket_compatible(x, y, nx, ny)) continue; // sub_1A2FE
-                const int dist = std::abs(nx - actor_x) + std::abs(ny - actor_y); // sub_49ADF
-                if (dist >= inner_best) continue; // strict min: `cmp di,ax; jle loop`, first wins ties
-                if (!battle_ai_candidate_tile_legal_1x1(nx, ny, unit_index, mobility)) continue; // sub_16699
-                inner_best = dist; inner_x = nx; inner_y = ny;
-                if (inner_best == 0) break; // the actor's own tile cannot be beaten; stop
-            }
-            if (inner_x < 0) continue; // unreachable hostile (inner_best stays 7FFF, `jz`)
-            if (inner_best >= best_score) continue; // outer strict min: `cmp ax,[var_10]; jge loop`
-            best_score = inner_best; best_hx = x; best_hy = y;
-            dest_x = inner_x; dest_y = inner_y;
-        }
-    }
-    if (dest_x < 0) {
+    int dest_x = -1, dest_y = -1, hostile_x = -1, hostile_y = -1;
+    if (!battle_ai_3df3b_dest(unit_index, 30, dest_x, dest_y, hostile_x, hostile_y)) {
         if (battle_trace_)
             fprintf(stderr, "COMBAT: AI weapon_class=1 unit=%d no hostile within radius 30, no movement (pos=(%d,%d))\n",
                     actor_id, actor_x, actor_y);
         return;
     }
-    if (dest_x == actor_x && dest_y == actor_y) return; // already on the best approach cell (sub_3DF3B returns 0)
+    if (dest_x == actor_x && dest_y == actor_y) return; // already on the best approach cell
+    const int score = std::abs(actor_x - dest_x) + std::abs(actor_y - dest_y);
     if (battle_trace_)
-        fprintf(stderr, "COMBAT: AI weapon_class=1 unit=%d WC1 pursuit hostile=(%d,%d) dest=(%d,%d) score=%d (sub_3DF3B radius-30 + WC1 sub_3D7B2 facing/min/bucket/16699; diffusion restore/tactics unported)\n",
-                actor_id, best_hx, best_hy, dest_x, dest_y, best_score);
-    {
-        int q = ((int)battle_ai_gauge_baseline_ - battle_ai_var4_) / 10;
-        if (q < 0) q = 0;
-        battle_ai_wc1_branch_walk(unit_index, dest_x, dest_y, -1, q * 4, battle_ai_var4_,
-                                  best_hx, best_hy, true);
-    }
+        fprintf(stderr, "COMBAT: AI weapon_class=1 unit=%d WC1 pursuit hostile=(%d,%d) dest=(%d,%d) score=%d (sub_3DF3B radius-30 + sub_3D7B2 wc1)\n",
+                actor_id, hostile_x, hostile_y, dest_x, dest_y, score);
+    int q = ((int)battle_ai_gauge_baseline_ - battle_ai_var4_) / 10;
+    if (q < 0) q = 0;
+    battle_ai_wc1_branch_walk(unit_index, dest_x, dest_y, -1, q * 4, battle_ai_var4_,
+                              hostile_x, hostile_y, true);
 }
 
 // Returns the units_ index of the occupant at (x,y) when it is hostile to the actor,
@@ -4472,7 +4436,7 @@ bool CombatII::battle_ai_40295_move(int unit_index, int wc) {
                 // K=1..6 jump-table branch (including the internal second-sub_3E18B fallback)
                 // handled.
             } else if (battle_trace_) {
-                fprintf(stderr, "COMBAT: AI weapon_class=1 unit=%d watch_state=%d +6Ch=%u dispatch declined (state>6 or unported arms like wc5/wc6+ 3CA3C), no movement (pos=(%d,%d))\n",
+                fprintf(stderr, "COMBAT: AI weapon_class=1 unit=%d watch_state=%d +6Ch=%u dispatch declined (state outside 1..6), no movement (pos=(%d,%d))\n",
                         ready.id, watch_state, (unsigned)ready.ai_decision_state, ready.x, ready.y);
             }
             return true;
@@ -4532,7 +4496,7 @@ bool CombatII::battle_ai_40295_move(int unit_index, int wc) {
         }
         if (uu.ai_decision_state != 0) {
             if (battle_trace_)
-                fprintf(stderr, "COMBAT: AI weapon_class=%d unit=%d +6Ch=%u dispatch declined (state>6 or unported arms like wc5/wc6+ 3CA3C), no movement (pos=(%d,%d) watch=%d)\n",
+                fprintf(stderr, "COMBAT: AI weapon_class=%d unit=%d +6Ch=%u dispatch declined (state outside 1..6), no movement (pos=(%d,%d) watch=%d)\n",
                         wc, uu.id, (unsigned)uu.ai_decision_state, uu.x, uu.y, watch_state);
             return true;
         }

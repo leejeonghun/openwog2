@@ -2727,6 +2727,137 @@ void CombatII::play_unit_death_46b2c(int unit_index) {
                 U.id, (unsigned)cls, count, 0x1E);
 }
 
+// ==== sub_46710 / sub_468BC / sub_46A11: removal effects ====
+// All three build a W x H strip from the (facing, pose 0) D66A8 entry with sub_10083. The port
+// uses the decoded NC2 pixels; 0xFF is the transparent value the original strip carries.
+
+// sub_46A11 (dasm 35195..35390): 16-frame pixel dissolve used by large-unit deaths and by
+// sub_50AA7 mode 4. The caller has already released the occupancy (sub_11EE4), so the unit is
+// drawn only through this strip. Per frame it erases (int16)(W*H-2)/12 pixels at
+// rand(|(int16)(W*H-2)|) (sub_499BD) and redraws through sub_5EE51.
+void CombatII::battle_fx_46a11(int unit_index) {
+    if (unit_index < 0 || (size_t)unit_index >= units_.size()) return;
+    auto& U = units_[(size_t)unit_index];
+    const NC2Frame* f0 = nc2_frame_for(U.sprite_type, U.facing & 3, 0);
+    if (!f0 || f0->pixels.empty()) return;
+    const int strip_w = f0->w, strip_h = f0->h;
+    const long total = (long)strip_w * (long)strip_h;
+    const int span = (int)(int16_t)(total - 2);          // 10083 returns bytes+2, caller -4
+    const int per_frame = span / 12;                     // idiv 0Ch
+    const int erase_range = span < 0 ? -span : span;     // sub_499BD |(int16)|
+    U.death_dissolve = 1;
+    U.death_w = strip_w;
+    U.death_h = strip_h;
+    U.death_mask.assign((size_t)total, 0);
+    game_timer_set(9);                                   // sub_1033B(9)
+    for (int i = 0; i < 16 && !should_exit_; ++i) {
+        for (int k = 0; k < per_frame; ++k) {
+            if (erase_range <= 0) break;
+            const size_t idx = (size_t)combat_rand(erase_range); // sub_499BD
+            if (idx < U.death_mask.size()) U.death_mask[idx] = 1; // unk_F1BAC[idx] = 0FFh
+        }
+        battle_fx_world();                               // sub_454B3 (5EE51 draws the strip)
+        video_.present();                                // sub_5E9E8
+        wait_game_tick();                                // sub_499E4
+    }
+    U.death_dissolve = 0;
+    U.death_mask.clear();
+    U.death_w = U.death_h = 0;
+    present_cutscene_frame();                            // sub_45559
+}
+
+// sub_46710 (dasm 34672..34895): 8-pass wipe. sub_10083 builds the strip (W = entry[2],
+// H = entry[3]); the unit leaves the occupancy grid; then, for each of eight bands of
+// edi = (int16)(bytes+2)/8 pixels, it erases `divisor + edi` random pixels (divisor =
+// max(edi/2, 2)), blanks the band, and redraws the strip through sub_5EE51. Drawing happens
+// every `divisor`-th erasure as well. The strip is drawn at sub_10971+0Ch+entry[4] /
+// sub_10988-2+entry[5], which is exactly the renderer's UNIT_ANCHOR position plus the NC2
+// x_off/y_off, so the port reuses death_dissolve's draw path.
+void CombatII::battle_fx_46710(int unit_index) {
+    if (unit_index < 0 || (size_t)unit_index >= units_.size()) return;
+    auto& U = units_[(size_t)unit_index];
+    const NC2Frame* f0 = nc2_frame_for(U.sprite_type, U.facing & 3, 0);
+    if (!f0 || f0->pixels.empty()) return;
+    const int w = f0->w, h = f0->h;
+    const long total = (long)w * (long)h;
+    const int ret = (int)(int16_t)(total + 2);           // sub_10083 return value
+    const int band = ret / 8;                            // movsx/sar 3 (truncates toward 0)
+    int divisor = band / 2;                              // movsx/sar 1
+    if (divisor < 2) divisor = 2;                        // cmp ax,2; jge
+    const int erasures = divisor + band;                 // var_C
+    U.active = false;                                    // sub_11EE4
+    U.death_dissolve = 1;
+    U.death_w = w;
+    U.death_h = h;
+    U.death_mask.assign((size_t)total, 0);
+    game_timer_set(5);                                   // sub_1033B(5)
+    int si = 0;
+    for (int pass = 0; pass < 8 && !should_exit_; ++pass) {
+        for (int ecx = erasures; ecx >= 0 && !should_exit_; --ecx) {
+            const int idx = si + (band > 0 ? combat_rand(band) : 0); // sub_499BD(edi)
+            if (idx >= 0 && (size_t)idx < U.death_mask.size()) U.death_mask[idx] = 1;
+            // mov ebx,[esp+2] >> 16 -> divisor; idiv + test edx -> draw every divisor-th step
+            if (divisor > 0 && (ecx % divisor) == 0) {
+                battle_fx_world();                       // sub_454B3
+                video_.present();                        // sub_5E9E8
+                wait_game_tick();                        // sub_499E4
+            }
+        }
+        for (int k = 0; k < band; ++k) {                 // blank the band
+            const int idx = si + k;
+            if (idx >= 0 && (size_t)idx < U.death_mask.size()) U.death_mask[idx] = 1;
+        }
+        battle_fx_world();                               // sub_454B3 + sub_5EE51
+        video_.present();
+        wait_game_tick();
+        si += band;
+    }
+    U.death_dissolve = 0;
+    U.death_mask.clear();
+    U.death_w = U.death_h = 0;
+    present_cutscene_frame();                            // sub_45559
+}
+
+// sub_468BC (dasm 35058..35217): horizontal shrink wipe (sub_50AA7 mode 3).
+//   x = 10971+0Ch+entry[4], y = 10988-2+entry[5]; 11EE4 releases the occupancy.
+//   W1 = W - W%2 + 1; for si = 1,3,5,... < W1+4, with di = 1,2,4,... after si > 4:
+//     scale += 2 while si < W1; y -= di; then 5F611(x + scale/2, y, strip, scale, 1).
+//   dst_h is 1, so 5F611 performs no vertical shrink and draws the full strip height.
+void CombatII::battle_fx_468BC(int unit_index) {
+    if (unit_index < 0 || (size_t)unit_index >= units_.size()) return;
+    auto& U = units_[(size_t)unit_index];
+    const NC2Frame* f0 = nc2_frame_for(U.sprite_type, U.facing & 3, 0);
+    if (!f0 || f0->pixels.empty()) return;
+    const int W = f0->w, H = f0->h;
+    if (W <= 0 || H <= 0) return;
+    const int sx = ((int)(int8_t)U.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + UNIT_ANCHOR_X + f0->x_off;
+    const int sy = ((int)(int8_t)U.y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + UNIT_ANCHOR_Y + f0->y_off;
+    // Build the sub_10083 strip layout ([w][h] + pixels) for sub_5F611.
+    std::vector<uint8_t> strip((size_t)4 + (size_t)W * (size_t)H);
+    strip[0] = (uint8_t)(W & 0xFF); strip[1] = (uint8_t)(W >> 8);
+    strip[2] = (uint8_t)(H & 0xFF); strip[3] = (uint8_t)(H >> 8);
+    std::memcpy(strip.data() + 4, f0->pixels.data(), (size_t)W * (size_t)H);
+    U.active = false;                                    // sub_11EE4
+    const int W1 = W - (W & 1) + 1;                      // idiv 2; sub remainder; inc
+    game_timer_set(9);                                   // sub_1033B(9)
+    int scale = 1;                                       // [esp+10h]
+    int si = 1;
+    int di = 1;
+    int y = sy;                                          // [esp+8]
+    const int limit = W1 + 4;                            // [esp]
+    while (si < limit && !should_exit_) {
+        battle_fx_world();                               // sub_454B3
+        if (si < W1) scale += 2;
+        if (si > 4) { y -= di; di += di; }
+        if (y > -0x64)                                   // cmp ebp,-64h; jle skip
+            blit_scale_shrink(sx + scale / 2, y, strip.data(), scale, 1); // sub_5F611
+        video_.present();                                // sub_5E9E8
+        wait_game_tick();                                // sub_499E4
+        si += 2;
+    }
+    present_cutscene_frame();                            // sub_45559
+}
+
 // Presentation only: inside sub_1DB1D(0, U), class 0 uses sub_463FB (16-frame rotation plus
 // 30 frames of sprite-pixel debris), classes 0x86..0x91 use sub_46B2C and other large units
 // use sub_46A11. Tile occupancy release (sub_11EE4), army-list removal and the morale
@@ -6934,9 +7065,18 @@ void CombatII::battle_restore_stored_1808a(int unit_index, bool preserve_facing,
                 cur.id, (unsigned)cur.combat_class, cur.sprite_type, cur.hp);
 }
 
-// sub_3C70C: restores through sub_1808A keeping [63h] and redraws.
+// sub_3C70C: wipes the current form (sub_46710), restores the stored record through sub_1808A
+// keeping [63h], reloads the image slot and redraws.
 void CombatII::battle_item_3c70c(int unit_index) {
-    battle_restore_stored_1808a(unit_index, true, true);
+    if (unit_index < 0 || (size_t)unit_index >= units_.size()) return;
+    const int8_t saved_facing = units_[(size_t)unit_index].facing;   // [esp+4+var_4]
+    battle_fx_46710(unit_index);                                     // sub_46710
+    if (should_exit_ || (size_t)unit_index >= units_.size()) return;
+    units_[(size_t)unit_index].active = true;                        // sub_11E04 (re-occupy)
+    units_[(size_t)unit_index].death_dissolve = 0;
+    battle_restore_stored_1808a(unit_index, true, true);             // sub_1808A + 12124 + 45559
+    if ((size_t)unit_index >= units_.size()) return;
+    units_[(size_t)unit_index].facing = saved_facing;                // mov [ecx+63h],al
 }
 
 // ---- sub_3B7CE / sub_3B614 (4CB5E dx = 5, mount/dismount) ----
@@ -7438,7 +7578,24 @@ int CombatII::battle_spell_29273(int unit_index, int bit, int k, int tx, int ty)
         // shared by bits 1/2/4.
         const int di = (k + 2 > 4) ? 4 : (k + 2);
         tgt.buff_16 = kAilDuration[di];                          // [16h] = word_74488[k+2]
-        reset_unit_pose(tgt);                                    // sub_12124 ([64h] = 0)
+        // 2914A loc_29230: 8 silhouette frames, colours selected by the bit (the stored word
+        // 0/1/2 in the original indexes dword_28332 at 0x00/0x08/0x10), then 12124. [64h] is
+        // explicitly 0 during the flash.
+        static const uint8_t kEnchantSil[3][8] = {
+            {0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17},   // bit 1
+            {0x1F, 0x1E, 0x1D, 0x1D, 0x1B, 0x1A, 0x19, 0x18},   // bit 2
+            {0x0F, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01},   // bit 4
+        };
+        const int sil = (bit == 1) ? 0 : (bit == 2) ? 1 : 2;
+        tgt.anim_frame = 0;                                      // [64h] = 0
+        game_timer_set(0x0C);                                    // sub_1033B(0Ch)
+        present_cutscene_frame();                                // sub_45559
+        for (int f = 0; f < 8 && !should_exit_; ++f) {
+            battle_fx_silhouette_13669(target, kEnchantSil[sil][f]);
+            battle_fx_commit();                                  // sub_5E9E8
+            wait_game_tick();                                    // sub_499E4
+        }
+        reset_unit_pose(tgt);                                    // sub_12124
     } else if (battle_trace_) {
         fprintf(stderr, "COMBAT: blade skip unit=%d target=%d (code_b>=7)\n",
                 units_[(size_t)unit_index].id, tgt.id);
@@ -8291,9 +8448,9 @@ bool CombatII::battle_fx_blast_203cc(int unit_index, int tx, int ty) {
         cam_fine_y_ = (int16_t)((i & 1) ? 0 : -2);                  // low word of dword_BA838
         int f = (i % 10) / 2;                                       // `idiv 10; sar edx,1` -> 5 frames per 10
         if (f >= nframes) f = nframes - 1;
-        magic_fx_frame_ = f;
-        magic_fx_x_ = ex;
-        magic_fx_y_ = ey + magic_frames_[(size_t)f].yo;              // [edx+6] frame y offset
+        // 203CC builds dword_12764C with 611AA(table, 5, 0x40) and draws with 5F305: x is the
+        // target centre unchanged, y adds only the frame's [6] (yo).
+        battle_fx_blit_tinted(f, ex, ey + magic_frames_[(size_t)f].yo, 0x40);
         present_cutscene_frame();                                   // sub_454B3 + sub_5E9E8
         wait_game_tick();
     }
@@ -8625,8 +8782,10 @@ void CombatII::battle_fx_present() {
 //     LUT[dest colour] = sub_609F9: nearest palette entry to
 //                        RGB(dest)*alpha/100 + effect colour (L1 distance, lowest error
 //                        wins, black on failure)
-//   The port caches the same computation per source colour. alpha is 50%, the initial
-//   dword_128554 value in the original.
+//   611AA/6098B/609F9: the argument is the effect-colour weight (ebx). 6098B multiplies the
+//   source colour by it, 609F9 weights the destination by (100 - it) and adds 9 to each
+//   channel. Both sums are stored as bytes, so they wrap modulo 256 exactly like `mov [var],
+//   al`. The nearest palette entry is chosen by L1 distance, first match wins.
 void CombatII::blit_frame_tinted(int x, int y, const MagicFxFrame& fr, int tint_pct) {
     if (fr.flat.empty() || fr.w <= 0 || fr.h <= 0) return;
     uint8_t* dst = video_.get_backbuffer();
@@ -8639,28 +8798,29 @@ void CombatII::blit_frame_tinted(int x, int y, const MagicFxFrame& fr, int tint_
         pal_hash = (pal_hash ^ (uint32_t)(battle_palette_[i][0] | (battle_palette_[i][1] << 8))) * 16777619u;
     if (pal_hash != cache_pal) { cache.clear(); cache_pal = pal_hash; }
 
-    const int alpha = 50;                       // dword_128554 family (destination weight)
-    const int shade = std::max(0, std::min(100, tint_pct));
+    const int arg = std::max(0, std::min(100, tint_pct));   // 611AA ebx
+    const int dest_weight = 100 - arg;                      // dword_128558
     for (int row = 0; row < fr.h; ++row) {
         const int dy = y + row;
-        if (dy < 0 || dy >= SCREEN_H) continue;
+        if (dy < 0 || dy >= 0xC7) continue;               // 5F305 clips at C7h
         for (int col = 0; col < fr.w; ++col) {
             const int dx = x + col;
-            if (dx < 0 || dx >= SCREEN_W) continue;
+            if (dx < 0 || dx >= 0x13F) continue;          // 5F305 clips at 13Fh
             const uint8_t px = fr.flat[(size_t)row * (size_t)fr.w + (size_t)col];
             if (px == 0xFF) continue;                               // transparent
-            const uint32_t key = ((uint32_t)px << 8) | (uint32_t)shade;
+            const uint32_t key = ((uint32_t)px << 8) | (uint32_t)arg;
             auto it = cache.find(key);
             if (it == cache.end()) {
-                // Effect colour = palette[px] * shade%
-                const int er = battle_palette_[px][0] * shade / 100;
-                const int eg = battle_palette_[px][1] * shade / 100;
-                const int eb = battle_palette_[px][2] * shade / 100;
+                // 6098B: effect colour = palette[px] * arg%.
+                const int er = battle_palette_[px][0] * arg / 100;
+                const int eg = battle_palette_[px][1] * arg / 100;
+                const int eb = battle_palette_[px][2] * arg / 100;
                 std::vector<uint8_t> lut(256);
                 for (int d = 0; d < 256; ++d) {
-                    const int r = battle_palette_[d][0] * alpha / 100 + er;
-                    const int g = battle_palette_[d][1] * alpha / 100 + eg;
-                    const int b = battle_palette_[d][2] * alpha / 100 + eb;
+                    // 609F9: palette[d] * (100-arg)% + effect + 9, stored through al.
+                    const int r = (uint8_t)(battle_palette_[d][0] * dest_weight / 100 + er + 9);
+                    const int g = (uint8_t)(battle_palette_[d][1] * dest_weight / 100 + eg + 9);
+                    const int b = (uint8_t)(battle_palette_[d][2] * dest_weight / 100 + eb + 9);
                     int best = 0, best_d = 0x7FFFFFFF;
                     for (int c = 0; c < 256; ++c) {
                         const int dr = std::abs(r - (int)battle_palette_[c][0]);
@@ -9128,8 +9288,10 @@ void CombatII::battle_weapon_301bb(int unit_index, int weapon_idx, int is_leader
 //   idx2=2F56C: 2D5A3 plus the [13h] bits (and E3h, or 4<<(dx-1)), always 1.
 //   idx4/12=2F5A7: 2D684 and [13h] &= 9Fh, then or 20h when dx < 3 else or 40h, always 1.
 //   idx11=2F71E: front single 1D124 plus 2CAF7(mul dx==1?0:dx, add 3000).
-//   The rest (2F592/2F5D7/2F5EF/loc_2F4DE/2F6EB/2F706) still lack a 2EB61/2E25B body and
-//   return -1 as a tripwire.
+//   The remaining vectors (2F592/2F5D7/2F5EF/loc_2F4DE/2F68C/2F6EB/2F706/2F80B/2F98A/
+//   2FA1E/2FA41/2FA6E/2FD03/2FED7/2FF36/2FF4B/2FFF9/30049) are handled in
+//   battle_weapon_f1474 / battle_weapon_f1474_ext above; the ext dispatcher is entered for
+//   idx >= 13, and the fall-through below is only reached for an out-of-table idx.
 //   4C98A returns to the ring without spending on -1, and on 1 runs 301BB plus the cost when
 //   class != 0x32.
 int CombatII::battle_weapon_f1474(int unit_index, int idx, int dx) {
@@ -9988,7 +10150,10 @@ int CombatII::battle_weapon_f1474_ext(int unit_index, int idx, int dx) {
             battle_weapon_front_tile(unit_index, fx, fy);
             const int n = battle_weapon_collect_rect(unit_index, fx, fy, 1, R, nullptr, nullptr);
             if (battle_trace_) fprintf(stderr, "COMBAT: f1474[17]=2FA6E unit=%d dx=%d R=%d targets=%d\n", u.id, dx, R, n);
-            if (n <= 0) return -1; // word_F14D8==1 && count==0
+            // sub_2FA6E: only `word_F14D8 == 1 && count == 0` returns -1. On the player path
+            // (F14D8 != 1) the presentation/journal runs even with an empty target list and the
+            // routine still returns 1.
+            if (battle_f14d8_ == 1 && n <= 0) return -1;
             units_[(size_t)unit_index].anim_frame = 9;
             battle_weapon_2caf7_loop(unit_index, dx, 3000);
             if ((size_t)unit_index < units_.size()) reset_unit_pose(units_[(size_t)unit_index]); // 12124
@@ -10478,8 +10643,9 @@ int CombatII::battle_weapon_302e6(int unit_index, int edi) {
 //          [57h].
 //   All 13 sub_302E6 routines are ported: 12 return 1 (301BB runs) or -1 with no target,
 //   elect (edi 10) returns 0 on the normal path (301BB and the cost are skipped) or -1 with
-//   no target. The 2CC3A family (idx0/8) is unported and returns -1. The small F1474 cases
-//   (idx2/4/12) return 1, so 301BB and the cost run there.
+//   no target. The 2CC3A family (idx0/8/19) is implemented in battle_weapon_2cc3a and
+//   returns 1 after the hit sequence. The small F1474 cases (idx2/4/12) return 1, so 301BB
+//   and the cost run there.
 int CombatII::battle_use_weapon(int unit_index, int si) {
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return 0;
     auto& u = units_[(size_t)unit_index];
@@ -10877,7 +11043,8 @@ int CombatII::battle_use_item(int unit_index, int dx, int tx, int ty) {
             return 0;
         }
         default: {
-            if (battle_trace_) fprintf(stderr, "COMBAT: item dx=%d unported (Tripwire)\n", dx);
+            // sub_4CB5E has exactly 18 cases (dx 0..17); anything else has no dispatch entry.
+            if (battle_trace_) fprintf(stderr, "COMBAT: item dx=%d outside the 0..17 dispatch table\n", dx);
             return 0;
         }
     }

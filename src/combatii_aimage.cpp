@@ -24,6 +24,42 @@ void mage_diamond(int cx, int cy, int r, Fn&& fn) {
 
 inline int s16(int v) { return (int16_t)v; }
 
+// sub_1A452/sub_1A552 band iterator (file local copy, mirroring combatii_ai.cpp).
+struct AiBandIter {
+    int x = 0, y = 0;
+    int s9a = 0, s96 = 0, s9c = 0, s98 = 0;
+    int c_lo = 0, rows = 0;
+    int n_lo = 0, n_hi = 0;
+    bool done = false;
+};
+
+void ai_band_init(AiBandIter& it, int x, int y, int d, int cx, int rng) {
+    it.x = x; it.y = y; it.c_lo = cx; it.n_lo = 0; it.n_hi = 0; it.done = false;
+    int sgn = 1;
+    if (rng < 0) { sgn = -1; rng = -rng; }
+    it.rows = rng;
+    switch (d & 3) {
+        case 0:  it.s9a = 1;  it.s96 = 0;  it.s9c = -(cx - 1); it.s98 = sgn; break;
+        case 1:  it.s9a = 0;  it.s96 = 1;  it.s9c = -sgn;      it.s98 = -(cx - 1); break;
+        case 2:  it.s9a = -1; it.s96 = 0;  it.s9c = cx - 1;    it.s98 = -sgn; break;
+        default: it.s9a = 0;  it.s96 = -1; it.s9c = sgn;       it.s98 = cx - 1; break;
+    }
+}
+
+bool ai_band_next(AiBandIter& it, int& ox, int& oy) {
+    if (it.done) return false;
+    ox = it.x; oy = it.y;
+    if (++it.n_lo != it.c_lo) {
+        it.x += it.s9a; it.y += it.s96;
+    } else {
+        it.n_lo = 0;
+        ++it.n_hi;
+        it.x += it.s9c; it.y += it.s98;
+        if (it.n_hi == it.rows) it.done = true;
+    }
+    return true;
+}
+
 }  // namespace
 
 // ---- sub_3E21B ----
@@ -1036,7 +1072,13 @@ bool CombatII::battle_ai_3e251_dest(int unit_index, int& out_x, int& out_y, int&
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return false;
     const auto& u = units_[(size_t)unit_index];
     const int ax = (int)(int8_t)u.x, ay = (int)(int8_t)u.y;
-    const int t = battle_ai_watch_unit(unit_index);
+    // sub_3E251 reads [+73h] first; sub_3E21B (watch_unit) reads [+71h] first, so the
+    // direct target is resolved here before falling back to the watch-list lookup.
+    int t = -1;
+    if (u.ai_target_unit >= 0 && (size_t)u.ai_target_unit < units_.size())
+        t = u.ai_target_unit;
+    else if (u.ai_watch_sel != 0xFF)
+        t = battle_ai_watch_unit(unit_index);
     bool has_unit = false;
     int rx, ry;
     if (t >= 0) {
@@ -1049,18 +1091,11 @@ bool CombatII::battle_ai_3e251_dest(int unit_index, int& out_x, int& out_y, int&
     if (rx < 0 || ry < 0 || rx >= (int)map_w_ || ry >= (int)map_h_) return false;
     const int mobility = battle_ai_mobility_selector(u);
     if (has_unit) {
-        static constexpr int kAdjX[4] = { 0, -1, 0, 1 };
-        static constexpr int kAdjY[4] = { 1, 0, -1, 0 };
-        int best = 0x7FFF, bx = -1, by = -1;
-        for (int f = 0; f < 4; ++f) {
-            const int nx = rx + kAdjX[f], ny = ry + kAdjY[f];
-            if (!battle_ai_terrain_bucket_compatible(rx, ry, nx, ny)) continue;
-            const int dist = std::abs(nx - ax) + std::abs(ny - ay);
-            if (dist >= best) continue;
-            if (!battle_ai_candidate_tile_legal_1x1(nx, ny, unit_index, mobility)) continue;
-            best = dist; bx = nx; by = ny;
-        }
-        if (bx >= 0) { out_x = bx; out_y = by; return true; }
+        // loc_3E2B1: 3D7B2 picks the nearest legal destination around the target/watch
+        // unit; only when it returns 0x7FFF does the radius-9 home/observation scan run.
+        int bx = -1, by = -1;
+        const int score = battle_ai_3d7b2_dest(unit_index, rx, ry, bx, by);
+        if (score != 0x7FFF) { out_x = bx; out_y = by; return true; }
     }
     int best_score = 0x7FFF, bx = -1, by = -1;
     const int radius = 9;
@@ -1081,32 +1116,125 @@ bool CombatII::battle_ai_3e251_dest(int unit_index, int& out_x, int& out_y, int&
     return true;
 }
 
-// ---- sub_3DF3B approximation ----
-// For every hostile within radius r, evaluate 3D7B2 (the legal adjacent tile with the smallest
-// distance) and keep the strictly smallest score (distance).
+// ---- sub_3D7B2 ----
+// Candidate destinations around a hostile, scored by sub_49ADF (manhattan distance from
+// the actor). The wc<=3 arm walks the sub_1A452 facing strip and applies sub_16699; the
+// wc6..0x13 arms scan the sub_1A452 band / sub_1AC08 diamond and require an empty cell
+// through sub_11DB2. wc 4/5/0xB/0xC still use the previous adjacent-tile approximation:
+// their arms go through sub_1A7BA and the WC5 1CB53/1C685 chain, which are not modelled
+// here yet.
+int CombatII::battle_ai_3d7b2_dest(int unit_index, int hx, int hy, int& out_x,
+                                   int& out_y) const {
+    out_x = out_y = -1;
+    if (unit_index < 0 || (size_t)unit_index >= units_.size()) return 0x7FFF;
+    const auto& u = units_[(size_t)unit_index];
+    const int ax = (int)(int8_t)u.x, ay = (int)(int8_t)u.y;
+    const int wc = weapon_class(u);
+    const int mobility = battle_ai_mobility_selector(u);
+    static constexpr int kStepX[4] = { 0, -1, 0, 1 };  // S,W,N,E (sub_49ABC)
+    static constexpr int kStepY[4] = { 1, 0, -1, 0 };
+    auto empty_for_11db2 = [&](int x, int y) {
+        const int o = battle_unit_index_at(x, y);
+        return o < 0 || o == unit_index;  // sub_11EE4 released the actor footprint
+    };
+    int best = 0x7FFF, bx = -1, by = -1;
+    auto consider = [&](int x, int y) {
+        if (x < 0 || y < 0 || x >= (int)map_w_ || y >= (int)map_h_) return;
+        const int dist = std::abs(ax - x) + std::abs(ay - y);
+        if (dist >= best) return;
+        if (!empty_for_11db2(x, y)) return;
+        best = dist; bx = x; by = y;
+    };
+    auto diamond_scan = [&](int cx, int cy, int radius, int fold_limit, bool limit_fold) {
+        int gate = 0;
+        for (int j = 0; j <= 2 * radius; ++j) {
+            const int y = cy - radius + j;
+            const int half = std::min(j, 2 * radius - j);
+            const int w = 2 * half + 1;
+            for (int i = 0; i < w; ++i) {
+                const int x = cx - half + i;
+                // sub_1AD2E: min(i+1, w-i-2), with the row-end call returning 0.
+                const int fold = (i == w - 1) ? 0 : std::min(i + 1, w - i - 2);
+                if (!limit_fold || gate < fold_limit) consider(x, y);
+                gate = fold;  // sub_1AC59 advances before sub_1AD2E is read
+            }
+        }
+    };
+    if (wc <= 3) {
+        const int rng = (wc == 3) ? 2 : 1;  // loc_3D8B4
+        for (int f = 0; f < 4; ++f) {
+            int x = hx + kStepX[f], y = hy + kStepY[f];
+            for (int k = 0; k < rng; ++k) {
+                if (!battle_ai_terrain_bucket_compatible(hx, hy, x, y)) break;  // 1A2FE
+                if (battle_ai_candidate_tile_legal_1x1(x, y, unit_index, mobility))
+                    consider(x, y);  // 16699
+                x += kStepX[f]; y += kStepY[f];
+            }
+        }
+    } else if (wc == 4 || wc == 5 || wc == 0xB || wc == 0xC) {
+        for (int f = 0; f < 4; ++f) {
+            const int x = hx + kStepX[f], y = hy + kStepY[f];
+            if (battle_ai_terrain_bucket_compatible(hx, hy, x, y) &&
+                battle_ai_candidate_tile_legal_1x1(x, y, unit_index, mobility))
+                consider(x, y);
+        }
+    } else if (wc == 0x10) {
+        diamond_scan(hx, hy, 3, 0, false);  // loc_3DCD8: single radius-3 diamond
+    } else if (wc >= 6 && wc <= 0x13) {
+        const int rng = (wc == 8 || wc == 0xD) ? 3 : 2;  // loc_3DB17
+        for (int f = 0; f < 4; ++f) {
+            int cx0 = hx + kStepX[f], cy0 = hy + kStepY[f];
+            if (wc == 0xF) {
+                diamond_scan(cx0, cy0, 4, 3, true);  // loc_3DC49: first three folds
+                continue;
+            }
+            if (wc == 0xD) {  // loc_3DAFC entry adjustment
+                if (f == 0) cy0 += 1;
+                else if (f == 1) cx0 -= 1;
+            }
+            int cxn = 2, scan_rng = rng;
+            if (wc == 0x11) {  // loc_3DD58
+                cx0 += kStepX[f] + kStepX[(f + 1) & 3];
+                cy0 += kStepY[f] + kStepY[(f + 1) & 3];
+                cxn = 3; scan_rng = 7;
+            } else if (wc == 0x12) {  // loc_3DDFC
+                cx0 += 2 * kStepX[f] + kStepX[(f + 1) & 3];
+                cy0 += 2 * kStepY[f] + kStepY[(f + 1) & 3];
+                cxn = 3; scan_rng = 3;
+            } else if (wc == 0x13) {  // loc_3DEAF: odd facings only
+                if ((f & 1) == 0) continue;
+                cxn = 1; scan_rng = 5;
+            } else {
+                if (f == 0) cx0 -= 1;
+                else if (f == 3) cy0 += 1;
+            }
+            AiBandIter it;
+            ai_band_init(it, cx0, cy0, f, cxn, scan_rng);
+            int x, y;
+            while (ai_band_next(it, x, y)) consider(x, y);
+        }
+    }
+    if (bx < 0) return 0x7FFF;
+    out_x = bx; out_y = by;
+    return best;
+}
+
+// ---- sub_3DF3B ----
+// For every hostile inside the radius diamond, evaluate 3D7B2 and keep the strictly
+// smallest distance (first hostile wins ties).
 bool CombatII::battle_ai_3df3b_dest(int unit_index, int radius, int& out_x, int& out_y,
                                     int& out_hx, int& out_hy) const {
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return false;
     const auto& u = units_[(size_t)unit_index];
     const int ax = (int)(int8_t)u.x, ay = (int)(int8_t)u.y;
-    const int mobility = battle_ai_mobility_selector(u);
-    static constexpr int kAdjX[4] = { 0, -1, 0, 1 };
-    static constexpr int kAdjY[4] = { 1, 0, -1, 0 };
     int best = 0x7FFF;
     bool found = false;
     mage_diamond(ax, ay, radius, [&](int x, int y) {
         if (battle_ai_hostile_unit_at(x, y, unit_index) < 0) return;
-        int inner = 0x7FFF, ix = -1, iy = -1;
-        for (int f = 0; f < 4; ++f) {
-            const int nx = x + kAdjX[f], ny = y + kAdjY[f];
-            if (!battle_ai_terrain_bucket_compatible(x, y, nx, ny)) continue;
-            const int dist = std::abs(nx - ax) + std::abs(ny - ay);
-            if (dist >= inner) continue;
-            if (!battle_ai_candidate_tile_legal_1x1(nx, ny, unit_index, mobility)) continue;
-            inner = dist; ix = nx; iy = ny;
-        }
-        if (ix < 0 || inner >= best) return;
-        best = inner; out_x = ix; out_y = iy; out_hx = x; out_hy = y;
+        int dx = -1, dy = -1;
+        const int score = battle_ai_3d7b2_dest(unit_index, x, y, dx, dy);
+        if (score >= best) return;
+        best = score; out_x = dx; out_y = dy; out_hx = x; out_hy = y;
         found = true;
     });
     return found;

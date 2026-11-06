@@ -1,5 +1,6 @@
 // combatii_script: SCE script VM, trigger evaluation and cutscene timeline playback.
 // Split out of combatii.cpp; behavior is unchanged.
+#include <algorithm>
 #include "combatii.h"
 #include "devutil.h"
 #include "combatii_internal.h"
@@ -624,11 +625,40 @@ CombatII::VmResult CombatII::run_vm(uint32_t offset) {
             uint8_t kind = c.u8();
             uint8_t item = c.u8();
             if (!c.ok) { abort_range(); break; }
-            // The original picks the target unit from dword_11024C (forced target) or the
-            // dword_CC968 lists, then updates the slot through sub_184CA (item name),
-            // sub_1832D (equip) or sub_181A6 (unequip).
+            // sub_5196F resolves the receiver while the command runs: dword_11024C when a
+            // unit is forced, otherwise the dword_CC968 list walk keeps the first node and
+            // replaces it with probability 2/3 at every following node (sub_499BD(3) != 0).
+            int target = script_forced_target_;
+            if (target < 0 || (size_t)target >= units_.size()) {
+                std::vector<int> list;
+                for (size_t i = 0; i < units_.size(); ++i) {
+                    const CombatUnitPlacement& lu = units_[i];
+                    if (!lu.active) continue;
+                    // dword_CC968 is the head of the army-1 list (word_F0424[0]); the walk at
+                    // sub_5196F+0xB5 follows only that list, not the four army lists.
+                    if (battle_effective_army(lu) != 1) continue;
+                    list.push_back((int)i);
+                }
+                std::sort(list.begin(), list.end(), [&](int a, int b) {
+                    const uint32_t sa = units_[(size_t)a].list_seq, sb = units_[(size_t)b].list_seq;
+                    return sa != sb ? sa < sb : a < b;             // sub_1134F tail insert order
+                });
+                target = -1;
+                if (!list.empty()) {
+                    target = list[0];
+                    for (size_t k = 1; k < list.size(); ++k)
+                        if (combat_rand(3) != 0) target = list[k];
+                }
+            }
+            VmEvent ev;
+            ev.type = VmEventType::Item;
+            ev.offset = op_pos;
+            ev.item_kind = kind;
+            ev.item_id = item;
+            ev.item_unit = target;
             if (script_trace_)
-                fprintf(stderr, "COMBAT: vm item kind=%u id=%u (equip effect logged only)\n", kind, item);
+                fprintf(stderr, "COMBAT: vm item kind=%u id=%u unit=%d\n", kind, item, target);
+            r.events.push_back(std::move(ev));
             break;
         }
         case VM_COMBAT: { // sub_51C74 (0x07): up to 2 x [sel][idx][mode] + separator 7
@@ -1248,13 +1278,29 @@ CombatII::VmResult CombatII::run_vm(uint32_t offset) {
                 nu.x = script_buffer_[p]; p += 1;
                 nu.y = script_buffer_[p]; p += 1;
                 // sub_50D9F -> sub_50D3A: a K==1 drop does not keep the payload position. It
-                // scans a diamond r=1..50 for the first cell whose `13CBD` is -1. Both 1-5.SCE
-                // spawns sit at (x,y-1) because the north cell is free (measured on bug/1
-                // saves: A(54,44) B(56,45) C(55,56) D(56,55), one row above the payload). The
-                // E8 no-op condition makes the north cell the first candidate (`1AC08`/`1AC59`
-                // order), so the port uses that fixed 1-5 result instead of a general search.
-                // Deviation: the full 50D3A scan (radius, 13CBD, 50 cells) is not ported.
-                if (K == 1) nu.y -= 1;
+                // scans a diamond r=1..0x31 in sub_1AC08/sub_1AC59 order and takes the first
+                // cell whose sub_13CBD value is -1. At this point the original's shared E8 grid
+                // is in its cleared (-1) state (the alternative is that north of the payload
+                // would not be the position measured on the 1-5 saves), so the port reproduces
+                // the scan against an all -1 grid. sub_13CBD returns -128 outside the map, so
+                // those cells are skipped exactly as in the original; this also keeps a spawn
+                // on the top row on its own tile instead of decrementing y out of bounds.
+                if (K == 1) {
+                    std::vector<int> empty_e8((size_t)map_w_ * (size_t)map_h_, -1);
+                    bool drop_found = false;
+                    for (int r = 1; r < 0x32 && !drop_found; ++r) {
+                        Wc5Dia dia;
+                        battle_ai_wc5_dia_init(dia, nu.x, nu.y, r);
+                        int dx = 0, dy = 0;
+                        while (battle_ai_wc5_dia_next(dia, dx, dy)) {
+                            if (battle_ai_wc5_diff_read(empty_e8, dx, dy) != -1) continue;
+                            nu.x = dx;
+                            nu.y = dy;
+                            drop_found = true;
+                            break;
+                        }
+                    }
+                }
                 const size_t path_bytes = (K == 0 && count2 >= 1)
                     ? (size_t)(count2 - 1) * 2u : 0u;
                 if (path_bytes > script_size - p) { abort_range(); break; }
@@ -2341,7 +2387,7 @@ void CombatII::play_spawn_fall(const VmEvent& ev) {
         u->anim_frame = 3;
         u->drop_wait = w.spawn_delay;         // E5A50 < 0 wait window (draws nothing)
         u->drop_step = w.spawn_delay > 0 ? -1 : 7;
-        u->drop_sil = w.spawn_delay > 0 ? 0 : 2;
+        u->drop_sil = w.spawn_delay > 0 ? 0 : 9;
         u->walk_arrived = false;
     }
     const int frames = 2 * (max_var14 + 8) + 1;
@@ -2367,7 +2413,7 @@ void CombatII::play_spawn_fall(const VmEvent& ev) {
                 } else if (u->anim_counter < 7) {
                     ++u->anim_counter;
                     u->drop_step = 7 - (int)u->anim_counter;
-                    u->drop_sil = 2 + (int)u->anim_counter;
+                    u->drop_sil = 9 - (int)u->anim_counter;   // 5F517 cl = 9 - dx
                 } else if (u->anim_counter == 7) {
                     // loc_509B2: sub_11F74 dust and a one-tile landing; [64h] is not written (pose
                     // 3 kept)
@@ -2439,19 +2485,6 @@ void CombatII::play_retreat(const VmEvent& ev) {
         return false;
     };
 
-    if (ev.retreat_mode != 0) {
-        // The original goes to sub_508E6(4) (light pillar fades) for mode 1 and sub_50AA7
-        // (leaves the terrain) otherwise. Neither routine is ported, so the unit is removed at
-        // once; the log distinguishes the two cases.
-        size_t n = 0;
-        for (int ui : ev.leave_units)
-            if (CombatUnitPlacement* u = unit_at(ui)) { u->active = false; ++n; }
-        fprintf(stderr, "COMBAT: play retreat (mode %d): %zu unit(s) removed (presentation not ported)\n",
-                ev.retreat_mode, n);
-        present_cutscene_frame();
-        return;
-    }
-
     // Mirrors the original's var_44 state array plus the dword_F0648 list.
     struct RetreatUnit {
         int ui = -1;                              // dword_F0648[i] (index into units_)
@@ -2507,6 +2540,14 @@ void CombatII::play_retreat(const VmEvent& ev) {
         if (retreat_trace)
             fprintf(stderr, "COMBAT: unit %d tile=(%d,%d) dir=%d step=%d path=%zu state=%d\n",
                     u->id, sx, sy, e.dir, e.step, e.path.size(), e.state);
+    }
+
+    // loc_5168C: mode != 0 leaves sub_17071. Mode 1 calls sub_508E6(4) (light pillar fades),
+    // anything else calls sub_50AA7 (removal modes 2/3/4). Both use the EDD74 computed above.
+    if (ev.retreat_mode != 0) {
+        if (ev.retreat_mode == 1) play_retreat_pillar_508e6(ev, edd74);
+        else battle_force_retreat_50aa7(ev);
+        return;
     }
 
     // sub_17071 prologue: `mov eax,9; call sub_1033B` plus pose table/pose 3 and
@@ -2610,6 +2651,117 @@ void CombatII::play_retreat(const VmEvent& ev) {
     }
     camera_update_frame();
     present_cutscene_frame();
+}
+
+// sub_508E6(4): light-pillar retreat. The prologue sets unk_E5A50 = 7 - unk_E5A50 (the value
+// written by sub_51449 is -record byte 4) and adds 8 to word_EDD74. For 2*(EDD74+8)+1 frames it
+// runs sub_4559F, draws each unit through sub_50216 at the current counter, and on every even
+// frame decrements the counter; at 6 the unit leaves the list (sub_197AD/113E4/113CC + 11F74).
+void CombatII::play_retreat_pillar_508e6(const VmEvent& ev, int edd74) {
+    struct PillarUnit { int ui = -1; int counter = 7; bool removed = false; };
+    std::vector<PillarUnit> ps;
+    ps.reserve(ev.leave_units.size());
+    for (size_t k = 0; k < ev.leave_units.size(); ++k) {
+        const int ui = ev.leave_units[k];
+        if (ui < 0 || (size_t)ui >= units_.size()) continue;
+        const int step = (k < ev.leave_steps.size()) ? ev.leave_steps[k] : 0; // unk_E5A50
+        ps.push_back({ui, 7 - step, false});          // mov bl,7; sub bl,bh
+        units_[(size_t)ui].drop_wait = 1;             // hidden until the counter reaches 7
+        units_[(size_t)ui].drop_step = -1;
+        units_[(size_t)ui].drop_sil = 0;
+    }
+    if (ps.empty()) { present_cutscene_frame(); return; }
+
+    game_timer_set(0x0C);                             // mov eax,0Ch; call sub_1033B
+    auto refresh = [&]() {
+        for (auto& p : ps) {
+            if (p.ui < 0 || (size_t)p.ui >= units_.size()) continue;
+            auto& u = units_[(size_t)p.ui];
+            const int c = p.counter;
+            // sub_50216 is called with edx = E5A50 (0..7 after the 7-E5A50 prologue). The
+            // renderer's drop path reconstructs dx = 7 - drop_step, so drop_step = 7 - c.
+            // 5F517 fills with cl = 9 - dx (see 50216+F3), hence drop_sil = 9 - c.
+            if (c >= 0 && c <= 7) {
+                u.drop_wait = 0;
+                u.drop_step = 7 - c;
+                u.drop_sil = 9 - c;
+            } else {
+                u.drop_wait = 1;                      // dx < 0 or > 7: 50216 draws nothing
+                u.drop_step = -1;
+                u.drop_sil = 0;
+            }
+        }
+    };
+    refresh();
+    const int total = 2 * (edd74 + 8);                // di = word_EDD74(+=8) * 2
+    for (int f = 0; f <= total && !should_exit_; ++f) {
+        camera_update_frame();                        // sub_4559F
+        present_cutscene_frame();                     // sub_50216 + sub_5E9E8
+        if ((f & 1) == 0) {                           // test di,1 (same parity as the frame index)
+            for (auto& p : ps) {
+                if (p.removed) continue;
+                --p.counter;                          // dec al
+                if (p.counter == 6) {                 // cmp al,6; jne (mode 4 path 509EC)
+                    // 197AD/113E4/113CC remove the unit from the ready, unit and army lists, but
+                    // the draw loop keeps calling 50216 with the dword_F0648 pointer, so the
+                    // port must keep drawing it until the counter drops below 0.
+                    battle_remove_from_ready_queue(p.ui); // sub_197AD
+                    p.removed = true;
+                }
+            }
+        }
+        refresh();
+        input_.update();
+        if (input_.quit_requested()) { should_exit_ = true; break; }
+        if (input_.is_key_pressed(SDLK_ESCAPE)) skip_cutscene_ = true;
+        wait_game_tick();                             // sub_499E4
+    }
+    // Mode 4 tail: 119B6 image-slot release for every listed unit without [1E]&40h (no-op in
+    // the port), then 4559F + 5E9E8.
+    for (auto& p : ps) {
+        if (p.ui < 0 || (size_t)p.ui >= units_.size()) continue;
+        auto& u = units_[(size_t)p.ui];
+        u.active = false;                             // 113E4/113CC
+        u.drop_wait = 0;
+        u.drop_step = -1;
+        u.drop_sil = 0;
+    }
+    camera_update_frame();
+    present_cutscene_frame();
+    if (DevUtil::retreat_trace())
+        fprintf(stderr, "COMBAT: play retreat pillar (mode 1, %zu unit(s), EDD74=%d -> %d frames)\n",
+                ps.size(), edd74, total + 1);
+}
+
+// sub_50AA7: removal of the units listed in dword_F0648. Units inside the 12x12 viewport run
+// their mode's effect first (2 = sub_46710 wipe, 3 = sub_468BC shrink, 4 = sub_46A11 dissolve);
+// units outside it are removed without an effect. Every unit then leaves the ready queue
+// (sub_197AD), the army list (sub_113E4/113CC) and releases its image slot (sub_119B6).
+void CombatII::battle_force_retreat_50aa7(const VmEvent& ev) {
+    const int mode = ev.retreat_mode;
+    for (int ui : ev.leave_units) {
+        if (ui < 0 || (size_t)ui >= units_.size()) continue;
+        auto& u = units_[(size_t)ui];
+        const int x = (int)(int8_t)u.x, y = (int)(int8_t)u.y;
+        const bool in_view = x >= cam_tile_x_ && x < cam_tile_x_ + 12 &&
+                             y >= cam_tile_y_ && y < cam_tile_y_ + 12;
+        if (in_view && !should_exit_) {
+            if (mode == 2) battle_fx_46710(ui);
+            else if (mode == 3) battle_fx_468BC(ui);
+            else if (mode == 4) {
+                u.active = false;                     // sub_11EE4
+                battle_fx_46a11(ui);
+            }
+        }
+        if (should_exit_ || (size_t)ui >= units_.size()) continue;
+        units_[(size_t)ui].active = false;            // sub_113E4 / sub_113CC
+        units_[(size_t)ui].death_dissolve = 0;
+        battle_remove_from_ready_queue(ui);           // sub_197AD
+    }
+    // sub_50AA7's tail is just the epilogue (0x50BAA -> 0x50AA1): no present here.
+    if (DevUtil::retreat_trace())
+        fprintf(stderr, "COMBAT: play retreat removal mode %d: %zu unit(s)\n",
+                mode, ev.leave_units.size());
 }
 
 void CombatII::animate_unit_walk(const VmEvent& ev) {
@@ -3383,6 +3535,60 @@ void CombatII::play_vm_events(const std::vector<VmEvent>& events) {
             play_unit_pose(ev);                        // loc_51E34
             if (should_exit_ || skip_cutscene_) return;
             break;
+        case VmEventType::Item: {
+            // sub_5196F: kind 0 stores the item, kinds 1..3 equip it (weapon / shield /
+            // accessory). A failed equip goes to the first free backpack slot; when both are
+            // occupied the old [5Fh] item is moved to the stash and replaced. The routine then
+            // shows the item name plus its suffix through sub_482A5.
+            const int ui = ev.item_unit;
+            if (ui >= 0 && (size_t)ui < units_.size()) {
+                battle_load_item_table();
+                std::string name;
+                if (ev.item_id >= 1) {
+                    const size_t off = ((size_t)ev.item_id - 1) * 66u + 1u;
+                    for (size_t k = off; k < battle_lookup_table_.size() && battle_lookup_table_[k] != 0; ++k)
+                        name.push_back((char)battle_lookup_table_[k]);
+                }
+                static const char kGot[] = " \xD2\x42\x97\x62!\n";                       // " 획득!\n"
+                static const char kEquipWeapon[] = "\xB5\xA1\x9F\x65\xAD\xA5 \xB8\x77\xC0\x62!"; // 오른손 장착!
+                static const char kEquipShield[] = "\xB6\x45\xAD\xA5 \xB8\x77\xC0\x62!";         // 왼손 장착!
+                static const char kEquipAccessory[] = "\xA5\xA1\xB9\xA1\x8A\x81\x9D\xA1 \xB8\x77\xC0\x62!"; // 보조구로 장착!
+                // VA 0x78000: "배낭에 보관\n있던 ITEM은 창고에 보관" (sub_5196F+266)
+                static const char kBagKeep[] = "\xA4\x81\x90\x77\xB5\x41\x20\xA5\xA1\x89\xC5\x0A\xB7\xB6\x94\xE5\x20\x49\x54\x45\x4D\xB7\x65\x20\xC0\x77\x89\xA1\xB5\x41\x20\xA5\xA1\x89\xC5";
+                auto& iu = units_[(size_t)ui];
+                std::string msg;
+                if (ev.item_kind == 0) {
+                    battle_stash_add(ev.item_id);                              // sub_4ECE4
+                    msg = name + kGot;
+                } else if (ev.item_kind >= 1 && ev.item_kind <= 3) {
+                    const int sk = ev.item_kind == 1 ? 1 : (ev.item_kind == 2 ? 0 : 2);
+                    if (battle_equip_check(ui, ev.item_id, sk)) {              // sub_1832D
+                        const int old = sk == 1 ? iu.combat_type_5b
+                                      : sk == 0 ? iu.combat_type_5a : iu.combat_type_5d;
+                        if (old != 0) {
+                            battle_stash_add(old);                             // sub_4ECE4
+                            battle_equip_remove(ui, sk);                       // sub_18262
+                        }
+                        battle_equip_apply(ui, ev.item_id, sk);                // sub_181A6
+                        msg = name + (ev.item_kind == 1 ? kEquipWeapon
+                                   : ev.item_kind == 2 ? kEquipShield : kEquipAccessory);
+                    } else if (iu.inv_5e == 0) {
+                        iu.inv_5e = ev.item_id;
+                        msg = name + kGot;
+                    } else if (iu.inv_5f == 0) {
+                        iu.inv_5f = ev.item_id;
+                        msg = name + kGot;
+                    } else {
+                        battle_stash_add(iu.inv_5f);
+                        iu.inv_5f = ev.item_id;
+                        msg = name + kBagKeep;
+                    }
+                }
+                if (!msg.empty()) battle_unit_message(ui, msg);                 // sub_482A5
+            }
+            if (should_exit_ || skip_cutscene_) return;
+            break;
+        }
         case VmEventType::UnitEffect:
             play_unit_effect(ev);                      // sub_51FF7
             if (should_exit_ || skip_cutscene_) return;
