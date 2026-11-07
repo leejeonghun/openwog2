@@ -73,7 +73,7 @@ std::string CombatII::cstldata_path(const char* filename) {
     return file_find_case_insensitive(std::string(GAME_DATA_DIR) + "/CSTLDATA", filename);
 }
 
-std::string CombatII::characte_path(const char* filename) {
+std::string CombatII::characte_path(const char* filename) const {
     return file_find_case_insensitive(std::string(GAME_DATA_DIR) + "/CHARACTE", filename);
 }
 

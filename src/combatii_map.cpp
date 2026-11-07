@@ -22,7 +22,7 @@ static std::string dos83_fallback_name(const char* fname) {
 // ---- sub_11575 / sub_1198D: open a character image file by unit type code ----
 //   sub_1198D(type) -> sub_114EF finds the slot; if it is missing, sub_11575(type, slot)
 //   loads `CHARACTE\<off_70024[type]>`. The port loads each type code only once.
-const NC2Frame* CombatII::nc2_frame_for(int type_code, int dir, int pose) {
+const NC2Frame* CombatII::nc2_frame_for(int type_code, int dir, int pose) const {
     if (type_code < 0) return nullptr;
     if (DevUtil::nc2_off()) return nullptr;  // A/B check: force the CITIZEN fallback without NC2
     auto it = nc2_chars_.find(type_code);
@@ -77,7 +77,7 @@ const NC2Frame* CombatII::nc2_frame_for(int type_code, int dir, int pose) {
 // ---- D66A8 raw table (equivalent to the sub_11575 loader) ----
 // entry[0]/[1] = NC2Frame tile_w/h, [2]/[3] = w/h, [4]/[5] = x/y offsets,
 // [6] = shadow, [7]/[8] = sil; [9..12] are sprite pointers and stay zero.
-bool CombatII::battle_d66a8_raw(int type_code, int dir, int pose, uint8_t out13[13]) {
+bool CombatII::battle_d66a8_raw(int type_code, int dir, int pose, uint8_t out13[13]) const {
     const NC2Frame* fr = nc2_frame_for(type_code, dir & 3, pose);
     if (!fr || fr->w <= 0 || fr->h <= 0) return false;
     for (int i = 0; i < 13; i++) out13[i] = 0;
@@ -93,7 +93,7 @@ bool CombatII::battle_d66a8_raw(int type_code, int dir, int pose, uint8_t out13[
     return true;
 }
 
-bool CombatII::battle_d66a8_footprint(int type_code, int dir, int* w, int* h) {
+bool CombatII::battle_d66a8_footprint(int type_code, int dir, int* w, int* h) const {
     uint8_t raw[13];
     if (battle_d66a8_raw(type_code, dir & 3, 0, raw)) {
         if (w) *w = raw[0] ? raw[0] : 1;
