@@ -51,7 +51,7 @@
 //   6104A/6106C/103A0/11EE4/11E04 are palette-LUT and slot-occupancy details, omitted as
 //   in the other bodies.
 //
-// Curtain engine: 39620 (facing 1), 38FF7 (3), 3930E (2), 38CF8 (0) are ported with the
+// Curtain engine: 39620 (facing 1), 38FF7 (3), 38CF8 (2), 3930E (0) are ported with the
 // original float maths. Mode 2 runs 389EA (x += cos[angle], y += sin[angle], 38780 trail,
 // 38B82 shift) then the per-engine gate; mode 1 runs the per-engine init + segment loop
 // (38780/38B82) and target test; mode 0 runs 38BC6. The 50-slot state mirrors var_B0,
@@ -373,8 +373,11 @@ int CombatII::battle_fx_39a49_anim(int unit_index) {
         if (++s.c2 > 5) { s.c2 = 0; if (s.step < 0x0A) ++s.step; }
     };
 
-    // Per-engine mode 2 gate (after 389EA). 39620: angle < target, else angle -= step.
-    // 38FF7: strict target+-5, else angle += step with 168h wrap. 3930E/38CF8: inclusive.
+    // Per-engine mode 2 gate (after 389EA). 39620 (facing 1): angle < target, else
+    // angle -= step (no wrap). 38FF7 (facing 3): strict target+-5, else angle += step
+    // with 168h wrap (loc_390A2). 3930E (facing 0): inclusive, angle += step with
+    // 168h wrap (loc_393B9). 38CF8 (facing 2): inclusive, angle += step without wrap
+    // (loc_38DA1 has no 168h check).
     auto wait_gate = [&](RainSlot& s) {
         bool start;
         if (facing == 1) {
@@ -387,7 +390,7 @@ int CombatII::battle_fx_39a49_anim(int unit_index) {
                 start = s.angle >= s.gate_target - 5 && s.angle <= s.gate_target + 5;
             if (!start) {
                 s.angle += s.step;
-                if (s.angle >= 0x168) s.angle -= 0x168;
+                if (facing == 0 && s.angle >= 0x168) s.angle -= 0x168;
             }
         }
         if (start) { s.mode = 1; sfx(0x33); }
@@ -395,12 +398,15 @@ int CombatII::battle_fx_39a49_anim(int unit_index) {
 
     // Mode 1 init + segment loop + target test. d24 = ty - y, d20 = x - tx; the four
     // engines differ in the branch test, the step axis/sign and the target axis.
+    // 39620 (facing 1) and 3930E (facing 0) share the y+=1/x-=velA step; 38CF8
+    // (facing 2, loc_3A2C6) uses y-=1/x+=velA with (tx-x)<1 end; 3930E (facing 0,
+    // loc_3A59E) uses y+=1/x-=velA with (x-tx)<1 end; 38FF7 (facing 3) negates d20.
     auto fall_step = [&](RainSlot& s) {
         if (s.velA == 0.0f && s.velB == 0.0f) {
             const float d24 = (float)s.ty - s.y;
             const float d20 = s.x - (float)s.tx;
             const float n = (facing == 3) ? -d20 : d20;
-            const bool useB = (facing == 0) ? (d20 < d24) : (n > d24);
+            const bool useB = (facing == 2) ? (d20 < d24) : (n > d24);
             if (useB) {
                 s.seg = combat_rand(3) + 9;
                 s.velB = d24 / n;
@@ -412,11 +418,11 @@ int CombatII::battle_fx_39a49_anim(int unit_index) {
         for (int k = 0; k < s.seg; ++k) {
             if (s.velA != 0.0f) {
                 if (facing == 3)      { s.y += 1.0f; s.x += s.velA; }
-                else if (facing == 0) { s.y -= 1.0f; s.x += s.velA; }
+                else if (facing == 2) { s.y -= 1.0f; s.x += s.velA; }
                 else                  { s.y += 1.0f; s.x -= s.velA; }
             } else {
                 if (facing == 3)      { s.x += 1.0f; s.y += s.velB; }
-                else if (facing == 0) { s.x += 1.0f; s.y -= s.velB; }
+                else if (facing == 2) { s.x += 1.0f; s.y -= s.velB; }
                 else                  { s.x -= 1.0f; s.y += s.velB; }
             }
             plot_point(s, k);
@@ -425,7 +431,7 @@ int CombatII::battle_fx_39a49_anim(int unit_index) {
         const float tx = (float)s.tx, ty = (float)s.ty;
         bool dead;
         if (facing == 1 || facing == 3) dead = (ty - s.y) < 1.0f;
-        else if (facing == 2)           dead = (s.x - tx) < 1.0f;
+        else if (facing == 0)           dead = (s.x - tx) < 1.0f;
         else                            dead = (tx - s.x) < 1.0f;
         if (dead) { s.mode = 0; s.death = 0x0A; s.c1 = 0; sfx(0x34); }
     };

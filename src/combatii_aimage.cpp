@@ -1110,11 +1110,16 @@ bool CombatII::battle_ai_3e251_dest(int unit_index, int& out_x, int& out_y, int&
 
 // ---- sub_3D7B2 ----
 // Candidate destinations around a hostile, scored by sub_49ADF (manhattan distance from
-// the actor). The wc<=3 arm walks the sub_1A452 facing strip and applies sub_16699; the
-// wc6..0x13 arms scan the sub_1A452 band / sub_1AC08 diamond and require an empty cell
-// through sub_11DB2. wc 4 uses loc_3D976's single sub_16699 candidate per facing; wc 0xB/0xC
-// use the sub_1A7BA mode-3 distance band; wc 5 uses the WC5 1CB53/1C685 distance chain
-// when the caller supplies its E8 diffusion, and the adjacent fallback otherwise.
+// the actor). Dispatch (dasm 60799..60828): wc<=3 walks the sub_1A452 facing strip
+// (loc_3D8B4) and applies sub_16699 with the candidate facing; wc 4 uses loc_3D976's
+// single sub_16699 candidate per facing; wc 5 uses the WC5 1CB53/1C685 distance chain
+// when the caller supplies its E8 diffusion (loc_3D9D7), and the adjacent fallback
+// otherwise; wc 6..9 and 0xD/0xE scan the sub_1A452 band (loc_3DB17) through
+// sub_16699 (loc_3DB6B); wc 0xA (cmp dl,0Bh; jb loc_3DAA2) and wc>0x13 have no
+// candidate; wc 0xB/0xC use the sub_1A7BA mode-3 distance band (loc_3DBDA);
+// wc 0xF uses the sub_1AC08 diamond through sub_11DB2 (loc_3DC49); wc 0x10 uses a
+// radius-3 diamond through sub_11DB2 (loc_3DCD8); wc 0x11..0x13 scan their bands
+// through sub_11DB2 (loc_3DD58/3DDFC/3DEAF).
 int CombatII::battle_ai_3d7b2_dest(int unit_index, int hx, int hy, int& out_x,
                                    int& out_y, const std::vector<int>* e8) const {
     out_x = out_y = -1;
@@ -1177,8 +1182,8 @@ int CombatII::battle_ai_3d7b2_dest(int unit_index, int hx, int hy, int& out_x,
             int x = hx + kStepX[f], y = hy + kStepY[f];
             for (int k = 0; k < rng; ++k) {
                 if (!battle_ai_terrain_bucket_compatible(hx, hy, x, y)) break;  // 1A2FE
-                if (battle_ai_candidate_tile_legal_1x1(x, y, unit_index, mobility))
-                    consider(x, y);  // 16699
+                if (battle_ai_candidate_tile_legal_1x1(x, y, unit_index, mobility, f))
+                    consider(x, y);  // 16699 (candidate facing f)
                 x += kStepX[f]; y += kStepY[f];
             }
         }
@@ -1186,7 +1191,7 @@ int CombatII::battle_ai_3d7b2_dest(int unit_index, int hx, int hy, int& out_x,
         // loc_3D976: one candidate per facing, gated only by sub_16699 (no 1A2FE bucket).
         for (int f = 0; f < 4; ++f) {
             const int x = hx + kStepX[f], y = hy + kStepY[f];
-            if (battle_ai_candidate_tile_legal_1x1(x, y, unit_index, mobility))
+            if (battle_ai_candidate_tile_legal_1x1(x, y, unit_index, mobility, f))
                 consider(x, y);
         }
     } else if (wc == 5) {
@@ -1195,12 +1200,12 @@ int CombatII::battle_ai_3d7b2_dest(int unit_index, int hx, int hy, int& out_x,
         for (int f = 0; f < 4; ++f) {
             const int x = hx + kStepX[f], y = hy + kStepY[f];
             if (battle_ai_terrain_bucket_compatible(hx, hy, x, y) &&
-                battle_ai_candidate_tile_legal_1x1(x, y, unit_index, mobility))
+                battle_ai_candidate_tile_legal_1x1(x, y, unit_index, mobility, f))
                 consider(x, y);
         }
     } else if (wc == 0x10) {
         diamond_scan(hx, hy, 3, 0, false);  // loc_3DCD8: single radius-3 diamond
-    } else if (wc >= 6 && wc <= 0x13) {
+    } else if (wc >= 6 && wc <= 0x13 && wc != 0xA) {  // wc 0xA: jb loc_3DAA2, no candidate
         const int rng = (wc == 8 || wc == 0xD) ? 3 : 2;  // loc_3DB17
         for (int f = 0; f < 4; ++f) {
             int cx0 = hx + kStepX[f], cy0 = hy + kStepY[f];
@@ -1228,10 +1233,19 @@ int CombatII::battle_ai_3d7b2_dest(int unit_index, int hx, int hy, int& out_x,
                 if (f == 0) cx0 -= 1;
                 else if (f == 3) cy0 += 1;
             }
+            // loc_3DB6B (wc 6..9, 0xD, 0xE): sub_16699 with the candidate facing.
+            // loc_3DD58/3DDFC/3DEAF (wc 0x11..0x13): sub_11DB2 only (consider).
+            const bool use_16699 =
+                (wc >= 6 && wc <= 9) || wc == 0xD || wc == 0xE;
             AiBandIter it;
             ai_band_init(it, cx0, cy0, f, cxn, scan_rng);
             int x, y;
-            while (ai_band_next(it, x, y)) consider(x, y);
+            while (ai_band_next(it, x, y)) {
+                if (use_16699 &&
+                    !battle_ai_candidate_tile_legal_1x1(x, y, unit_index, mobility, f))
+                    continue;
+                consider(x, y);
+            }
         }
     }
     if (bx < 0) return 0x7FFF;

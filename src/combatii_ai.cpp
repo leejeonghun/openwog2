@@ -140,16 +140,18 @@ int CombatII::battle_ai_mobility_selector(const CombatUnitPlacement& u) const {
 // The original walks the unk_D66A8 descriptor footprint against CC998 occupancy
 // and unk_88BD4 attr -> dword_EDD6C (unk_70B0D grid) cost. The base tile is the
 // bottom-left cell: (x..x+w-1, y-h+1..y), where w/h are entry[0]/[1] of
-// the D66A8 record for the actor's appearance and current facing. Every cell
+// the D66A8 record for the actor's appearance and the supplied facing (the
+// candidate direction in sub_3D7B2, otherwise the actor's current facing). Every cell
 // must pass the padded bounds, signed cost>0 and self-excluding occupancy tests.
 bool CombatII::battle_ai_candidate_tile_legal_1x1(int x, int y, int unit_index,
-                                                  int mobility_selector) const {
+                                                  int mobility_selector, int facing) const {
     if (mobility_selector < 0 || mobility_selector >= kMobilityGridCount) return false;
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return false;
     if (map_w_ == 0 || map_h_ == 0 || tile_attr_.empty()) return false;
     int foot_w = 1, foot_h = 1;
     const auto& actor = units_[(size_t)unit_index];
-    battle_d66a8_footprint(actor.sprite_type, (int)actor.facing & 3, &foot_w, &foot_h);
+    const int dir = (facing >= 0) ? (facing & 3) : ((int)actor.facing & 3);
+    battle_d66a8_footprint(actor.sprite_type, dir, &foot_w, &foot_h);
     if (foot_w < 1) foot_w = 1;
     if (foot_h < 1) foot_h = 1;
     for (int dy = 0; dy < foot_h; dy++) {
@@ -1377,7 +1379,7 @@ void CombatII::battle_ai_wc5_1c685(std::vector<int>& grid, Wc5Iter& it,
             const int dist = std::abs(ax - x) + std::abs(ay - y);
             if (dist >= wc5_s16(st.b84s)) continue;
             const int mobility = battle_ai_mobility_selector(actor);
-            if (!battle_ai_candidate_tile_legal_1x1(x, y, unit_index, mobility)) continue;
+            if (!battle_ai_candidate_tile_legal_1x1(x, y, unit_index, mobility, f)) continue;
             st.b84x = wc5_s16(x);
             st.b84s = wc5_s16(dist);
             st.b82 = wc5_s16(y);
@@ -2194,7 +2196,7 @@ int CombatII::battle_ai_1a7ba_distance(int unit_index, int x0, int y0, int d, in
             else { if (cy != slotB) continue; }
             const int dist = std::abs(ax - cx) + std::abs(ay - cy);
             if (dist >= chain) continue;  // strict minimum
-            if (!battle_ai_candidate_tile_legal_1x1(cx, cy, unit_index, mobility)) continue;
+            if (!battle_ai_candidate_tile_legal_1x1(cx, cy, unit_index, mobility, d)) continue;
             bx = cx; by = cy; chain = dist;
         }
         if (d == 0)      { x1 += 1; slotA = x1; }

@@ -1172,7 +1172,11 @@ private:
     // Footprint-aware sub_16699 check (name kept for compatibility): every D66A8 cell must be
     // in bounds, free in CC998 (excluding self), and have a positive unk_70B0D terrain cost.
     // The flying-bit gate and the full original descriptor remain outside this helper.
-    bool battle_ai_candidate_tile_legal_1x1(int x, int y, int unit_index, int mobility_selector) const;
+    // facing is sub_16699's third argument (the candidate direction from sub_3D7B2's
+    // loop, not the actor's current facing); -1 keeps the actor facing for callers
+    // outside sub_3D7B2. Only large units differ.
+    bool battle_ai_candidate_tile_legal_1x1(int x, int y, int unit_index, int mobility_selector,
+                                            int facing = -1) const;
     // Diagnostic for the home-referenced path of sub_3E251 only (radius-9 diamond, sub_1AC08/1AC59/
     // 1AD2E plus sub_49ADF scoring). With no [+73h] target and no [+71h] watch it picks a legal
     // candidate around home and synthesizes no movement. On true, out_* holds the best candidate
