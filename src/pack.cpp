@@ -48,6 +48,70 @@ std::string Pack::characte_path(const char* filename) {
     return file_find_case_insensitive(std::string(GAME_DATA_DIR) + "/CHARACTE", filename);
 }
 
+// sub_394D1: PLAY a loaded VOC. The caller passes volume = byte_82732 * 10 and the gate
+// on dword_1B61D4 == 1 (driver ready) plus id < 0x50. The port has no driver-ready flag,
+// but byte_82732 == 0 (sound off) always skips, matching the callers' explicit volume.
+// PACK.EXE only embeds menu.VOC (id 1) and sell.VOC (id 2) via sub_18BC5; EVE op29
+// loads its own file into slot 10 through sub_39431/sub_394D1.
+void Pack::play_pack_voc_path(const std::string& path) {
+    if (game_cfg_[2] == 0) return;
+    Audio::play_voc(path, (int)game_cfg_[2] * 10);
+}
+
+void Pack::play_pack_sfx(int id) {
+    if (id == 1) play_pack_voc_path(game_path("menu.voc"));
+    else if (id == 2) play_pack_voc_path(game_path("sell.voc"));
+}
+
+// ---- sub_19571: town BGM track (main entry) ----
+// Towns 1, 7, 9, 12, 18 (0x12), 19 (0x13) -> 0x0E; towns 10, 11, 29, 30, 32 ->
+// 0x0F; all others -> 0x10. byte_15BA23 is the town id.
+void Pack::bgm_init_town() {
+    const int t = town_id_ & 0xFF;
+    if (t == 1 || t == 7 || t == 9 || t == 12 || t == 0x12 || t == 0x13) bgm_town_track_ = 0x0E;
+    else if (t == 10 || t == 11 || t == 29 || t == 30 || t == 32) bgm_town_track_ = 0x0F;
+    else bgm_town_track_ = 0x10;
+}
+
+// ---- sub_39E5E(track, loop): select a CD track ----
+// The original returns immediately when dword_1B62F0 == 0 (CD not initialised).
+// The port has no CD, so it only records the selection; gating on byte_82731
+// (music on) stays with the callers, as in the original.
+void Pack::bgm_play_track(int track) {
+    if (!bgm_ready_) return;
+    bgm_current_track_ = track;
+    fprintf(stderr, "PACK: BGM track 0x%X (state-only, CD audio not available)\n", track);
+}
+
+// ---- sub_399AC: audio tick ----
+// Called every 60 town iterations (sub_19528) and every 60 EVE frames (sub_13B8D).
+// With no CD the tick is a no-op; the original restarts the current track on completion.
+void Pack::bgm_tick() {
+}
+
+// ---- sub_2D3B8: event BGM table (off_2D2E8, 52 cases) ----
+// eid - 0x10F indexes the jump table; out-of-range eids use the default 0x0B.
+// The table below is decoded from PACK_code.ASM 37115..37203 (label -> track):
+// loc_2D3DC=0x0D, loc_2D3EB=0x02, loc_2D3FA=0x14, loc_2D409=0x0B,
+// loc_2D418=0x09, loc_2D427=0x09, loc_2D436=0x11, loc_2D442=0x10,
+// loc_2D44E=0x11, loc_2D455=0x14, loc_2D45C=0x0E, loc_2D468=0x10,
+// loc_2D46F=0x08, loc_2D476=0x02, loc_2D47D=0x0D, loc_2D484=0x03,
+// loc_2D48B=0x07, loc_2D492=0x0B (default).
+int Pack::bgm_track_for_event(int event_id) const {
+    static const int kTable[52] = {
+        13, 2, 2, 9, 17, 17, 2, 2,
+        17, 13, 17, 17, 16, 2, 2, 14,
+        14, 20, 11, 11, 20, 14, 9, 20,
+        11, 11, 17, 16, 16, 20, 9, 16,
+        9, 9, 9, 8, 2, 13, 9, 2,
+        13, 8, 9, 3, 20, 9, 8, 20,
+        9, 2, 8, 7,
+    };
+    const int sw = event_id - 0x10F;
+    if (sw < 0 || sw >= 52) return 0x0B;
+    return kTable[sw];
+}
+
 // ---- off_53460: EVE actor sprite filename table ----
 // Flattened form of the 222-entry `dd offset aXXX_nc2` pointer array in dseg02. The last
 // word of an op13 record indexes this table, and the NC2 is loaded from
@@ -464,6 +528,11 @@ void Pack::init_player_sprite_base() {
 // cam_tile_y_ from (portal_y - 1) - 5, but portal_y - 1 is the value before the +2
 // correction and the final player_tile_y_ is portal_y + 1, so relative to the player it
 // is -7. 0x21E29 handles cam_fine overflow (fine >= 24 -> tile++, < 0 -> tile--).
+// Deviation (C4): the original integrates dword_15BA1A velocity in sub_21E29, so the
+// camera eases toward the target. This stateless formula lands on the same steady-state
+// position; only the frame-by-frame easing differs. The occupancy half of C4 is fixed
+// (0xFF at step start); the camera easing is left as-is because a velocity rewrite
+// risks the steady state and needs runtime verification.
 void Pack::update_camera() {
     int player_world_x = player_tile_x_ * TOWN_TILE_W + player_fine_x_;
     int player_world_y = player_tile_y_ * TOWN_TILE_H + player_fine_y_;
@@ -967,9 +1036,12 @@ bool Pack::load_town_and_tec(int town_id) {
         }
         cam_ref_y = (int16_t)(saved_tile_y_[town_id] + 2); // minus 7 below gives saved_y - 5
     } else {
-        player_tile_x_ = (int16_t)(map_w_ / 2);
-        player_tile_y_ = (int16_t)(map_h_ / 2);
-        cam_ref_y = player_tile_y_;
+        // sub_24017 loc_241EB: with no 0xFF cell the original keeps the BSS defaults
+        // word_15B5B8 = 0 / word_15B7B4 = 0, so the spawn is (0, 1) rather than the map
+        // centre. Normal towns always have a portal, so this only covers corrupt data.
+        player_tile_x_ = 0;
+        player_tile_y_ = 1; // 0 (portal_y) + 1
+        cam_ref_y = 1;
 
         for (uint32_t y = 0; y < map_h_; y++) {
             for (uint32_t x = 0; x < map_w_; x++) {
@@ -1449,7 +1521,17 @@ bool Pack::try_corner_slide(uint8_t blocked_dir, uint8_t& out_dir) const {
 // boundary ("test bh,bh (byte_544CE); jbe loc_1DA1C"). No movement test happens while the
 // left button is up (dword_7CF20 != 1) or while an NPC is hovered (sub_1F6E4).
 void Pack::decide_step_direction() {
-    if (!input_.is_left_button()) {
+    // sub_1D12F loc_1DA1C..loc_1DFC3: at step start (byte_544CE == 0) the direction is
+    // chosen by the keyboard-or-mouse OR chain in the order Left, Right, Up, Down:
+    //   left:  (dword_1A0220 != 0) || (sub_2E1A4 == 0x4B)
+    //   right: (dword_1A0228 != 0) || (sub_2E1A4 == 0x4D)
+    //   up:    (dword_1A0214 != 0) || (sub_2E1A4 == 0x48)
+    //   down:  (dword_1A0234 != 0) || (sub_2E1A4 == 0x50)
+    // The scancode indices are (addr - 0x1A00F4)/4: 0x4B=75, 0x4D=77, 0x48=72, 0x50=80.
+    // dword_7CF20 != 1 (left button not held) and the NPC-hover case (edx = 0) skip the
+    // whole test, as before.
+    const bool left_held = input_.is_left_button() && !input_.is_right_button();
+    if (!left_held) {
         is_player_moving_ = false;
         return;
     }
@@ -1463,25 +1545,42 @@ void Pack::decide_step_direction() {
         return;
     }
 
-    uint8_t dir = compute_mouse_move_direction(input_.get_mouse_x(), input_.get_mouse_y());
-    if (dir == 0) {
-        is_player_moving_ = false;
-        return;
-    }
+    const uint8_t mouse_dir = compute_mouse_move_direction(input_.get_mouse_x(), input_.get_mouse_y());
+    const bool kLeft  = input_.is_key_held(SDLK_LEFT);
+    const bool kRight = input_.is_key_held(SDLK_RIGHT);
+    const bool kUp    = input_.is_key_held(SDLK_UP);
+    const bool kDown  = input_.is_key_held(SDLK_DOWN);
 
-    if (!is_move_blocked(player_tile_x_, player_tile_y_, dir)) {
-        player_dir_ = dir;
-        is_player_moving_ = true;
-        return;
-    }
+    // Each branch: if the direction is passable, step it; else if the key is held, commit
+    // the direction only (loc_1DAC0/loc_1DC1D/...: ebp = dir with no slide, then the
+    // loc_1E086.. blocked path turns the player in place); else try the corner slide.
+    auto try_dir = [&](uint8_t dir, bool key_held) -> bool {
+        if (!is_move_blocked(player_tile_x_, player_tile_y_, dir)) {
+            player_dir_ = dir;
+            is_player_moving_ = true;
+            return true;
+        }
+        if (key_held) {
+            player_dir_ = dir;
+            is_player_moving_ = false;
+            return true;
+        }
+        uint8_t slide_dir = 0;
+        if (try_corner_slide(dir, slide_dir)) {
+            player_dir_ = slide_dir;
+            is_player_moving_ = true;
+        } else {
+            is_player_moving_ = false;
+        }
+        return true;
+    };
 
-    uint8_t slide_dir;
-    if (try_corner_slide(dir, slide_dir)) {
-        player_dir_ = slide_dir;
-        is_player_moving_ = true;
-    } else {
-        is_player_moving_ = false;
-    }
+    if (kLeft || mouse_dir == 0x4B) { try_dir(0x4B, kLeft); return; }
+    if (kRight || mouse_dir == 0x4D) { try_dir(0x4D, kRight); return; }
+    if (kUp || mouse_dir == 0x48) { try_dir(0x48, kUp); return; }
+    if (kDown || mouse_dir == 0x50) { try_dir(0x50, kDown); return; }
+
+    is_player_moving_ = false;
 }
 
 // ---- sub_2B5C0: fast 24x16 base tile copy ----
@@ -1630,13 +1729,19 @@ void Pack::town_click_interaction() {
 }
 
 // ---- sub_1A7B5 (item) and sub_1A8F3 (building): action key on the facing tile ----
-// When the action key (dword_1A0168) is pressed and the latch is clear, test the tile the
-// player faces. Base tile = (player screen x / 24 + cam_x, player screen y >> 4 + cam_y),
+// When the action key (dword_1A0168, scancode 0x1D = Left Ctrl level) is held and the
+// latch is clear, test the tile the player faces (sub_190A3 loc_19144/loc_19157).
+// Base tile = (player screen x / 24 + cam_x, player screen y >> 4 + cam_y),
 // where screen y already includes -16. Directions 0x48 up, 0x50 down, 0x4B left and 0x4D
 // right offset one tile; any other direction uses the base tile itself.
+// Enter/Space edges are kept as extra aliases (not in the original) for manual testing;
+// the original is Ctrl level only.
 void Pack::town_key_interaction() {
     if (click_latch_) return;
-    if (!(input_.is_key_pressed(SDLK_RETURN) || input_.is_key_pressed(SDLK_SPACE))) return;
+    const bool action = input_.is_key_held(SDLK_LCTRL) ||
+                        input_.is_key_pressed(SDLK_RETURN) ||
+                        input_.is_key_pressed(SDLK_SPACE);
+    if (!action) return;
     const int px = (player_tile_x_ - cam_tile_x_) * TOWN_TILE_W + player_fine_x_ - cam_fine_x_ + 5;
     const int py = (player_tile_y_ - cam_tile_y_) * TOWN_TILE_H + player_fine_y_ - cam_fine_y_ - TOWN_TILE_H;
     int tx = px / TOWN_TILE_W + cam_tile_x_;
@@ -1652,12 +1757,15 @@ void Pack::town_key_interaction() {
         handle_building_buy(layer_building_[idx]);
 }
 
-// ---- sub_3197D: wait until the mouse button is released ----
+// ---- sub_3197D: wait until the action input is released ----
+// The original loops while dword_7CF20 == 1 (left-only) or dword_1A0168 != 0 (Left Ctrl
+// level), so both-pressed (3) counts as released. Ctrl is the left-click substitute.
 void Pack::wait_buttons_released() {
     while (true) {
         input_.update();
         if (input_.quit_requested()) return;
-        if (!input_.is_left_button()) return;
+        const bool left_only = input_.is_left_button() && !input_.is_right_button();
+        if (!left_only && !input_.is_key_held(SDLK_LCTRL)) return;
         GameTimer::delay_with_pump(input_, 16);
     }
 }
@@ -1682,6 +1790,9 @@ void Pack::render_dim_band(int y0, int y1) {
 // Dim band y 0x55..0x72 (sub_18899(0, 0x73, 0x13F, 0x55)), then the item icon (item.spr
 // frame id) at (0x96 - len*6 + x_off, 0x7D + y_off) and the "<name> acquired" text at
 // (0xB4 - len*6, 0x5F), then wait for a new click or key (len = name length in bytes).
+// The icon uses the sub_18B2A-corrected frame: w/h include +0x10 on height, x_off +0x0C,
+// y_off = -new_h, foot = 0 (loc_18B41). The popup therefore draws at
+// (0x96 - len*6 + x_off + 0x0C, 0x7D - (h + 0x10)).
 void Pack::show_item_acquired(int item0, const char* name, bool redraw_scene) {
     if (redraw_scene) {
         video_.clear();
@@ -1693,21 +1804,29 @@ void Pack::show_item_acquired(int item0, const char* name, bool redraw_scene) {
     const int len = (int)strlen(name);
     if (item0 >= 0 && item0 < (int)item_sprites_.size()) {
         const auto& sp = item_sprites_[item0];
-        if (!sp.data.empty())
-            blit_sprite_rle(0x96 - len * 6 + sp.x_offset, 0x7D + sp.y_offset, sp.data.data());
+        if (!sp.data.empty()) {
+            const int icon_x = 0x96 - len * 6 + sp.x_offset + 0x0C;
+            const int icon_y = 0x7D - (sp.height + 0x10);
+            blit_sprite_rle(icon_x, icon_y, sp.data.data());
+        }
     }
     std::string msg = std::string(name) + kPackMsgItemGot;
     font_.set_text_mode(4, 0x1000, 0xFF);
     font_.draw_string(backbuf, SCREEN_W, SCREEN_H, 0xB4 - len * 6, 0x5F, msg.c_str());
     video_.present();
 
-    // loc_1B281: only accept input after the opening click (byte_15BA22 latch) is released.
+    // loc_1B281: the release-then-press latch (byte_15BA22) with the action input
+    // dword_1A0168 (Left Ctrl level) or dword_7CF20 == 1 (left-only). The original does
+    // not accept ESC here; Enter/Space edges are kept as extra aliases (not in the
+    // original) for manual testing.
     wait_buttons_released();
     while (true) {
         input_.update();
         if (input_.quit_requested()) return;
-        if (input_.was_left_clicked() || input_.is_key_pressed(SDLK_RETURN) ||
-            input_.is_key_pressed(SDLK_SPACE) || input_.is_key_pressed(SDLK_ESCAPE)) break;
+        const bool left_only = input_.is_left_button() && !input_.is_right_button();
+        if (left_only || input_.is_key_held(SDLK_LCTRL) ||
+            input_.is_key_pressed(SDLK_RETURN) ||
+            input_.is_key_pressed(SDLK_SPACE)) break;
         GameTimer::delay_with_pump(input_, 16);
     }
 }
@@ -2743,6 +2862,23 @@ void Pack::update_player_movement() {
         decide_step_direction();
         if (!is_player_moving_) return;
 
+        // loc_1DFE1: at step start the previous occupancy (dword_F30BA/F30BE) is cleared
+        // and the destination tile is marked 0xFF, before the first pixel moves. NPCs then
+        // see the destination as blocked for the whole step. dword_F3369 (sub_1EBC2) is
+        // the separate one-cell reservation; the port's layer check already covers it.
+        if (layer_npc_) {
+            const int prev_idx = player_tile_y_ * (int)map_w_ + player_tile_x_;
+            if (prev_idx >= 0 && prev_idx < (int)tile_count_)
+                layer_npc_[prev_idx] = 0;
+            int nx = player_tile_x_, ny = player_tile_y_;
+            if (player_dir_ == 0x48) ny -= 1;
+            else if (player_dir_ == 0x50) ny += 1;
+            else if (player_dir_ == 0x4B) nx -= 1;
+            else if (player_dir_ == 0x4D) nx += 1;
+            if (nx >= 0 && nx < (int)map_w_ && ny >= 0 && ny < (int)map_h_)
+                layer_npc_[ny * (int)map_w_ + nx] = 0xFF;
+        }
+
         // loc_1DA1C..loc_1E463: the first frame of a new tile is the commit frame. It only
         // sets byte_544CE (player_move_step_) to 1 and returns with no pixel delta, jumping
         // straight to loc_1E463; movement starts on the next frame. A tile therefore takes
@@ -2803,19 +2939,10 @@ void Pack::update_player_movement() {
         player_tile_y_--;
     }
 
-    // sub_1EBC2 clears the old tile's occupancy (layer_npc_[prev] = 0) and marks the new one
-    // (layer_npc_[curr] = 1) on every boundary crossing, which keeps NPC collision in step.
-    bool crossed_tile = (prev_tile_x != player_tile_x_ || prev_tile_y != player_tile_y_);
-    if (crossed_tile && layer_npc_) {
-        int prev_idx = prev_tile_y * (int)map_w_ + prev_tile_x;
-        int curr_idx = player_tile_y_ * (int)map_w_ + player_tile_x_;
-        if (prev_idx >= 0 && prev_idx < (int)tile_count_ && layer_npc_[prev_idx] == 1) {
-            layer_npc_[prev_idx] = 0;
-        }
-        if (curr_idx >= 0 && curr_idx < (int)tile_count_) {
-            layer_npc_[curr_idx] = 1;
-        }
-    }
+    // Occupancy was already updated at step start (loc_1DFE1, 0xFF); the crossing
+    // itself only needs the event check below. This keeps the destination blocked for
+    // the whole step instead of only from the boundary onward.
+    const bool crossed_tile = (prev_tile_x != player_tile_x_ || prev_tile_y != player_tile_y_);
 
     // sub_1A785 + sub_20EB0: right after sub_1EBC2 every direction handler (loc_1D2C3,
     // loc_1D487, loc_1D642, loc_1D82E, fast and slow) calls sub_1A785 then sub_20EB0.
@@ -3085,10 +3212,21 @@ void Pack::check_town_events() {
 
 // ---- sub_2D038 (PACK_code.ASM 36886..37114) ----
 // unk_7FF9C[town*40 + idx] = g_event_flags[10000 + town*40 + idx]: the fired-event table.
+// The original indexes the array unconditionally (dl = 5*town, heat at +idx*8), so towns
+// whose slot falls past the 0x4E20 save region still fire once and then overwrite the
+// adjacent byte. The port keeps that one-shot behaviour with a non-persistent overflow
+// array instead of suppressing the firing outright.
 uint8_t& Pack::fired_flag(int town, int idx) {
-    static uint8_t dummy;
+    static uint8_t dummy = 1;
+    if (town < 0 || idx < 0 || idx >= 40) { dummy = 1; return dummy; }
     const int p = 10000 + town * 40 + idx;
-    if (town < 0 || idx < 0 || idx >= 40 || p >= 20000) { dummy = 1; return dummy; }
+    if (p >= 20000) {
+        static uint8_t overflow[256 * 40] = {};
+        const int o = town * 40 + idx;
+        if (o >= 0 && o < (int)sizeof(overflow)) return overflow[o];
+        dummy = 1;
+        return dummy;
+    }
     return g_event_flags[p];
 }
 
@@ -3205,20 +3343,24 @@ bool Pack::check_and_fire_town_events(uint32_t npc_trigger, bool is_entry) {
             }
             for (int pi = 0; pi < 256; pi++)
                 palette_set_entry((uint8_t)pi, pre_pal[pi][0], pre_pal[pi][1], pre_pal[pi][2]);
-            // sub_2D3B8(evid): BGM mapping. The original switches on evid - 0x10F and calls
-            // sub_39E5E; the port logs the parameter and plays nothing (no audio wiring).
-            {
-                int evid = e.event_id;
-                int sw = evid - 0x10F;
-                int bgm_param = 0x0B;
-                if (sw == 0) bgm_param = 0x0D;
-                else if (sw == 1 || sw == 2) bgm_param = 0x02;
-                fprintf(stderr, "PACK: sub_2D3B8 eid=%d -> bgm_param=0x%X (stub, no audio)\n", evid, bgm_param);
+            // sub_2D3B8(evid): event BGM (52-case table, gated on byte_82731).
+            if (game_cfg_[1] != 0) {
+                const int track = bgm_track_for_event((int)e.event_id);
+                fprintf(stderr, "PACK: sub_2D3B8 eid=%u -> track=0x%X\n", e.event_id, track);
+                bgm_play_track(track);
             }
             // sub_13B8D(evid): run the EVE script.
             if (!run_eve_script(e.event_id)) {
                 fprintf(stderr, "PACK: warning: run_eve_script(%u) failed or missing, continue\n", e.event_id);
             }
+            // loc_2D28F fade tail, BGM restore and byte_54041: the original fades again
+            // after the cutscene, restores the town track when byte_82731 == 1 and sets
+            // byte_54041 = 1 (palette reapply on the next sub_190A3 tail). The port's EVE
+            // loop already restores the palette via sub_20118 on the first frame, so the
+            // extra fade is net-zero within one town; the track restore and the flag are
+            // kept for parity.
+            if (game_cfg_[1] == 1) bgm_play_track(bgm_town_track_);
+            palette_reapply_pending_ = true;
             // loc_2D2D1: the loop continues after firing (inc edi), so one call can fire
             // several events.
             fired_any = true;
@@ -3288,6 +3430,7 @@ bool Pack::load_eve_file(int event_id, EveFile& out) {
 
 void Pack::eve_clear_actors() {
     for (int i = 0; i < MAX_EVE_ACTORS; i++) eve_actors_[i] = EveActorState();
+    for (int i = 0; i < 320; i++) eve_slots_[i] = EveSlot();
 }
 
 // ---- op13: spawn an actor (loc_12BE2, 27 words) ----
@@ -3450,7 +3593,9 @@ void Pack::eve_op_move(int actor, int op, int steps) {
     int speed = st.move_speed > 0 ? st.move_speed : 1;
     if (speed < 1) speed = 1;
     st.move_op = op;
-    st.move_counter = (unit / speed) * steps;
+    // loc_12A1C: the counter lives in a byte (unk_7D7EF), so values past 255 wrap to
+    // the low 8 bits (e.g. speed 1 X: 11+ tiles, Y: 16+ tiles).
+    st.move_counter = ((unit / speed) * steps) & 0xFF;
     // Op1-4 fix the direction; the frame enters its cycle on the first animation step.
     // op5-8 keep both (phase 2 at loc_1390D/13970/139DB/13A54 never writes unk_82936).
     if (op >= 1 && op <= 4) {
@@ -3526,10 +3671,19 @@ bool Pack::eve_animate_moves_once() {
 
 // ---- op15: absolute camera (loc_12D97, then sub_126AC) ----
 // loc_12D97 sets the camera tiles to (x=p0, y=p1) with no clamping and leaves fine alone;
-// the renderer skips tiles outside the map.
+// the renderer skips tiles outside the map. sub_126AC then walks 50 actors and recomputes
+// unk_82938/unk_8293A from (tile - cam)*size + fine. The port recomputes the same value in
+// get_eve_actor_screen_box on every render, so moving actors (type 1..8 with a nonzero
+// unk_7D7EF counter, which the original adjusts to keep the screen continuous) stay
+// continuous through the shared fine offsets. The walk is kept for parity.
 void Pack::eve_op_camera_snap(int tx, int ty) {
     cam_tile_x_ = (int16_t)tx;
     cam_tile_y_ = (int16_t)ty;
+    for (int a = 0; a < 50; a++) {
+        const EveActorState& st = eve_actors_[a];
+        if (!st.active) continue;
+        (void)st; // screen position is derived on demand; see above
+    }
 }
 
 // ---- op23: relative camera pan (loc_13063 phase 1, loc_13AC9 phase 2, sub_21E29 tail) ----
@@ -3823,6 +3977,12 @@ bool Pack::run_eve_script(int event_id) {
     // Frame loop: sub_13B8D repeats sub_12857 plus rendering while frame < total. Phase 1
     // (spawn, counters, blocking dialogue) and phase 2 (1 px per frame) run together, giving
     // the three-actor walk of cap4.avi. G2_PACK_AUTO teleports without rendering.
+    // sub_12857 keeps a per-actor PC (unk_7CF52 high word / word_7CF54): each actor fetches
+    // at most the single command at its PC, only when the command's fire value equals the
+    // current frame and the actor is not moving (unk_7D7EF == 0); otherwise it runs the
+    // phase-2 move step (loc_1336C) and leaves the PC alone. A command whose fire frame
+    // passes while the actor is moving is therefore skipped forever and stalls that actor.
+    int eve_pc[51] = {};
     bool eve_auto_fast = (dbg_env("G2_PACK_AUTO"));
     // 60 Hz pacer, mirroring the sub_2B470 vsync wait so movement looks smooth.
     GameTimer::FramePacer eve_pacer(60.0);
@@ -3831,24 +3991,28 @@ bool Pack::run_eve_script(int event_id) {
         bool saw_visual = false, saw_dialog = false, saw_move_setup = false;
         for (int a = 0; a < 51; a++) {
             const std::vector<uint16_t>& w = eve.actors[a].words;
-            size_t i = 0;
-            while (i + 1 < w.size()) {
+            size_t i = (size_t)eve_pc[a];
+            // loc_1336C gate: a moving actor (counter != 0) fetches nothing this frame.
+            {
+                const EveActorState& st = eve_actors_[a];
+                if (st.active && st.move_op >= 1 && st.move_op <= 8 && st.move_counter > 0) {
+                    continue;
+                }
+            }
+            if (i + 1 < w.size()) {
                 uint16_t fire = w[i], op = w[i + 1];
                 int L = 0;
                 if (op >= 1 && op <= 29) L = kOpLen[op];
                 if (L <= 0) {
-                    // Undetermined lengths (op25/26/28) are assumed to be 3 and logged.
-                    if (op >= 1 && op <= 29) {
-                        fprintf(stderr, "PACK: EVE %d actor%d fire=%u op=%u unknown len, assume 3 (stub)\n",
-                                event_id, a, fire, op);
-                        L = 3;
-                    } else {
-                        fprintf(stderr, "PACK: EVE %d actor%d bad op=%u at idx=%zu, stop actor\n",
-                                event_id, a, op, i);
-                        break;
-                    }
+                    // Invalid op (bl-1 > 0x1C at loc_12857+...): the original jumps to
+                    // the phase-2 tail without advancing the PC, so the actor stalls.
+                    fprintf(stderr, "PACK: EVE %d actor%d bad op=%u at pc=%zu, stall\n",
+                            event_id, a, op, i);
+                    continue;
                 }
-                if (i + (size_t)L > w.size()) break;
+                if (i + (size_t)L > w.size()) {
+                    continue;
+                }
                 if ((int)fire == frame) {
                     switch (op) {
                     case 10: {
@@ -3949,7 +4113,8 @@ bool Pack::run_eve_script(int event_id) {
                         // the NPC struct (length 0x22): name 20 B at 3..0x16, then tile_x
                         // 0x17, tile_y 0x18, talk_id 0x19, +0x1A/0x1B, sprite_id 0x1B,
                         // portrait_word 0x1C, target_x 0x1D, target_y 0x1E, direction 0x1F,
-                        // speed 0x20, move_type 0x21.
+                        // speed 0x20, move_type 0x21. Finally sub_1A51D registers slot
+                        // p0+2 (p0 = w[i+2]) with type 4 and sprite<<4 at (0,0).
                         if (a < MAX_TOWN_NPCS && L >= 34) {
                             PackNPC& n = npcs_[a];
                             n.active = 1;
@@ -3967,15 +4132,27 @@ bool Pack::run_eve_script(int event_id) {
                             n.move_type = (uint8_t)(w[i + 0x21] & 0xFF);
                             npc_fine_offset_[a] = 0;
                             npc_anim_frame_[a] = 0;
+                            const int p0 = (int)(int16_t)w[i + 2];
+                            const int slot = p0 + 2;
+                            const int sprite = (int)n.sprite_id * 16;
+                            if (slot >= 0 && slot < 320) {
+                                eve_slots_[slot].active = true;
+                                eve_slots_[slot].type = 4;
+                                eve_slots_[slot].sprite = sprite;
+                                eve_slots_[slot].x = 0;
+                                eve_slots_[slot].y = 0;
+                            }
                         }
                         saw_visual = true;
                         break;
                     }
                     case 20: {
                         // loc_12E47: remove actor entry p0. NPC (p0-2) is deactivated with its
-                        // first name byte cleared, and the whole NPC layer is zeroed.
+                        // first name byte cleared, the slot p0 is cleared, and the whole NPC
+                        // layer is zeroed.
                         const int entry = (int16_t)w[i + 2];
                         if (entry >= 0x140 && entry - 0x140 < MAX_EVE_ACTORS) eve_actors_[entry - 0x140].active = false;
+                        if (entry >= 0 && entry < 320) eve_slots_[entry].active = false;
                         const int n = entry - 2;
                         if (n >= 0 && n < MAX_TOWN_NPCS) { npcs_[n].active = 0; npcs_[n].name[0] = 0; }
                         if (layer_npc_) memset(layer_npc_, 0, (size_t)map_w_ * map_h_);
@@ -4038,13 +4215,14 @@ bool Pack::run_eve_script(int event_id) {
                         if (a < MAX_EVE_ACTORS) eve_actors_[a].move_speed = (int)(w[i + 2] & 0xFF);
                         break;
                     case 28:
-                        // loc_132EB: with byte_82731 == 1, sub_39E5E(p0, 1) changes the BGM;
-                        // the port has no BGM playback.
-                        fprintf(stderr, "PACK: EVE %d actor%d frame %d op28 BGM track %u (BGM not implemented)\n", event_id, a, frame, w[i + 2]);
+                        // loc_132EB: with byte_82731 == 1, sub_39E5E(p0, 1) changes the BGM
+                        // track (CD audio; state-only here, see bgm_play_track).
+                        bgm_play_track(w[i + 2]);
                         break;
                     case 29: {
                         // loc_1330F: load the 13-byte filename (low bytes of words 2..14) with
-                        // sub_39431 into sound slot 10 and play it through sub_394D1.
+                        // sub_39431 into sound slot 10 and play it through sub_394D1 (L4137)
+                        // with volume byte_82732*10.
                         char nm[14] = {0};
                         for (int k = 0; k < 13; k++) nm[k] = (char)(w[i + 2 + k] & 0xFF);
                         if (nm[0]) {
@@ -4054,7 +4232,7 @@ bool Pack::run_eve_script(int event_id) {
                                 for (char& c : lower) c = (char)tolower((unsigned char)c);
                                 path = game_path(lower.c_str());
                             }
-                            Audio::play_voc(path);
+                            play_pack_voc_path(path);
                         }
                         break;
                     }
@@ -4072,8 +4250,8 @@ bool Pack::run_eve_script(int event_id) {
                         break;
                     }
                     if (should_exit_) return true;
+                    eve_pc[a] = (int)(i + (size_t)L);
                 }
-                i += (size_t)L;
             }
         }
         if (eve_auto_fast) continue; // skip rendering and animation after the teleport
@@ -4095,6 +4273,10 @@ bool Pack::run_eve_script(int event_id) {
         }
         // Outside G2_PACK_AUTO, saw_move_setup has already become a counter; nothing to do.
         (void)saw_move_setup;
+        // sub_13B8D loc_13C80: every 60 EVE frames call sub_399AC. The first frame also
+        // applies the saved palette (sub_20118) and sets word_7D78C = 1; the port renders
+        // every frame, so only the tick is kept.
+        if (frame > 0 && frame % 60 == 0) bgm_tick();
     }
     // Tail safety: if a counter survives past total (only on a malformed EVE), advance up to
     // 512 frames to settle the positions. Script 271 never needs this.
@@ -4147,10 +4329,11 @@ void Pack::town_loop() {
             handle_options_menu();
         }
 
-        // sub_190A3 loc_191A5: dword_7CF20 == 2 (right button) opens sub_32315 (status
-        // window). The original polls every frame and waits for release with sub_319DB; the
-        // port opens once on the click edge and consumes the leftover input afterwards.
-        if (input_.get_mouse().right_clicked) {
+        // sub_190A3 loc_191A5: dword_7CF20 == 2 (right-only) or dword_1A01D4 != 0 (Left Alt
+        // level, scancode 0x38, the right-click substitute) opens sub_32315 (status window).
+        // The original polls every frame; the port opens on the right-click edge or the Alt
+        // key edge (is_key_pressed), since status_window blocks until exit.
+        if (input_.get_mouse().right_clicked || input_.is_key_pressed(SDLK_LALT)) {
             status_window();
             input_.update();
             if (should_exit_) break;
@@ -4170,9 +4353,18 @@ void Pack::town_loop() {
                 is_mouse_over_npc(input_.get_mouse_x(), input_.get_mouse_y(), hover_npc)) {
                 // sub_19528: dword_8271C = npc_idx + 1 (the click trigger for sub_2D038).
                 npc_trigger_ = (uint32_t)(hover_npc + 1);
+                // sub_19528 C5: word dword_82943 = word dword_F309C after sub_25F21.
+                // sub_1E4B4 saved dword_82943 into dword_F309C on hover, so the frame
+                // after the dialogue equals the frame before it. The port derives the
+                // frame from dir + anim counter, so saving and restoring them here gives
+                // the same visible result even if a dialogue path ever touches them.
+                const uint8_t saved_dir = player_dir_;
+                const uint8_t saved_anim = player_anim_frame_;
                 // sub_19528: "mov word ptr dword_1A00C8+2, ax" (sub_25F21 result), then
                 // sub_3197D waits for the button release.
                 story_hi_ = interact_with_npc(hover_npc);
+                player_dir_ = saved_dir;
+                player_anim_frame_ = saved_anim;
                 wait_buttons_released();
                 click_latch_ = true;   // sub_1F6E4 returns the NPC and sets byte_15BA22 = 1
             } else {
@@ -4189,11 +4381,19 @@ void Pack::town_loop() {
         // is_left_button() inside update_player_movement. A click only triggers an immediate
         // interaction with the current or adjacent tile; the check below covers clicking a
         // chest, building or NPC while standing still.
-        // End of sub_1F6E4: release the latch (byte_15BA22) once the action keys and the mouse
-        // buttons are all up.
-        if (!input_.is_key_pressed(SDLK_RETURN) && !input_.is_key_pressed(SDLK_SPACE) &&
-            !(input_.is_left_button() && !input_.is_right_button()))
-            click_latch_ = false;
+        // End of sub_1F6E4/sub_27BF2: release the latch (byte_15BA22) once the action
+        // input (dword_1A0168 Left Ctrl level) and both mouse buttons are up. The
+        // original keeps the latch while dword_7CF20 == 1 or == 2 (left-only or
+        // right-only) or Ctrl is held. Enter/Space edges are kept as extra aliases.
+        {
+            const bool action = input_.is_key_held(SDLK_LCTRL) ||
+                                input_.is_key_pressed(SDLK_RETURN) ||
+                                input_.is_key_pressed(SDLK_SPACE);
+            const bool left_only = input_.is_left_button() && !input_.is_right_button();
+            const bool right_only = input_.is_right_button() && !input_.is_left_button();
+            if (!action && !left_only && !right_only)
+                click_latch_ = false;
+        }
         town_click_interaction();   // sub_1D12F: building/item under the mouse
         town_key_interaction();     // sub_1A7B5/sub_1A8F3: the facing tile
 
@@ -4214,6 +4414,17 @@ void Pack::town_loop() {
         video_.clear();
         render_town_frame();
         video_.present();
+
+        // sub_190A3 tail: byte_54041 reapply (sub_20118) instead of the vsync wait.
+        // The port renders every frame, so the flag only records the state; the next
+        // town frame already uses the restored palette.
+        if (palette_reapply_pending_) palette_reapply_pending_ = false;
+
+        // sub_19528 loc_1952C..loc_19561: every 60 iterations call sub_399AC.
+        if (++bgm_tick_count_ >= 60) {
+            bgm_tick_count_ = 0;
+            bgm_tick();
+        }
 
         pacer.pace(input_);
     }
@@ -4261,6 +4472,8 @@ int Pack::run(const std::string& mode, const std::string& town_param) {
         return -1;
     }
     town_id_ = tid;
+    // main_+145 sub_19571: town BGM track (before the town load).
+    bgm_init_town();
 
     // 5. sub_1A094: Display NOWLOAD.PCX
     std::string nowload_path = game_path("nowload.pcx");
@@ -4275,6 +4488,13 @@ int Pack::run(const std::string& mode, const std::string& town_param) {
     if (!load_town_and_tec(town_id_)) {
         fprintf(stderr, "PACK: warning: Failed to load town map data for town %d\n", town_id_);
         return -1;
+    }
+    // main_+161/+181: with byte_82731 == 1, initialise CD (sub_397DD) and play the town
+    // track (sub_39E5E). State-only here (no CD data ships); SFX (sub_18BC5) is covered
+    // by play_pack_sfx.
+    if (game_cfg_[1] == 1) {
+        bgm_ready_ = true;
+        bgm_play_track(bgm_town_track_);
     }
 
     // 7b. Load citizen animation sprites AFTER town load (ASM 0x18B2A)

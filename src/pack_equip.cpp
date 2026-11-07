@@ -481,6 +481,8 @@ int Pack::status_equipment_screen(int sel) {
     draw_contents(sel, sec_top);
     draw_thumb();
     memcpy(status_snap_.data(), bb, status_snap_.size());
+    // sub_357C4 L46982: menu SFX id 1 with volume byte_82732*10, before the slide loop.
+    play_pack_sfx(1);
     {
         int w = 0x140;
         for (int k = 0; k < 0x51 && !should_exit_; k++) {

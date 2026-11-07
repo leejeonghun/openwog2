@@ -87,8 +87,13 @@ int Pack::run_talk_engine(int npc_idx, int eve_actor, int portrait_id, const std
     int off = 0;                                         // var_30
     bool latch = true;
 
-    // Action keys (dword_1A0168): true while either action key is held.
-    auto key_down = [&]() { return input_.is_key_pressed(SDLK_RETURN) || input_.is_key_pressed(SDLK_SPACE); };
+    // Action key (dword_1A0168, Left Ctrl level) or left-only mouse (dword_7CF20 == 1).
+    // Enter/Space edges are kept as extra aliases (not in the original) for manual testing.
+    auto key_down = [&]() {
+        return input_.is_key_held(SDLK_LCTRL) ||
+               input_.is_key_pressed(SDLK_RETURN) ||
+               input_.is_key_pressed(SDLK_SPACE);
+    };
 
     while (true) {
         DialogPlacement dp;

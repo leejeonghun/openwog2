@@ -29,6 +29,10 @@ public:
     bool was_left_clicked() const { return mouse_.left_clicked; }
 
     bool is_key_pressed(SDL_Keycode key) const;
+    // Held (level) state, matching the DOS ISR array dword_1A00F4[scancode] (make=1, break=0).
+    // PACK reads dword_1A0168 (Ctrl, 0x1D), dword_1A01D4 (Alt, 0x38) and the four arrows
+    // (dword_1A0214/1A0220/1A0228/1A0234) as levels, not edges.
+    bool is_key_held(SDL_Keycode key) const;
     bool any_key_pressed() const { return last_key_pressed_ != SDLK_UNKNOWN; }
     // Whether the BIOS keyboard buffer holds a key for getch_ to read (sub_5D839).
     // Modifier-only input (Shift/Ctrl/Alt/Caps) never enters the BIOS buffer.
@@ -87,4 +91,8 @@ private:
     bool quit_ = false;
     SDL_Keycode last_key_pressed_ = SDLK_UNKNOWN;
     SDL_Keycode injected_key_ = SDLK_UNKNOWN; // set by test_inject_key only; real keys never touch it
+    // Level state for DOS-ISR style reads (dword_1A00F4). Keyed by SDL_Keycode.
+    // Updated on KEYDOWN/KEYUP in update(); survives across frames until released.
+    // Index by (int)key (bounded); 0 means unused.
+    bool held_keys_[1024] = {};
 };

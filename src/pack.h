@@ -466,6 +466,11 @@ private:
     };
     static constexpr int MAX_EVE_ACTORS = 51;
     EveActorState eve_actors_[MAX_EVE_ACTORS];
+    // sub_1A51D slot table unk_82934 (320 slots, 13 bytes each). op19 registers slot
+    // p0+2 with type 4 and sprite<<4 at (0,0); op20 clears it. The port renders those
+    // NPCs through the town NPC path, so the slots are bookkeeping only (no extra draw).
+    struct EveSlot { bool active = false; int type = 0; int sprite = 0; int x = 0, y = 0; };
+    EveSlot eve_slots_[320];
     void eve_clear_actors();
     void eve_op_spawn(int actor, const std::vector<uint16_t>& w, size_t base);
     void eve_op_hide(int actor);
@@ -524,6 +529,19 @@ private:
     void eve_op_warp(int town_id, int cam_x = 0, int cam_y = 0);
     // Duplicate suppression marker unk_7FF9C [town 0..255][event 0..39]
     uint8_t& fired_flag(int town, int idx);   // g_event_flags[10000 + town*40 + idx]
+    // ---- BGM state (CD audio, state-only port) ----
+    // The original BGM is CD-ROM audio (sub_397DD/sub_39E5E/sub_399AC, ASCII
+    // commands via sub_3A995). No CD data ships in GENESIS2/, so the port keeps
+    // only the track numbers and gating; playback itself is silent.
+    int bgm_town_track_ = 0x10;     // dword_82718 (sub_19571)
+    int bgm_current_track_ = 0;     // last sub_39E5E argument
+    bool bgm_ready_ = false;        // dword_1B62F0 (CD init done)
+    int bgm_tick_count_ = 0;        // sub_399AC every 60 iterations
+    bool palette_reapply_pending_ = false; // byte_54041 (set after warp/event, consumed in sub_190A3 tail)
+    void bgm_init_town();           // sub_19571
+    void bgm_play_track(int track); // sub_39E5E(track, 1)
+    void bgm_tick();                // sub_399AC
+    int bgm_track_for_event(int event_id) const; // sub_2D3B8 (52 cases, 0x10F..0x142)
 
     // Tile animation (sub_21D70): collects the 20-byte records stored after the
     // MAP palette (group B, one per top tile) whose R[1] > 0. R[0..9] are the
@@ -644,6 +662,11 @@ private:
     int  shop_scroll_ = 0;                   // dword_1A4F14: index of the first visible row
 
     void load_shop_assets();
+    // sub_394D1: play a SoundBlaster VOC with volume byte_82732*10; skipped when
+    // byte_82732 == 0 (and when the driver is not ready). id 1 = menu.VOC, id 2 = sell.VOC
+    // (sub_18BC5); other ids are playable via the explicit path overload.
+    void play_pack_sfx(int id);
+    void play_pack_voc_path(const std::string& path);
     void shop_grab_screen();                              // sub_2B3DC(0,0,unk_172224,0x13F,0xC7)
     void shop_restore_screen();                           // sub_2B374(0,0)
     void shop_present();                                  // sub_2B44F / sub_2B470 (back buffer -> screen)

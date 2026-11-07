@@ -422,11 +422,9 @@ int Pack::status_class_screen(int sel) {
         r[R_DEF] = (uint8_t)rec8_byte(cls, 2);
     };
 
-    auto play_sfx = [&](int idx) {
-        if (game_cfg_[2] == 0) return;
-        static const char* const kName[3] = { "menu.voc", "into.voc", "flying.voc" };
-        if (idx >= 1 && idx <= 3) Audio::play_voc(game_path(kName[idx - 1]));
-    };
+    // sub_2F789 L40502 (entry, id 1) and L41183 (OK success, id 2): sub_394D1 with
+    // volume byte_82732*10. sub_18BC5 loads id 1 = menu.VOC and id 2 = sell.VOC.
+    auto play_sfx = [&](int idx) { play_pack_sfx(idx); };
 
     spr_row = sprite_row(ebp);
     tab_cur = tab_of(ebp);

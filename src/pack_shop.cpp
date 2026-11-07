@@ -182,11 +182,12 @@ void Pack::draw_gold_box() {
     small_number(4 + 0x23 - len * 5, 4 + 5, (int)team_gold_);
 }
 
-// sub_35109(delta): team gold += delta, play sell.VOC (sfx 2), redraw the gold box
+// sub_35109(delta): team gold += delta, play sell.VOC (sfx 2, sub_394D1 L46466 with
+// volume byte_82732*10), redraw the gold box
 void Pack::change_gold(int delta) {
     wait_buttons_released();
     team_gold_ = (uint32_t)((int32_t)team_gold_ + (int16_t)delta);
-    Audio::play_voc(game_path("sell.voc"));
+    play_pack_sfx(2);
     draw_gold_box();
     video_.present();
     GameTimer::delay_with_pump(input_, 714);   // sub_1189F: 50 retrace
@@ -254,11 +255,15 @@ bool Pack::poll_mouse(int& status, int& x, int& y) {
     return true;
 }
 
-// sub_319DB: wait until the right button is released
+// sub_319DB: wait until the right action input is released
+// The original loops while dword_7CF20 == 2 (right-only) or dword_1A01D4 != 0 (Left Alt
+// level, the right-click substitute), so both-pressed counts as released.
 void Pack::wait_right_released() {
     while (true) {
         input_.update();
-        if (input_.quit_requested() || !input_.is_right_button()) return;
+        if (input_.quit_requested()) return;
+        const bool right_only = input_.is_right_button() && !input_.is_left_button();
+        if (!right_only && !input_.is_key_held(SDLK_LALT)) return;
         GameTimer::delay_with_pump(input_, 16);
     }
 }
@@ -675,14 +680,19 @@ const char* class_name(int cls) {
 }
 }  // namespace
 
-// sub_31933: wait for a fresh click/key after the previous input is released
+// sub_31933: wait for a fresh action press after the previous input is released
+// Phase 1 waits for both released (dword_7CF20 == 1 / dword_1A0168 == 0, via
+// wait_buttons_released); phase 2 waits for left-only or Left Ctrl level. The original
+// never accepts ESC here; Enter/Space edges are kept as extra aliases.
 void Pack::wait_click() {
     wait_buttons_released();
     while (true) {
         input_.update();
         if (input_.quit_requested()) return;
-        if (input_.is_left_button() || input_.is_key_pressed(SDLK_RETURN) ||
-            input_.is_key_pressed(SDLK_SPACE) || input_.is_key_pressed(SDLK_ESCAPE)) return;
+        const bool left_only = input_.is_left_button() && !input_.is_right_button();
+        if (left_only || input_.is_key_held(SDLK_LCTRL) ||
+            input_.is_key_pressed(SDLK_RETURN) ||
+            input_.is_key_pressed(SDLK_SPACE)) return;
         GameTimer::delay_with_pump(input_, 16);
     }
 }
@@ -1083,8 +1093,8 @@ void Pack::handle_options_menu() {
             auto in = [&](int x0, int x1, int y0, int y1) { return mx >= x0 && mx <= x1 && my >= y0 && my <= y1; };
             if (in(0x3E, 0x80, 0x31, 0x4E)) { game_cfg_[0] = 0; redraw = true; }
             else if (in(0xBF, 0x101, 0x31, 0x4E)) { game_cfg_[0] = 1; redraw = true; }
-            else if (in(0x3E, 0x80, 0x51, 0x6C)) { game_cfg_[1] = 0; redraw = true; }       // sub_39ED7 (music off): BGM is not implemented
-            else if (in(0xBF, 0x101, 0x51, 0x6C)) { game_cfg_[1] = 1; redraw = true; }      // sub_397DD/sub_39E5E (BGM)
+            else if (in(0x3E, 0x80, 0x51, 0x6C)) { game_cfg_[1] = 0; fprintf(stderr, "PACK: BGM off (sub_39ED7, state-only)\n"); redraw = true; }       // sub_39ED7 (music off)
+            else if (in(0xBF, 0x101, 0x51, 0x6C)) { game_cfg_[1] = 1; bgm_ready_ = true; bgm_play_track(bgm_town_track_); redraw = true; }      // sub_397DD + sub_39E5E(dword_82718)
             else if (in(0x3E, 0x80, 0x71, 0x8E)) { game_cfg_[2] = 0; redraw = true; }
             else if (in(0xBF, 0x101, 0x71, 0x8E)) { game_cfg_[2] = 1; redraw = true; }
             else if (in(0x21, 0x47, 0x97, 0xA5)) {

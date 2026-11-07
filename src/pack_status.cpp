@@ -397,6 +397,9 @@ void Pack::status_slide_back(int sel, bool from_item_list) {
     status_draw_main(sel, status_top_);
     status_draw_thumb();
     memcpy(status_snap_.data(), bb, status_snap_.size());   // unk_172224 <- new status window
+    // sub_32315 L44181 (class return) and L44272 (equip return): menu SFX id 1 with
+    // volume byte_82732*10, played just before the sub_37F18 slide loop.
+    play_pack_sfx(1);
     const size_t total = (size_t)SCREEN_W * SCREEN_H;
 
     // sub_37F18(src, w, h, dst): rectangle copy with a 0x140 stride. The original trusts

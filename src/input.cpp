@@ -58,10 +58,20 @@ void Input::update() {
                 }
                 break;
 
-            case SDL_KEYDOWN:
+            case SDL_KEYDOWN: {
                 last_key_pressed_ = event.key.keysym.sym;
-                if (event.key.keysym.sym == SDLK_ESCAPE) {
-                    // ESC needs no special handling here: last_key_pressed_ already carries it.
+                const int k = (int)event.key.keysym.sym;
+                if (k >= 0 && k < 1024) held_keys_[k] = true;
+                break;
+            }
+            case SDL_KEYUP: {
+                const int k = (int)event.key.keysym.sym;
+                if (k >= 0 && k < 1024) held_keys_[k] = false;
+                break;
+            }
+            case SDL_WINDOWEVENT:
+                if (event.window.event == SDL_WINDOWEVENT_FOCUS_LOST) {
+                    for (int i = 0; i < 1024; i++) held_keys_[i] = false;
                 }
                 break;
 
@@ -75,6 +85,12 @@ void Input::update() {
 
 bool Input::is_key_pressed(SDL_Keycode key) const {
     return last_key_pressed_ == key;
+}
+
+bool Input::is_key_held(SDL_Keycode key) const {
+    const int k = (int)key;
+    if (k < 0 || k >= 1024) return false;
+    return held_keys_[k];
 }
 
 bool Input::poll_quit() {
