@@ -1183,10 +1183,9 @@ void CombatII::battle_ai_wc5_m_c31a(std::vector<int>& grid, int eax0, int edx0,
     }
 }
 
-// WC5 1x1 165C2 gate: no occupant or self, and spread>=0.
-// Fails outside the sub_11DB2 padded edge (x in [2,W-3], y in [4,H-5]). Large footprints
-// and the tactical pattern stride/data (572/143) are used only inside the class-0 1x1
-// ordinary gate, so a single cell is examined.
+// WC5 165C2 gate: every footprint cell must be inside the sub_11DB2 padded edge, have
+// spread >= 0, and be free or self in CC998. The source uses the actor's current facing
+// (the WC5 caller does not keep the candidate facing at this point).
 bool CombatII::battle_ai_wc5_165c2_gate(const std::vector<int>& grid, int nx,
                                         int ny, int unit_index) const {
     if (map_w_ == 0 || map_h_ == 0) return false;
@@ -1345,7 +1344,7 @@ void CombatII::battle_ai_wc5_1c685(std::vector<int>& grid, Wc5Iter& it,
         if (wc5_s16(it.n_lo) <= 1) continue;
         if (st.b8e != 2) {
             // loc_1C90A (sub_3D7B2 wc5, F0B8E==3): strict minimum sub_49ADF distance
-            // from the actor, then the sub_16699 1x1 gate. F0B84_hi carries the best
+            // from the actor, then the sub_16699 footprint gate. F0B84_hi carries the best
             // distance across the four facings.
             const auto& actor = units_[(size_t)unit_index];
             const int ax = (int)(int8_t)actor.x, ay = (int)(int8_t)actor.y;
@@ -1760,25 +1759,35 @@ int CombatII::battle_ai_hostile_unit_at(int x, int y, int unit_index) const {
     return occupant;
 }
 
-// 1x1 ordinary approximation of sub_165C2.
-// The original expands the D66A8 record (per-code/per-mode footprint) and tests each
-// cell with sub_11DB2 (unoccupied or self) and sub_13CBD (E8F46 >= 0). The port calls
-// this only from the WC1 detail path, where the class-0 .NC2 1x1 gate has been proven,
-// so one cell is enough. sub_11DB2's padding guard (x in [2,w-3], y in [4,h-5]) means
-// "nothing occupies a cell outside the padding", so those cells still pass when
-// E8F46 >= 0.
-bool CombatII::battle_ai_165c2_1x1_ok(int x, int y, int unit_index,
-                                      const std::vector<int>& e8) const {
+// sub_165C2 for a specific facing: expand the D66A8 footprint (per-code/per-facing) and
+// test every cell with sub_11DB2 (unoccupied or self) and sub_13CBD (E8F46 >= 0).
+// sub_11DB2's padding guard (x in [2,w-3], y in [4,h-5]) means "nothing occupies a cell
+// outside the padding", while sub_13CBD still rejects that cell when it is outside the
+// map; both are reproduced by battle_cc998_occupant and the explicit -128 default.
+bool CombatII::battle_ai_165c2_ok(int x, int y, int unit_index,
+                                  const std::vector<int>& e8, int facing) const {
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return false;
     if (map_w_ == 0 || map_h_ == 0) return false;
-    // sub_13CBD: out of range yields -128, which the E8 >= 0 test rejects.
-    if (x < 0 || y < 0 || x >= (int)map_w_ || y >= (int)map_h_) return false;
-    const size_t cell = (size_t)y * (size_t)map_w_ + (size_t)x;
-    if (cell >= e8.size()) return false;
-    if (e8[cell] < 0) return false;
-    if (x >= 2 && x < (int)map_w_ - 2 && y >= 4 && y < (int)map_h_ - 4) {
-        const int occupant = battle_unit_index_at(x, y);
-        if (occupant >= 0 && occupant != unit_index) return false;
+    const auto& actor = units_[(size_t)unit_index];
+    int foot_w = 1, foot_h = 1;
+    if (!battle_d66a8_footprint(actor.sprite_type, facing & 3, &foot_w, &foot_h)) return false;
+    if (foot_w < 1 || foot_h < 1) return false;
+    // sub_165C2: rows go up from the base tile; each cell must be free (self is allowed)
+    // through sub_11DB2 and have a non-negative E8F46 value through sub_13CBD.
+    for (int row = 0; row < foot_h; ++row) {
+        const int cy = y - row;
+        for (int col = 0; col < foot_w; ++col) {
+            const int cx = x + col;
+            const int occupant = battle_cc998_occupant(cx, cy, true);
+            if (occupant >= 0 && occupant != unit_index) return false;
+            int v = -128; // sub_13CBD OOB
+            if (cx >= 0 && cy >= 0 && cx < (int)map_w_ && cy < (int)map_h_) {
+                const size_t cell = (size_t)cy * (size_t)map_w_ + (size_t)cx;
+                if (cell >= e8.size()) return false;
+                v = e8[cell];
+            }
+            if (v < 0) return false;
+        }
     }
     return true;
 }
@@ -1904,7 +1913,7 @@ int CombatII::battle_ai_tact_3e739(int unit_index, int mode, int sec, int diff_b
         if (v <= best) return;
         int si_hit = -1;
         for (int si = 0; si < 2; ++si) {
-            if (battle_ai_165c2_1x1_ok(x, y, unit_index, e8)) { si_hit = si; break; }
+            if (battle_ai_165c2_ok(x, y, unit_index, e8, si)) { si_hit = si; break; }
         }
         if (si_hit < 0) return;
         best = v; dest_x = x; dest_y = y; face = si_hit;
@@ -1927,7 +1936,7 @@ int CombatII::battle_ai_tact_3e739(int unit_index, int mode, int sec, int diff_b
     const int toward = (int)walk_facing_toward(dest_x, dest_y, nhp.first, nhp.second);
     out_dx = dest_x;
     out_dy = dest_y;
-    if (battle_ai_165c2_1x1_ok(dest_x, dest_y, unit_index, e8)) {
+    if (battle_ai_165c2_ok(dest_x, dest_y, unit_index, e8, toward)) {
         out_facing = toward;
     } else if ((face & 1) == 0) {
         out_facing = (nhp.second < dest_y) ? 2 : toward;
@@ -1994,7 +2003,7 @@ int CombatII::battle_ai_flee_3ef12(int unit_index, int radius, int diff_budget,
         if (v <= best) return;
         int si_hit = -1;
         for (int si = 0; si < 2; ++si) {
-            if (battle_ai_165c2_1x1_ok(x, y, unit_index, e8)) { si_hit = si; break; }
+            if (battle_ai_165c2_ok(x, y, unit_index, e8, si)) { si_hit = si; break; }
         }
         if (si_hit < 0) return;
         best = v; dest_x = x; dest_y = y; face = si_hit;
@@ -2007,7 +2016,7 @@ int CombatII::battle_ai_flee_3ef12(int unit_index, int radius, int diff_budget,
     const int toward = (int)walk_facing_toward(dest_x, dest_y, h0x, h0y);
     out_dx = dest_x;
     out_dy = dest_y;
-    if (battle_ai_165c2_1x1_ok(dest_x, dest_y, unit_index, e8)) {
+    if (battle_ai_165c2_ok(dest_x, dest_y, unit_index, e8, toward)) {
         out_facing = toward;
     } else if ((face & 1) == 0) {
         out_facing = (h0y < dest_y) ? 2 : toward;
@@ -2227,7 +2236,7 @@ int CombatII::battle_ai_3ca3c_cell(int unit_index, int wc, int hx, int hy,
                 // sub_1A2FE with base = input cell; a failure ends this facing.
                 if (!battle_ai_terrain_bucket_compatible(hx, hy, cx, cy)) break;
                 const int v = battle_ai_wc5_diff_read(e8, cx, cy);  // sub_13CBD
-                if (v > best && battle_ai_165c2_1x1_ok(cx, cy, unit_index, e8)) {
+                if (v > best && battle_ai_165c2_ok(cx, cy, unit_index, e8, f)) {
                     best = v; out_dx = cx; out_dy = cy; fbest = f;
                 }
                 cx += kStepX[f]; cy += kStepY[f];
@@ -2303,7 +2312,7 @@ int CombatII::battle_ai_3ca3c_cell(int unit_index, int wc, int hx, int hy,
                     else { if (cy != slotB) continue; }
                     const int v = battle_ai_wc5_diff_read(e8, cx, cy);
                     if (v <= chain) continue;
-                    if (battle_ai_165c2_1x1_ok(cx, cy, unit_index, e8)) {
+                    if (battle_ai_165c2_ok(cx, cy, unit_index, e8, d)) {
                         bx = cx; by = cy; chain = v;
                     }
                 }
@@ -2348,7 +2357,7 @@ int CombatII::battle_ai_3ca3c_cell(int unit_index, int wc, int hx, int hy,
                 for (int i = nb - 1; i >= 0; --i) {                 // reverse order
                     const int cnt = count_3c9ac(bufx[i], bufy[i], d1, rng);
                     if (di >= cnt) continue;                        // strict maximum
-                    if (battle_ai_165c2_1x1_ok(bufx[i], bufy[i], unit_index, e8)) {
+                    if (battle_ai_165c2_ok(bufx[i], bufy[i], unit_index, e8, f)) {
                         di = cnt; sxx = bufx[i]; syy = bufy[i]; sslot = f;
                     }
                 }
@@ -2794,7 +2803,7 @@ bool CombatII::battle_ai_jump_3ebb4(int unit_index, int sec, int diff_budget,
 }
 
 // K=6 (sub_3EE2B): for each direction 0..3 accept F0648[0] as a candidate when
-// sub_165C2 (1x1) passes and sub_1D124(dir) collects exactly one target, then take the
+// sub_165C2 passes and sub_1D124(dir) collects exactly one target, then take the
 // strict minimum [+48h] HP. dest is the actor position (turn in place), facing is the
 // winning direction (the current facing when no candidate exists) and the return value
 // says whether a candidate unit was found.
@@ -2823,7 +2832,7 @@ bool CombatII::battle_ai_jump_3ee2b(int unit_index, int diff_budget,
     int best_hp = 0x7FFFFFFF;
     int best_dir = -1, best_occ = -1;
     for (int d = 0; d < 4; ++d) {
-        if (!battle_ai_165c2_1x1_ok(ax_, ay_, unit_index, e8)) continue; // sub_165C2
+        if (!battle_ai_165c2_ok(ax_, ay_, unit_index, e8, d)) continue; // sub_165C2
         std::vector<int16_t> grid(e8.begin(), e8.end());
         const int n = battle_range_collect_dir_grid(unit_index, d, grid); // sub_1D124(dir)
         for (size_t i = 0; i < e8.size() && i < grid.size(); ++i)

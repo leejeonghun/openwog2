@@ -619,35 +619,49 @@ void CombatII::battle_wc1_occupancy_preserve_or_close(const char* reason, uint32
 // sub_1134F/sub_1137A append and unlink list entries. sub_11FC4 walks the four lists in order and
 // writes each unk_D66A8 descriptor footprint into the grid via sub_11E04, clearing it with
 // sub_11EE4 on movement. sub_11DB2 is not a flat lookup either: it applies the x-2/y-4 offsets
-// and the dword_BA842/word_BA840 guards before reading the grid. The port has no list/grid
-// lifecycle, so it returns the first active units_ entry on the base tile; the WC1 caller
-// reproduces only the inner map guard below. frame_nt/frame_mt are render frames and do not
-// replace this occupancy descriptor.
-int CombatII::battle_unit_index_at(int x, int y) const {
-    for (size_t i = 0; i < units_.size(); ++i) {
-        const auto& u = units_[i];
-        if (u.active && u.hp > 0 && u.x == x && u.y == y) return (int)i;
+// and the dword_BA842/word_BA840 guards before reading the grid. The port models the grid by
+// scanning active units: each base tile must pass the sub_11E04 guard, then the unit occupies
+// its current facing/pose D66A8 footprint (x..x+w-1, y-h+1..y). frame_nt/frame_mt are render
+// frames and do not replace this occupancy descriptor.
+int CombatII::battle_cc998_occupant(int x, int y, bool apply_guard) const {
+    if (map_w_ <= 0 || map_h_ <= 0) return -1;
+    if (apply_guard) {
+        // sub_11DB2: (x-2) and (y-4) are zero-extended 16-bit values compared against W-4
+        // and H-8. This rejects x < 2, y < 4, x >= W-2 and y >= H-4. Large footprints can
+        // extend below/left of that padded origin, but sub_11DB2 does not reach those cells.
+        if ((uint32_t)(x - 2) >= (uint32_t)(map_w_ - 4)) return -1;
+        if ((uint32_t)(y - 4) >= (uint32_t)(map_h_ - 8)) return -1;
+    } else if (x < 0 || y < 0 || x >= (int)map_w_ || y >= (int)map_h_) {
+        return -1;
     }
-    return -1;
-}
-
-// Widens the sub_11DB2 CC998 lookup to the whole D66A8 footprint: sub_11E04 fills every cell
-// (x..x+w-1, y-h+1..y) with the unit pointer and sub_11EE4 clears it. The (x-2)/(y-4) guards
-// from sub_11DB2 still apply. Needed when a click lands on a non-base cell of a large unit,
-// such as a mount target or a dismount destination.
-int CombatII::battle_unit_index_at_footprint(int x, int y) const {
-    if (map_w_ == 0 || map_h_ == 0) return -1;
-    if ((uint32_t)(x - 2) >= (uint32_t)(map_w_ - 4)) return -1;
-    if ((uint32_t)(y - 4) >= (uint32_t)(map_h_ - 8)) return -1;
+    // sub_11E04 writes x..x+w-1, y-h+1..y and sub_11EE4 clears the same rectangle. The
+    // footprint is selected with the unit's current [63h] facing and [64h] pose; the base
+    // must itself pass sub_11E04's x in [2,W-3], y in [4,H-5] guard or nothing was written.
+    // Valid final footprints do not overlap, so the last matching entry is only a deterministic
+    // fallback for transient/overlapping states.
+    int found = -1;
     for (size_t i = 0; i < units_.size(); ++i) {
         const auto& u = units_[i];
         if (!u.active || u.hp <= 0) continue;
-        int w = 1, h = 1;
-        battle_d66a8_footprint(u.sprite_type, (int)u.facing & 3, &w, &h);
         const int ux = (int)(int8_t)u.x, uy = (int)(int8_t)u.y;
-        if (x >= ux && x < ux + w && y <= uy && y > uy - h) return (int)i;
+        if (ux < 2 || ux >= (int)map_w_ - 2 || uy < 4 || uy >= (int)map_h_ - 4) continue;
+        // sub_11E04 has no 1x1 fallback: a missing descriptor leaves width/height zero and
+        // writes nothing, so such a unit is absent from CC998.
+        uint8_t raw[13];
+        if (!battle_d66a8_raw(u.sprite_type, (int)u.facing & 3, (int)u.anim_frame, raw)) continue;
+        const int w = raw[0], h = raw[1];
+        if (w < 1 || h < 1) continue;
+        if (x >= ux && x < ux + w && y <= uy && y > uy - h) found = (int)i;
     }
-    return -1;
+    return found;
+}
+
+int CombatII::battle_unit_index_at(int x, int y) const {
+    return battle_cc998_occupant(x, y, true);
+}
+
+int CombatII::battle_unit_index_at_footprint(int x, int y) const {
+    return battle_cc998_occupant(x, y, true);
 }
 
 // sub_17531: the attacker's damage class (selects a column of unk_72982 / item column 0x3A+class).
@@ -10954,7 +10968,7 @@ int CombatII::battle_use_item(int unit_index, int dx, int tx, int ty) {
             std::vector<int> grid;
             battle_ai_169d7_reset(unit_index, grid);                    // sub_169D7 (-1 = walkable, empty)
             if (grid.empty() || battle_ai_wc5_diff_read(grid, tx, ty) != -1) return 3;
-            if (!battle_ai_165c2_1x1_ok(tx, ty, unit_index, grid)) return 3; // sub_165C2 re-check
+            if (!battle_ai_165c2_ok(tx, ty, unit_index, grid, (int)u.facing & 3)) return 3; // sub_165C2 re-check
             if (!battle_warp_unit(unit_index, tx, ty)) return 3;         // sub_3BF00
             if (should_exit_) return 0;
             battle_consume_tp(unit_index, 0x28);                         // 4CB8B: sub_45B4E(0x28)

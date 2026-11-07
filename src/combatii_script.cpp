@@ -361,7 +361,7 @@ uint32_t CombatII::eval_condition(uint32_t offset, bool& satisfied) const {
         int count = 0;
         for (int y = y1; y <= (int)y2; ++y) {
             for (int x = x1; x <= (int)x2; ++x) {
-                const int occupant = battle_unit_index_at_footprint(x, y);
+                const int occupant = battle_cc998_occupant(x, y, false);
                 if (occupant < 0 || (size_t)occupant >= units_.size()) continue;
                 const int diff = battle_effective_army(units_[(size_t)occupant]) - army_base;
                 if ((uint16_t)diff >= 2u) continue;
@@ -1987,9 +1987,8 @@ bool CombatII::run_contact_trigger(int unit_index, int target_index, int mode) {
 //   and deaths.
 // Record: [skip 2][x1][y1][x2][y2][legion-1][count][compare][u16 length][condition + bytecode]
 //   The ASM increments the record's army-1 and compares it against effective [+0x0E] in the
-//   CC998 occupancy cells. The port uses the effective-army helper and the base tile of active
-//   units, so the army byte matches on the normal path, but group-0/dynamic remap, VM faction
-//   and large-unit occupancy are not modelled.
+//   CC998 occupancy cells. The port reads the same unguarded grid footprint; the effective-army
+//   helper supplies [+0Eh]. Group-0/dynamic remap and VM faction remain the only approximations.
 //   compare 0 = equal, 1 = greater or equal, 2 = less or equal. Each record fires once (unk_110254).
 // While counting, dword_11024C is chosen as the first unit met, then replaced with 1/3 chance.
 bool CombatII::run_region_count_trigger() {
@@ -2019,7 +2018,7 @@ bool CombatII::run_region_count_trigger() {
         const int wanted_army = (int)battle_incremented_raw_army(army_id);
         for (int y = y1; y <= y2; ++y) {
             for (int x = x1; x <= x2; ++x) {
-                const int occupant = battle_unit_index_at_footprint(x, y);
+                const int occupant = battle_cc998_occupant(x, y, false);
                 if (occupant < 0 || (size_t)occupant >= units_.size()) continue;
                 const CombatUnitPlacement& u = units_[(size_t)occupant];
                 if (battle_effective_army(u) != wanted_army) continue;
@@ -3080,15 +3079,8 @@ bool CombatII::battle_16699(int x, int y, int facing, int unit_index) {
             const int xx = x + c;
             if ((uint16_t)(xx - 2) >= (uint16_t)(map_w_ - 4)) return false;   // cmp cx, W-4; jge
             if ((uint16_t)(yy - 4) >= (uint16_t)(map_h_ - 8)) return false;   // cmp cx, H-8; jge
-            for (size_t i = 0; i < units_.size(); ++i) {                      // cmp dword_CC998[i], 0
-                if ((int)i == unit_index) continue;
-                const auto& u = units_[i];
-                if (!u.active || u.hp <= 0) continue;
-                int w = 1, h = 1;
-                battle_d66a8_footprint(u.sprite_type, (int)u.facing & 3, &w, &h);
-                const int ux = (int)(int8_t)u.x, uy = (int)(int8_t)u.y;
-                if (xx >= ux && xx < ux + w && yy <= uy && yy > uy - h) return false;
-            }
+            const int occupant = battle_cc998_occupant(xx, yy, false);        // cmp dword_CC998[i], 0
+            if (occupant >= 0) return false;
             if (sel >= 0 && sel < kMobilityGridCount) {                       // cmp byte [EDD6C+attr], 0; jle
                 const size_t idx = (size_t)yy * map_w_ + (size_t)xx;
                 if (idx >= tile_attr_.size()) return false;
