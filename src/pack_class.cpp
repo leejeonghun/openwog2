@@ -551,8 +551,9 @@ L_restart:
                     do {
                         int s2, x2, y2;
                         if (!poll_mouse(s2, x2, y2)) return 0;
+                        mx = x2;
                         my = y2;
-                    } while (!should_exit_ && my >= yy && my <= yy + 0x11);
+                    } while (!should_exit_ && mx >= 4 && mx <= 0x18 && my >= yy && my <= yy + 0x11);
                     draw_all(ebp);
                 }
             }
@@ -573,36 +574,37 @@ L_restart:
             draw_all(ebp);
         }
         // ---- Scrollbar ----
-        else if (mx >= 0x12A && mx <= 0x139) {
-            const int top_y = 0x0F + (int)status_thumb_off_;
-            if (top_y <= my && !((long double)my > (long double)top_y + (long double)status_thumb_h_)) {
-                int grab = my;
-                for (;;) {
-                    draw_all(ebp);
-                    int s2, x2, y2;
-                    if (!poll_mouse(s2, x2, y2)) return 0;
-                    if (s2 != 1) break;
-                    if (grab < y2) {
-                        const int d = y2 - grab;
-                        status_thumb_off_ += (float)d;
-                        grab += d;
-                        const long double fv = (long double)status_thumb_off_ + (long double)status_thumb_h_;
-                        if (fv > 123.0L) {
-                            grab = (int)((long double)grab - ((long double)(float)fv - 123.0L));
-                            status_thumb_off_ = (float)(123.0L - (long double)status_thumb_h_);
-                        }
-                        status_top_ = status_scroll_to_top((int)status_thumb_off_, (int)status_thumb_h_, party_n());
-                        if (party_n() == 9 && status_top_ == 4) status_top_ = 3;
-                    } else if (grab > y2) {
-                        const int d = grab - y2;
-                        status_thumb_off_ -= (float)d;
-                        grab -= d;
-                        if (status_thumb_off_ < 0.0f) status_thumb_off_ = 0.0f;
-                        status_top_ = status_scroll_to_top((int)status_thumb_off_, (int)status_thumb_h_, party_n());
-                    }
-                }
+        // sub_2F789 loc_2FE12 -> loc_2FFFC: the thumb test covers x and y together, so a
+        // click on the bar outside the thumb falls through to the arrow/track tests below.
+        else if (mx >= 0x12A && mx <= 0x139 &&
+                 (0x0F + (int)status_thumb_off_) <= my &&
+                 !((long double)my > (long double)(0x0F + (int)status_thumb_off_) + (long double)status_thumb_h_)) {
+            int grab = my;
+            for (;;) {
                 draw_all(ebp);
+                int s2, x2, y2;
+                if (!poll_mouse(s2, x2, y2)) return 0;
+                if (s2 != 1) break;
+                if (grab < y2) {
+                    const int d = y2 - grab;
+                    status_thumb_off_ += (float)d;
+                    grab += d;
+                    const long double fv = (long double)status_thumb_off_ + (long double)status_thumb_h_;
+                    if (fv > 123.0L) {
+                        grab = (int)((long double)grab - ((long double)(float)fv - 123.0L));
+                        status_thumb_off_ = (float)(123.0L - (long double)status_thumb_h_);
+                    }
+                    status_top_ = status_scroll_to_top((int)status_thumb_off_, (int)status_thumb_h_, party_n());
+                    if (party_n() == 9 && status_top_ == 4) status_top_ = 3;
+                } else if (grab > y2) {
+                    const int d = grab - y2;
+                    status_thumb_off_ -= (float)d;
+                    grab -= d;
+                    if (status_thumb_off_ < 0.0f) status_thumb_off_ = 0.0f;
+                    status_top_ = status_scroll_to_top((int)status_thumb_off_, (int)status_thumb_h_, party_n());
+                }
             }
+            draw_all(ebp);
         }
         else if (in(0x12A, 0x139, 5, 0x0F)) {
             if (status_top_ > 0) status_top_--;
