@@ -6496,49 +6496,63 @@ void CombatII::battle_spell_status_29437(int caster_index, const std::vector<int
 }
 
 // sub_2A5BE: Thunder spread status sweep - applies the same status to hostile units outside
-// the F0648 list. The original walks the CC960[N*8] chain for passes N=1..4.
+// the F0648 list. The original walks dword_CC960[pass*8] for passes 1..4, in list order.
 // Frame aliasing confirms: [esp-3]>>24 = var_C (pass number), used for the 1201D gate and
-// the CC960 selector, and [esp+6]>>16 = var_4 (chance). The pass gate compares
-// `[0Bh]>>24 == [0Eh]` (raw army), so it is raw-based (raw 0 fails every pass).
-//   Port approximation: the CC960 chain is not modelled, so a single pass over the
-//   effective == N set is used (the 4 passes only cycle the list, so one union pass is
-//   equivalent, with one 28947 roll per unit). The caster is excluded - self-application has
-//   no chain membership to rest on. Duration: status 1/4 -> 7448C[edi] (= 74488[edi+2]);
-//   status 2 -> 7448A[edi] + 197AD.
+// the CC960 selector, and [esp+6]>>16 = var_4 (chance). The pass gate reads
+// `[0Bh]>>24`, which overlaps the effective army byte at [+0Eh], so it is effective-based.
+// Duration: status 1/4 -> word_7448C[edi] (= kAilDuration[edi+2]); status 2 ->
+// word_7448A[edi] (= kAilDuration[edi+1]) plus 197AD.
 void CombatII::battle_thunder_sweep_2a5be(int caster_index, const std::vector<int>& victims,
                                           int status, int chance, int edi) {
     if (caster_index < 0 || (size_t)caster_index >= units_.size()) return;
-    const auto& caster = units_[(size_t)caster_index];
-    if (!caster.active || caster.hp <= 0) return;
-    for (size_t i = 0; i < units_.size(); ++i) {
-        if ((int)i == caster_index) continue;
-        auto& tgt = units_[i];
-        if (!tgt.active || tgt.hp <= 0 || tgt.sprite_type >= 0x12C) continue;
-        if (tgt.combat_flags_15 & 0x80) continue;
-        bool listed = false;
-        for (int v : victims) if (v == (int)i) listed = true;
-        if (listed) continue; // F0648 members are handled by 29437
-        const int eff = battle_effective_army(tgt);
-        if (eff < 1 || eff > 4) continue;
-        if (!battle_armies_hostile(caster.army, eff)) continue; // 1201D (raw army, N) pass gate
-        const int roll_base = chance + ((int)caster.combat_level_2b - (int)tgt.combat_level_2b);
-        int c = roll_base < 10 ? 10 : (roll_base > 70 ? 70 : roll_base); // sub_28947 clamp
-        if (combat_rand(100) >= c) continue;
-        tgt.combat_flags_1e = (uint8_t)(tgt.combat_flags_1e & 0xF8);
-        tgt.combat_flags_1e = (uint8_t)(tgt.combat_flags_1e | (status & 0xFF));
-        if (status == 1 || status == 4) {
-            const int di = edi + 2 < 0 ? 0 : (edi + 2 > 4 ? 4 : edi + 2); // word_7448C[edi]
-            tgt.ail_1f = kAilDuration[di];
-        } else if (status == 2) {
-            const int di = edi < 0 ? 0 : (edi > 4 ? 4 : edi);
-            tgt.ail_1f = kAilDuration[di];
-            battle_ready_queue_.erase(std::remove(battle_ready_queue_.begin(),
-                                                  battle_ready_queue_.end(), (int)i),
-                                      battle_ready_queue_.end());
-            tgt.battle_gauge = 0;
+    if (!units_[(size_t)caster_index].active || units_[(size_t)caster_index].hp <= 0) return;
+    const int caster_eff = battle_effective_army(units_[(size_t)caster_index]);
+    // The four lists are CC960[1..4]. list_seq is the modeled [+7Bh] tail-insert order; the
+    // initial load shares seq 0, so units_ index breaks that tie just like the original list.
+    for (int pass = 1; pass <= 4; ++pass) {
+        // sub_1201D(effective army, pass), including byte_E518D's xor.
+        if (!battle_armies_hostile(caster_eff, pass, battle_hostility_inverted_)) continue;
+        std::vector<int> list;
+        list.reserve(units_.size());
+        for (size_t i = 0; i < units_.size(); ++i) {
+            const auto& u = units_[i];
+            if (!u.active || u.hp <= 0) continue;
+            if (battle_effective_army(u) != pass) continue;
+            list.push_back((int)i);
         }
-        if (battle_trace_)
-            fprintf(stderr, "COMBAT: sweep unit=%d st=%d dur=%u (sub_2A5BE)\n", tgt.id, status, (unsigned)tgt.ail_1f);
+        std::sort(list.begin(), list.end(), [&](int a, int b) {
+            const uint32_t sa = units_[(size_t)a].list_seq, sb = units_[(size_t)b].list_seq;
+            return sa != sb ? sa < sb : a < b;
+        });
+        for (int i : list) {
+            auto& tgt = units_[(size_t)i];
+            if (!tgt.active || tgt.hp <= 0) continue;
+            bool listed = false;
+            for (int v : victims) if (v == i) { listed = true; break; }
+            if (listed) continue;                 // F0648 members are handled by 29437
+            if (tgt.combat_flags_15 & 0x80) continue;
+            if (tgt.sprite_type >= 0x12C) continue;
+            const int roll_base = chance + ((int)units_[(size_t)caster_index].combat_level_2b -
+                                            (int)tgt.combat_level_2b);
+            int c = roll_base < 10 ? 10 : (roll_base > 70 ? 70 : roll_base); // sub_28947 clamp
+            if (combat_rand(100) >= c) continue;
+            tgt.combat_flags_1e = (uint8_t)(tgt.combat_flags_1e & 0xF8);
+            tgt.combat_flags_1e = (uint8_t)(tgt.combat_flags_1e | (status & 0xFF));
+            if (status == 1 || status == 4) {
+                const int di = edi + 2 < 0 ? 0 : (edi + 2 > 4 ? 4 : edi + 2); // word_7448C[edi]
+                tgt.ail_1f = kAilDuration[di];
+            } else if (status == 2) {
+                const int di = edi + 1 < 0 ? 0 : (edi + 1 > 4 ? 4 : edi + 1); // word_7448A[edi]
+                tgt.ail_1f = kAilDuration[di];
+                battle_ready_queue_.erase(std::remove(battle_ready_queue_.begin(),
+                                                      battle_ready_queue_.end(), i),
+                                          battle_ready_queue_.end());
+                tgt.battle_gauge = 0;
+            }
+            if (battle_trace_)
+                fprintf(stderr, "COMBAT: sweep pass=%d unit=%d st=%d dur=%u (sub_2A5BE)\n",
+                        pass, tgt.id, status, (unsigned)tgt.ail_1f);
+        }
     }
 }
 

@@ -18,6 +18,29 @@
 // insertion order (initial load = 0, later tail inserts > 0).
 int CombatII::battle_ai_cc960_member(int selector, int id) const {
     if (selector < 0 || selector > 6) return -1;
+    // Selector 6 is dword_CC990, a separate roster list. Its records can be off-map
+    // party/deploy entries, so the first matching roster record decides membership; the
+    // live unit with that id supplies the port's units_ index when one exists. Without a
+    // live counterpart there is no index the callers can use.
+    if (selector == 6) {
+        for (const auto& r : battle_roster_cc990_) {
+            if (r.id != id) continue;
+            int best = -1;
+            uint64_t best_key = ~0ull;
+            for (size_t i = 0; i < units_.size(); ++i) {
+                const CombatUnitPlacement& c = units_[i];
+                if (!c.active || c.id != id) continue;
+                const uint64_t key = ((uint64_t)c.list_seq << 32) | (uint64_t)i;
+                if (best < 0 || key < best_key) {
+                    best = (int)i;
+                    best_key = key;
+                }
+            }
+            return best;
+        }
+        // A live CC990 member that is not mirrored in the roster list is still reachable
+        // through its units_ index; keep the old lookup as the fallback for that case.
+    }
     int best = -1;
     uint64_t best_key = ~0ull;
     for (size_t i = 0; i < units_.size(); ++i) {
@@ -146,12 +169,12 @@ bool CombatII::battle_ai_candidate_tile_legal_1x1(int x, int y, int unit_index,
     return true;
 }
 
-// Handles only the home-reference path of sub_3E251 (dasm 61669..61804).
-// Requires no [+73h] target, [+71h]==FFh, a valid home and a radius-9 diamond.
-// sub_1AC08/sub_1AC59 walk the radius-9 Manhattan diamond (181 cells) in y-then-x
-// order; sub_1AD2E yields the horizontal edge distance ad2e=min(col,width-1-col).
-// score = dist + 18 - 2*ad2e using the sub_49ADF Manhattan distance; lowest wins,
-// first on ties. Legality uses only the 1x1 approximation above; no move is composed.
+// sub_3E251 (dasm 61669..61804) through the shared resolver: [+73h] target first,
+// then the [+71h] watch-list lookup, and finally the [+6Fh]/[+70h] home reference.
+// sub_3D7B2 is tried first for a target/watch unit; when it returns 7FFFh the radius-9
+// diamond scan runs. The original then either uses the 3D7B2 destination directly or the
+// best radius-9 candidate, and falls back to the reference cell when the diamond is empty.
+// This helper exposes the score/ad2e values used by the diagnostic/fallback caller.
 bool CombatII::battle_ai_no_target_home_candidate(int unit_index, int& out_x, int& out_y,
                                                   int& out_score, int& out_ad2e, int& out_dist,
                                                   const char** reject_reason) const {
@@ -163,25 +186,6 @@ bool CombatII::battle_ai_no_target_home_candidate(int unit_index, int& out_x, in
     const CombatUnitPlacement& u = units_[(size_t)unit_index];
     if (!u.active) {
         if (reject_reason) *reject_reason = "inactive unit";
-        return false;
-    }
-    if (u.ai_target_unit >= 0 || u.ai_target_marker) {
-        if (reject_reason) *reject_reason = "[+73h] target present (target/watch path unported)";
-        return false;
-    }
-    if (u.ai_watch_sel != 0xFF) {
-        if (reject_reason) *reject_reason = "[+71h] watch present (watch path unported)";
-        return false;
-    }
-    if (u.ai_home_x == 0xFF && u.ai_home_y == 0xFF) {
-        if (reject_reason) *reject_reason = "home (FFh,FFh) has no reference";
-        return false;
-    }
-    // Home (FFh,0), seen for ids 4/3 of the 1-5 samples, also differs from the original
-    // home branch and is skipped. loc_3E1EE returns state 0 on home-x==FFh while sub_3E251
-    // still writes home coordinates, but (FFh,*) is off-map so no diamond can exist.
-    if (u.ai_home_x == 0xFF) {
-        if (reject_reason) *reject_reason = "home-x FFh (no-target home reference unmodeled)";
         return false;
     }
     const int mobility = battle_ai_mobility_selector(u);
@@ -201,39 +205,28 @@ bool CombatII::battle_ai_no_target_home_candidate(int unit_index, int& out_x, in
         }
         return false;
     }
-    const int home_x = (int)u.ai_home_x;
-    const int home_y = (int)u.ai_home_y;
-    const int actor_x = (int)(int8_t)u.x;
-    const int actor_y = (int)(int8_t)u.y;
-    static constexpr int kRadius = 9; // sub_3E251 `mov ebx,9`
-    int best_score = 0x7FFF;
-    int best_x = -1, best_y = -1, best_ad2e = 0, best_dist = 0;
-    bool found = false;
-    for (int dy = -kRadius; dy <= kRadius; ++dy) {
-        const int y = home_y + dy;
-        const int half = kRadius - (dy < 0 ? -dy : dy);
-        const int width = half * 2 + 1;
-        for (int col = 0; col < width; ++col) {
-            const int x = home_x - half + col;
-            const int ad2e = col < width - 1 - col ? col : width - 1 - col;
-            // sub_3E251 does not clear the actor footprint, so the actor's own tile is
-            // blocked as well; legal_1x1 allows self, hence the explicit skip.
-            if (x == actor_x && y == actor_y) continue;
-            if (!battle_ai_candidate_tile_legal_1x1(x, y, unit_index, mobility)) continue;
-            const int dist = std::abs(actor_x - x) + std::abs(actor_y - y); // sub_49ADF
-            const int score = dist + 0x12 - ad2e * 2;
-            if (score < best_score) {
-                best_score = score;
-                best_x = x; best_y = y; best_ad2e = ad2e; best_dist = dist;
-                found = true;
-            }
-        }
-    }
-    if (!found) {
-        if (reject_reason) *reject_reason = "no legal 1x1 candidate in radius-9 diamond";
+    int ref_x = -1, ref_y = -1;
+    if (!battle_ai_3e251_dest(unit_index, out_x, out_y, ref_x, ref_y)) {
+        if (reject_reason) *reject_reason = "sub_3E251 reference unavailable";
         return false;
     }
-    out_x = best_x; out_y = best_y; out_score = best_score; out_ad2e = best_ad2e; out_dist = best_dist;
+    const int actor_x = (int)(int8_t)u.x;
+    const int actor_y = (int)(int8_t)u.y;
+    // sub_3E251 returns the reference cell when the radius-9 diamond is empty. That is a
+    // valid tail destination in the original, but not a legal move target here.
+    if ((out_x == actor_x && out_y == actor_y) ||
+        !battle_ai_candidate_tile_legal_1x1(out_x, out_y, unit_index, mobility)) {
+        if (reject_reason) *reject_reason = "no legal 3D7B2/diamond candidate";
+        return false;
+    }
+    out_dist = std::abs(actor_x - out_x) + std::abs(actor_y - out_y);
+    const int half = 9 - std::abs(out_y - ref_y);
+    const int width = half * 2 + 1;
+    const int col = out_x - (ref_x - half);
+    out_ad2e = (half >= 0 && col >= 0 && col < width)
+                   ? std::min(col, width - 1 - col)
+                   : 0;
+    out_score = out_dist + 0x12 - out_ad2e * 2;
     return true;
 }
 
@@ -1661,14 +1654,13 @@ bool CombatII::battle_ai_truncate_to_move_budget(const std::vector<std::pair<int
 // Budget-radius hostiles use the decision diffusion (sub_14032/sub_143F3, budget
 // var_18*4) and the WC1 sub_3CA3C inner arm (facing order, bucket, E8F46 max,
 // sub_165C2). Radius-30 hostiles use the sub_3DF3B outer arm plus WC1 sub_3D7B2.
-// Paths come from sub_15523 greedy ascent truncated by sub_14FA4, with BFS only as a
-// fallback when the route fails.
+// Paths come from sub_15523 greedy ascent truncated by sub_14FA4; no BFS fallback is used
+// on the primary path.
 void CombatII::battle_ai_wc1_pursuit(int unit_index, int watch_state) {
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return;
     const int actor_id = units_[(size_t)unit_index].id;
     const int actor_x = (int)(int8_t)units_[(size_t)unit_index].x;
     const int actor_y = (int)(int8_t)units_[(size_t)unit_index].y;
-    const int mobility = battle_ai_mobility_selector(units_[(size_t)unit_index]);
     // var_18 = trunc((shared_gauge - 10) / 10); the 0x37 lower bound keeps it >= 4.
     int budget = ((int)battle_ai_gauge_baseline_ - battle_ai_var4_) / 10;
     if (budget < 0) budget = 0;
@@ -1692,7 +1684,7 @@ void CombatII::battle_ai_wc1_pursuit(int unit_index, int watch_state) {
             battle_ai_3ca3c_wc1_best(unit_index, diffusion, budget, hx, hy, dx, dy, score,
                                      attack_facing)) {
             if (battle_trace_)
-                fprintf(stderr, "COMBAT: AI weapon_class=1 unit=%d WC1 budget hostile=(%d,%d) dest=(%d,%d) score=%d facing=%d (sub_3E65E + WC1 sub_3CA3C hostile-bucket/max/165C2/(f+2)%%4/+4; restore/tactics unported)\n",
+                fprintf(stderr, "COMBAT: AI weapon_class=1 unit=%d WC1 budget hostile=(%d,%d) dest=(%d,%d) score=%d facing=%d (sub_3E65E + WC1 sub_3CA3C hostile-bucket/max/165C2/(f+2)%%4/+4; 15523/14FA4 route)\n",
                         actor_id, hx, hy, dx, dy, score, attack_facing);
             // sub_40295 loc_407BF tail: walk, sub_5401B/sub_17310, settle sub_3C993, sub_167C9.
             if (dx == actor_x && dy == actor_y && attack_facing == (int)units_[(size_t)unit_index].facing) {
@@ -3641,10 +3633,8 @@ bool CombatII::battle_ai_step(int unit_index) {
         // ends the turn). Every sub_1D124 arm is ported except wc0xA/0x14+, which do
         // nothing in the original either.
         // The pre-table early selection for k=3 (sub_3F184 / sub_3EBB4 with
-        // r = var_4+var_8 and edi = 2) and the sub_3E18B state path are not ported, so
-        // only the table call is wired: sub_3E18B reports <= 0 in the R1-D measurement, so
-        // the r14 table call dominates the final choice. With var_4 == 0 (guard kind 0)
-        // the original skips that early block, so its absence matches the original.
+        // r = var_4+var_8 and edi = 2) and the sub_3E18B state path are wired below; the
+        // r14 table call remains the final choice when those produce no di=2 target.
         // wc5/0xF still take the sub_3EF12 (push 3/1) retreat selection first (4106B..410AC).
         // The loc_411A0 di decision after selection is ported: di = -2 only when
         // dest == current cell and af == [+63h], otherwise di = 1. di == 1 runs the
@@ -3675,6 +3665,7 @@ bool CombatII::battle_ai_step(int unit_index) {
         int sel_dx = -1, sel_dy = -1, sel_af = -1; // dest/af chosen this iteration
         bool sel_is_chain = false; // true for a sub_3E65E/sub_3EADD/sub_3ED51 pick (loc_411A0)
         bool sel_di2 = false;      // sub_3F184/sub_3EBB4 early or sub_3F247 state path (di = 2)
+        bool sel_stay = false;     // loc_412FE/413B4: destination is the current cell (di = -2)
         const unsigned k6c = ready.ai_decision_state; // [+6Ch]
         if (k6c == 6 && battle_trace_) {
             fprintf(stderr, "COMBAT: AI %s unit=%d +6Ch==6 sub_3EE2B table arm (1D124 wc arms)\n",
@@ -3687,6 +3678,7 @@ bool CombatII::battle_ai_step(int unit_index) {
             sel_dx = sel_dy = sel_af = -1;
             sel_is_chain = false;
             sel_di2 = false;
+            sel_stay = false;
             table_selected = false;
             table_metric = 0x7FFE;
             if (unit_index < 0 || (size_t)unit_index >= units_.size() ||
@@ -3753,23 +3745,9 @@ bool CombatII::battle_ai_step(int unit_index) {
                 sel_is_chain = true;
                 return hostile;
             }
-            // Fallback: instead of the original moved/40BFA failure path after ebp == 0,
-            // take the nearest unit by Manhattan distance (unreachable on maps 1-5).
-            const auto& actor = units_[(size_t)unit_index];
-            int candidate = -1, best_distance = std::numeric_limits<int>::max();
-            for (size_t i = 0; i < units_.size(); ++i) {
-                const auto& other = units_[i];
-                if (!other.active || other.hp <= 0 ||
-                    !battle_armies_hostile(battle_effective_army(actor), battle_effective_army(other),
-                                           battle_hostility_inverted_)) continue;
-                const int distance = std::abs(other.x - actor.x) + std::abs(other.y - actor.y);
-                const int ray_range = std::max(std::abs(other.x - actor.x), std::abs(other.y - actor.y));
-                if (distance <= 0 || ray_range > scan_radius || distance >= best_distance)
-                    continue;
-                candidate = (int)i;
-                best_distance = distance;
-            }
-            return candidate;
+            // ebp == 0 is the original failure path (loc_411D8). Do not invent a nearest
+            // unit here: the caller charges/ends the turn exactly as the ASM does.
+            return -1;
         };
 
         // sub_40DFD attack loop (40FB9 + 414B7..414E1 + sub_40BFA): one dispatch may attack
@@ -3786,6 +3764,9 @@ bool CombatII::battle_ai_step(int unit_index) {
         // [+6D] == 0.
         int ranged_attacks = 0;
         for (int attack_iter = 0; attack_iter < 10; ++attack_iter) {
+            // var_18 from 40EC4 stays fixed across this 40BFA attack loop; the 41265
+            // fallback must use the same Q*4 diffusion budget, not a post-attack value.
+            const int q_iter = (attack_gauge > 10) ? (attack_gauge - 10) / 10 : 0;
             // Units_ can be reallocated during an attack, so look it up again each iteration.
             if (unit_index < 0 || (size_t)unit_index >= units_.size() ||
                 !units_[(size_t)unit_index].active || units_[(size_t)unit_index].hp <= 0)
@@ -3915,21 +3896,54 @@ bool CombatII::battle_ai_step(int unit_index) {
                         }
                     }
                     if (target < 0 && !state_warp) {
-                        // loc_411D8: when the table selection fails (ebp == 0, di == -1) and
-                        // [+6Ch] >= 5, end through 4121E..41504 (sub_3F415). Otherwise, with
-                        // k < 5, wc == 5, gauge == [+54h] and [+57h] < 0x1F4, charge
-                        // [+57h] += 0x14 and end the turn at 4150D.
-                        auto& u8 = units_[(size_t)unit_index];
-                        if (k6c < 5 && wc == 5 && u8.combat_acc57 < 0x1F4 &&
-                            (int)u8.combat_value_54 == attack_gauge) {
-                            u8.combat_acc57 = (uint16_t)(u8.combat_acc57 + 0x14);
-                            if (battle_trace_)
-                                fprintf(stderr, "COMBAT: warning: AI %s unit=%d selection failed: loc_411D8 [+57h]+=20 (gauge=%d [+54h]=%d acc=%u), turn ends (no sub_3F415)\n",
-                                        ai_tag, u8.id, attack_gauge, (int)u8.combat_value_54,
-                                        (unsigned)u8.combat_acc57);
-                            return true;
+                        // 41265: the second sub_3E18B call. State > 0 runs sub_3E251;
+                        // state 0 runs sub_3DF3B(radius 30) unless [+6Ch] == 6, and state
+                        // -1 goes straight to loc_41504. The fallback's destination is
+                        // routed through 1499C/15342/15523/14FA4 just like the table path.
+                        bool fallback_dest = false;
+                        int fb_x = -1, fb_y = -1, fb_af = -1, fb_hx = -1, fb_hy = -1;
+                        int fb_target = -1;
+                        std::vector<int> fallback_grid =
+                            battle_ai_build_diffusion(unit_index, q_iter * 4);
+                        if (watch_state > 0) {
+                            int rx = -1, ry = -1;
+                            if (!fallback_grid.empty() &&
+                                battle_ai_3e251_dest(unit_index, fb_x, fb_y, rx, ry,
+                                                     &fallback_grid))
+                                fallback_dest = true;
+                            fb_target = battle_ai_watch_unit(unit_index);
+                        } else if (watch_state == 0 && k6c != 6 && !fallback_grid.empty()) {
+                            if (battle_ai_3df3b_dest(unit_index, 0x1E, fb_x, fb_y,
+                                                     fb_hx, fb_hy, &fallback_grid)) {
+                                fallback_dest = true;
+                                fb_target = battle_ai_hostile_unit_at(fb_hx, fb_hy, unit_index);
+                            }
                         }
-                        break;
+                        if (fallback_dest) {
+                            const int ux = (int)(int8_t)units_[(size_t)unit_index].x;
+                            const int uy = (int)(int8_t)units_[(size_t)unit_index].y;
+                            sel_dx = fb_x; sel_dy = fb_y; sel_af = fb_af;
+                            sel_is_chain = true;
+                            sel_di2 = false;
+                            sel_stay = (fb_x == ux && fb_y == uy);
+                            target = fb_target;
+                        } else {
+                            // loc_411D8: when the table selection fails (ebp == 0, di == -1)
+                            // and [+6Ch] >= 5, end through 4121E..41504 (sub_3F415).
+                            // Otherwise, with k < 5, wc == 5, gauge == [+54h] and
+                            // [+57h] < 0x1F4, charge [+57h] += 0x14 and end at 4150D.
+                            auto& u8 = units_[(size_t)unit_index];
+                            if (k6c < 5 && wc == 5 && u8.combat_acc57 < 0x1F4 &&
+                                (int)u8.combat_value_54 == attack_gauge) {
+                                u8.combat_acc57 = (uint16_t)(u8.combat_acc57 + 0x14);
+                                if (battle_trace_)
+                                    fprintf(stderr, "COMBAT: warning: AI %s unit=%d selection failed: loc_411D8 [+57h]+=20 (gauge=%d [+54h]=%d acc=%u), turn ends (no sub_3F415)\n",
+                                            ai_tag, u8.id, attack_gauge, (int)u8.combat_value_54,
+                                            (unsigned)u8.combat_acc57);
+                                return true;
+                            }
+                            break;
+                        }
                     }
                 }
             }
@@ -3942,15 +3956,17 @@ bool CombatII::battle_ai_step(int unit_index) {
             // fires in place. The sub_3EF12 retreat is the exception: the original forces
             // di = 1 there (410B6). The sub_3F184/sub_3EBB4 early and sub_3F247 state paths
             // force di = 2.
-            const int di = sel_di2
-                               ? 2
-                               : flee_move
-                                     ? 1
-                                     : (!sel_is_chain || (sel_dx == actor_x && sel_dy == actor_y &&
-                                                          sel_af >= 0 && sel_af < 4 &&
-                                                          sel_af == actor_facing))
-                                           ? -2
-                                           : 1;
+            const int di = sel_stay
+                               ? -2
+                               : sel_di2
+                                     ? 2
+                                     : flee_move
+                                           ? 1
+                                           : (!sel_is_chain || (sel_dx == actor_x && sel_dy == actor_y &&
+                                                                sel_af >= 0 && sel_af < 4 &&
+                                                                sel_af == actor_facing))
+                                                 ? -2
+                                                 : 1;
             if (battle_trace_ && di == 2)
                 fprintf(stderr, "COMBAT: AI %s unit=%d di=2 dest=(%d,%d) af=%d state_warp=%d (sub_411A0/early)\n",
                         ai_tag, attacker_id, sel_dx, sel_dy, sel_af, state_warp ? 1 : 0);
@@ -4026,17 +4042,26 @@ bool CombatII::battle_ai_step(int unit_index) {
                             fprintf(stderr, "COMBAT: AI %s unit=%d zero-step facing to %d (sub_15523 returns 2; sub_1620A writes passed facing)\n",
                                     ai_tag, attacker_id, sel_af);
                     } else {
-                        std::vector<std::pair<int,int>> steps;
                         const int mobility =
                             battle_ai_mobility_selector(units_[(size_t)unit_index]);
-                        if (!battle_ai_find_legal_path(unit_index, mobility, sel_dx, sel_dy,
-                                                       steps))
-                            break; // fail closed (the DOS sub_15523 fallthrough never fires on maps 1-5)
+                        // loc_41308: 14300(0xD2) -> 1419C -> 1499C -> (fallback 15342) ->
+                        // 15523 -> 14FA4. Use the target cell as the 14FA4 reference; the
+                        // selected destination remains the fallback when the route retargets.
+                        int route_x = sel_dx, route_y = sel_dy, route_facing = sel_af;
+                        int ref_x = route_x, ref_y = route_y;
+                        if (target >= 0 && (size_t)target < units_.size()) {
+                            ref_x = (int)(int8_t)units_[(size_t)target].x;
+                            ref_y = (int)(int8_t)units_[(size_t)target].y;
+                        }
                         std::vector<std::pair<int,int>> full_path;
-                        full_path.reserve(steps.size() + 1);
-                        full_path.emplace_back(actor_x, actor_y);
-                        full_path.insert(full_path.end(), steps.begin(), steps.end());
-                        if (!battle_ai_play_walk(unit_index, full_path, sel_af)) break;
+                        if (!battle_ai_route_walk_path(unit_index, mobility, var_18_now * 4,
+                                                       route_x, route_y, true, ref_x, ref_y,
+                                                       route_facing, full_path, nullptr, false))
+                            break; // 13B37 -> loc_412FE di = -2
+                        if (route_facing >= 0) sel_af = route_facing;
+                        if (!battle_ai_play_walk(unit_index, full_path,
+                                                 route_facing >= 0 ? route_facing : sel_af))
+                            break;
                         if (unit_index < 0 || (size_t)unit_index >= units_.size() ||
                             !units_[(size_t)unit_index].active ||
                             units_[(size_t)unit_index].id != attacker_id)
@@ -4171,190 +4196,10 @@ bool CombatII::battle_ai_step(int unit_index) {
             battle_ai_turn_end_3f415(unit_index, 0); // loc_41504: sub_3F415(edx = 0) after the attack loop
             return true;
         }
-        // With zero shots because there was no target, fall through to the approach. Zero
-        // shots from the gauge gate end here instead, since the original cannot prepare a
-        // move either (it needs gauge > 0x28).
-        if (unit_index < 0 || (size_t)unit_index >= units_.size()) return true;
+        // Zero shots with no remaining target end through loc_41504. The former
+        // "approach the nearest hostile" approximation was replaced by the 41265
+        // sub_3E251/sub_3DF3B fallback above.
         if (attack_gauge < 0x28 || units_[(size_t)unit_index].ai_field_6d == 4) return true;
-        // The approach below (warp or walk) continues with the same attack_gauge/attack_var_c.
-
-        // No legal shot: close to the nearest hostile. The original uses sub_3E65E's path result;
-        // here choose an unoccupied in-bounds tile beside that hostile, then use its verified
-        // <=5-tile Warp branch (sub_40DFD -> sub_3BF00) when it is close enough.
-        int nearest = -1, nearest_distance = std::numeric_limits<int>::max();
-        {
-            const auto& actor = units_[(size_t)unit_index];
-            for (size_t i = 0; i < units_.size(); ++i) {
-                const auto& other = units_[i];
-                if (!other.active || other.hp <= 0 ||
-                    !battle_armies_hostile(battle_effective_army(actor), battle_effective_army(other),
-                                           battle_hostility_inverted_)) continue;
-                const int distance = std::abs(other.x - actor.x) + std::abs(other.y - actor.y);
-                if (distance < nearest_distance) { nearest = (int)i; nearest_distance = distance; }
-            }
-        }
-        if (nearest < 0) {
-            if (battle_trace_) fprintf(stderr, "COMBAT: AI %s unit=%d has no living hostile target\n", ai_tag, ready.id);
-            // No walk or Warp occurred, so the original has no sub_5401B movement-trigger call
-            // here.
-            return true;
-        }
-        if (nearest_distance == 1) {
-            const int8_t facing = walk_facing_toward(units_[(size_t)unit_index].x,
-                                                     units_[(size_t)unit_index].y,
-                                                     units_[(size_t)nearest].x,
-                                                     units_[(size_t)nearest].y);
-            if (facing >= 0) units_[(size_t)unit_index].facing = facing;
-            // Attack through the same gauge loop as the sub_40DFD di == 2 assault. Being
-            // adjacent costs nothing extra; the sub_3BF00 cost only applies to the warp arm.
-            for (int attack_iter = 0; attack_iter < 10; ++attack_iter) {
-                if (unit_index < 0 || (size_t)unit_index >= units_.size() ||
-                    !units_[(size_t)unit_index].active || units_[(size_t)unit_index].hp <= 0)
-                    return true;
-                if (attack_gauge < 0x28 || units_[(size_t)unit_index].ai_field_6d == 4) break;
-                // Re-target: when the current one dies, move to the next adjacent hostile.
-                int adj = -1;
-                {
-                    const auto& actor = units_[(size_t)unit_index];
-                    for (size_t i = 0; i < units_.size(); ++i) {
-                        const auto& other = units_[i];
-                        if (!other.active || other.hp <= 0 ||
-                            !battle_armies_hostile(battle_effective_army(actor),
-                                                   battle_effective_army(other),
-                                                   battle_hostility_inverted_)) continue;
-                        if (std::abs(other.x - actor.x) + std::abs(other.y - actor.y) != 1) continue;
-                        adj = (int)i;
-                        break;
-                    }
-                }
-                if (adj < 0) break;
-                if (!battle_resolve_attack(unit_index, adj)) break;
-                if (should_exit_) return true;
-                if (unit_index < 0 || (size_t)unit_index >= units_.size() ||
-                    !units_[(size_t)unit_index].active || units_[(size_t)unit_index].hp <= 0)
-                    return true;
-                attack_gauge -= 0x28;
-                if (attack_gauge < 0) attack_gauge = 0;
-                battle_ai_gauge_baseline_ = (int16_t)attack_gauge;
-                if (attack_gauge < attack_var_c) break;
-                attack_var_c += 4;
-            }
-            battle_ai_turn_end_3f415(unit_index, 0);
-            return true;
-        }
-        const int actor_x = units_[(size_t)unit_index].x;
-        const int actor_y = units_[(size_t)unit_index].y;
-        const int enemy_x = units_[(size_t)nearest].x;
-        const int enemy_y = units_[(size_t)nearest].y;
-        const int actor_id = units_[(size_t)unit_index].id;
-        const int enemy_id = units_[(size_t)nearest].id;
-        static constexpr int kNeighborX[4] = { 0, -1, 1, 0 };
-        static constexpr int kNeighborY[4] = { -1, 0, 0, 1 };
-        int destination_x = -1, destination_y = -1;
-        int destination_distance = std::numeric_limits<int>::max();
-        for (int dir = 0; dir < 4; ++dir) {
-            const int nx = enemy_x + kNeighborX[dir], ny = enemy_y + kNeighborY[dir];
-            if (nx < 0 || ny < 0 || nx >= (int)map_w_ || ny >= (int)map_h_ ||
-                (nx == actor_x && ny == actor_y)) continue;
-            const int occupant = battle_unit_index_at(nx, ny);
-            if (occupant >= 0 && occupant != unit_index) continue;
-            const int distance = std::abs(nx - actor_x) + std::abs(ny - actor_y);
-            if (distance < destination_distance) {
-                destination_x = nx;
-                destination_y = ny;
-                destination_distance = distance;
-            }
-        }
-        if (destination_x < 0) {
-            if (battle_trace_)
-                fprintf(stderr, "COMBAT: warning: AI %s unit=%d cannot reach a free tile beside target=%d\n",
-                        ai_tag, actor_id, enemy_id);
-            return true;
-        }
-
-        if (destination_distance <= 5) {
-            // sub_40DFD: <= var_4 (5) selects sub_3BF00. Its Warp arm skips sub_5401B.
-            // The warp arm also spends 40 through sub_3C993(edx = 0x28), so subtract it before the
-            // loop.
-            if (!battle_warp_unit(unit_index, destination_x, destination_y)) return true;
-            attack_gauge -= 0x28;
-            if (attack_gauge < 0) attack_gauge = 0;
-            battle_ai_gauge_baseline_ = (int16_t)attack_gauge;
-            for (int attack_iter = 0; attack_iter < 10; ++attack_iter) {
-                if (unit_index < 0 || (size_t)unit_index >= units_.size() ||
-                    !units_[(size_t)unit_index].active || units_[(size_t)unit_index].hp <= 0)
-                    return true;
-                if (attack_gauge < 0x28 || units_[(size_t)unit_index].ai_field_6d == 4) break;
-                int target = find_ranged_target();
-                if (target < 0) break;
-                if (battle_trace_)
-                    fprintf(stderr, "COMBAT: AI %s unit=%d attacks after Warp! target=%d (iter=%d gauge=%d var_C=%d)\n",
-                            ai_tag, units_[(size_t)unit_index].id, units_[(size_t)target].id,
-                            attack_iter, attack_gauge, attack_var_c);
-                if (!battle_resolve_attack(unit_index, target, true)) break;
-                if (should_exit_) return true;
-                if (unit_index < 0 || (size_t)unit_index >= units_.size() ||
-                    !units_[(size_t)unit_index].active || units_[(size_t)unit_index].hp <= 0)
-                    return true;
-                attack_gauge -= 0x28;
-                if (attack_gauge < 0) attack_gauge = 0;
-                battle_ai_gauge_baseline_ = (int16_t)attack_gauge;
-                if (attack_gauge < attack_var_c) break;
-                attack_var_c += 4;
-            }
-            battle_ai_turn_end_3f415(unit_index, 0);
-            return true;
-        }
-
-        // Beyond the verified Warp cutoff, approximate sub_1620A with one clear cardinal step.
-        // This is the original walk branch, so run its area/region movement triggers.
-        static constexpr int kStepX[4] = { 1, -1, 0, 0 };
-        static constexpr int kStepY[4] = { 0, 0, 1, -1 };
-        int step_x = actor_x, step_y = actor_y;
-        int step_distance = destination_distance;
-        for (int dir = 0; dir < 4; ++dir) {
-            const int nx = actor_x + kStepX[dir], ny = actor_y + kStepY[dir];
-            if (nx < 0 || ny < 0 || nx >= (int)map_w_ || ny >= (int)map_h_ ||
-                battle_unit_index_at(nx, ny) >= 0) continue;
-            const int distance = std::abs(destination_x - nx) + std::abs(destination_y - ny);
-            if (distance < step_distance) { step_x = nx; step_y = ny; step_distance = distance; }
-        }
-        if (step_x == actor_x && step_y == actor_y) return true;
-        units_[(size_t)unit_index].facing = walk_facing_toward(actor_x, actor_y, step_x, step_y);
-        units_[(size_t)unit_index].x = step_x;
-        units_[(size_t)unit_index].y = step_y;
-        battle_wc1_occupancy_preserve_or_close("AI unit movement");
-        if (battle_trace_)
-            fprintf(stderr, "COMBAT: AI %s unit=%d walks to=(%d,%d) toward target=%d\n",
-                    ai_tag, actor_id, step_x, step_y, enemy_id);
-        battle_after_move(unit_index);
-        if (should_exit_ || unit_index < 0 || (size_t)unit_index >= units_.size() ||
-            !units_[(size_t)unit_index].active || units_[(size_t)unit_index].id != actor_id) return true;
-        // The walk cost (the sub_3C993 settlement) is not ported here, so nothing is
-        // subtracted; only the attack loop spends gauge. Map 1-5 Dark Assassin always has a
-        // target in range, so it never takes this walk branch.
-        for (int attack_iter = 0; attack_iter < 10; ++attack_iter) {
-            if (unit_index < 0 || (size_t)unit_index >= units_.size() ||
-                !units_[(size_t)unit_index].active || units_[(size_t)unit_index].hp <= 0)
-                return true;
-            if (attack_gauge < 0x28 || units_[(size_t)unit_index].ai_field_6d == 4) break;
-            int target = find_ranged_target();
-            if (target < 0) break;
-            if (battle_trace_)
-                fprintf(stderr, "COMBAT: AI %s unit=%d attacks after walk target=%d (iter=%d gauge=%d var_C=%d)\n",
-                        ai_tag, units_[(size_t)unit_index].id, units_[(size_t)target].id,
-                        attack_iter, attack_gauge, attack_var_c);
-            if (!battle_resolve_attack(unit_index, target, true)) break;
-            if (should_exit_) return true;
-            if (unit_index < 0 || (size_t)unit_index >= units_.size() ||
-                !units_[(size_t)unit_index].active || units_[(size_t)unit_index].hp <= 0)
-                return true;
-            attack_gauge -= 0x28;
-            if (attack_gauge < 0) attack_gauge = 0;
-            battle_ai_gauge_baseline_ = (int16_t)attack_gauge;
-            if (attack_gauge < attack_var_c) break;
-            attack_var_c += 4;
-        }
         battle_ai_turn_end_3f415(unit_index, 0);
         return true;
     }
@@ -4416,10 +4261,9 @@ bool CombatII::battle_ai_40295_move(int unit_index, int wc) {
             }
             const int mobility = battle_ai_mobility_selector(ready);
             if (watch_state > 0) {
-            // sub_3E251 home path: the candidate is always computed and only logged under
-            // trace. The shortest legal 4-direction path to it is walked in one turn. The
-            // diffusion tie-break and tactic evaluation are not ported, so the destination is
-            // verified but the intermediate path is approximate.
+            // sub_3E251 fallback path: the candidate is always computed and only logged
+            // under trace when the primary body is withheld. Its target/watch/home resolver
+            // and 165C2/3D7B2 route are the same as the primary body.
             int cand_x = -1, cand_y = -1, cand_score = 0, cand_ad2e = 0, cand_dist = 0;
             const char* cand_reject = nullptr;
             const bool has_cand = battle_ai_no_target_home_candidate(unit_index, cand_x, cand_y,

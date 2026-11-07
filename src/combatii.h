@@ -1246,7 +1246,7 @@ private:
     int battle_ai_14fa4_route(int unit_index, int ref_x, int ref_y, int budget,
                               const std::vector<int>& budget_grid,
                               std::vector<std::pair<int,int>>& route,
-                              int* out_cost = nullptr) const;
+                              int* out_cost = nullptr, bool trace = true) const;
     // Port of the sub_40295 loc_406DB tail (14300/1419C/1499C/15342/15523/14FA4).
     // use_wave=true checks destination reachability through the EDD72=0xD2 wave (falling back
     // to 15342), builds a 15523 route on the D2 diffusion and trims it with 14FA4. false builds
@@ -1258,7 +1258,7 @@ private:
                                    int& dest_x, int& dest_y, bool use_wave,
                                    int ref_x, int ref_y, int& out_facing,
                                    std::vector<std::pair<int,int>>& out_walk,
-                                   int* out_cost = nullptr) const;
+                                   int* out_cost = nullptr, bool trace = true) const;
     // Port of the WC1 sub_3CA3C best-score search. For every hostile tile inside the budget
     // diamond (y-x order) it scans the four adjacent cells in facing order 0,1,2,3 (S,W,N,E).
     // The inner loop takes, per hostile, the strict maximum (first wins ties) among cells that
@@ -1519,8 +1519,8 @@ private:
     // sub_3E5AB: approach destination toward the watched target (3CA3C/3D3E5). 1 = success.
     bool battle_ai_3e5ab(int unit_index, int budget, int& out_dx, int& out_dy,
                          int& out_facing) const;
-    // sub_3E251 approximation: among radius-9 candidates around the watched target or home, the
-    // legal cell with the smallest dist + 18 - 2*ad2e.
+    // sub_3E251: target/watch through sub_3D7B2 first, otherwise the radius-9 candidate
+    // with the smallest dist + 18 - 2*ad2e; the reference cell is the fallback.
     bool battle_ai_3e251_dest(int unit_index, int& out_x, int& out_y, int& out_rx, int& out_ry,
                               const std::vector<int>* e8 = nullptr) const;
     // sub_3DF3B approximation: among hostile-occupied cells within radius r, the one with the
