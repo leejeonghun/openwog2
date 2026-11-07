@@ -106,6 +106,7 @@ bool CombatII::load_script_engine() {
     std::fill(std::begin(area_trigger_fired_), std::end(area_trigger_fired_), 0);
     std::fill(&hp_trigger_fired_[0][0], &hp_trigger_fired_[0][0] + 2 * kTriggerRecordMax, (uint8_t)0);
     std::fill(std::begin(region_trigger_fired_), std::end(region_trigger_fired_), (uint8_t)0);
+    std::fill(&contact_trigger_fired_[0][0], &contact_trigger_fired_[0][0] + 2 * 100, (uint8_t)0);
     morale_trigger_fired_ = 0;
     script_forced_target_ = -1;
     if (sce_raw_.size() < 0x19C) return false;
@@ -177,45 +178,54 @@ uint32_t CombatII::script_fetch_u32(uint32_t& off) const {
     return lo | (hi << 16);
 }
 
-// sub_501BA resolves a (sel, idx) unit reference. Port model:
-//   sel == 0   : sub_500ED(idx) picks a CC990 candidate and the matching unit is looked up
-//                in the candidate's [+0Eh]-1 CC968 list by ID and [+87h] owner. The port
-//                approximates this with a group-0 ID scan.
-//   sel 1..3   : CC968+8*sel addresses army lists 1..3, compared through effective army.
-//   sel 4..9   : those slots alias CC988/CC990/CC998, not army lists; the port compares
-//                the raw army byte.
-//   sel 10..7F : sub_5019C checks the effective army [+0x0E] of dword_11024C against
-//                sel-9 (raw army + 1 is the fallback).
-//   sel 80..FF : the original reads CC968[sel] with a signed AL (0xFF maps to CC960);
-//                not modeled here. Unlike the AI [+0x71] path, VM sel==0 walks CC990.
-int CombatII::find_unit_index(uint8_t sel, uint8_t idx) const {
-    if (sel == 0xFF || sel > 0x7F) return -1; // outside the VM unit-ref model (not the CC960 AI path)
-    if (sel > 9) {
-        const int t = script_forced_target_;
-        // The original checks the effective army [+0x0E]; raw+1 is a fallback that can
-        // differ after group-0/VM remapping.
-        if (t >= 0 && (size_t)t < units_.size() && battle_effective_army(units_[(size_t)t]) == (int)sel - 9) return t;
+// sub_501BA resolves a (sel, idx) unit reference. The original reads AL with a signed
+// compare (`cmp al,9; jle`), then indexes dword_CC968[sel*8]. Since CC968 = CC960+8,
+// sel 1..5 maps to CC960[(sel+1)*8], i.e. effective-army lists 2..6 (5 is CC990).
+// sel 6..9 address CC998/BSS and are not list heads. The signed 0x80..0xFF path uses
+// CC968[-1] = CC960[0] only for 0xFF; the other negative indices point before the list
+// headers and have no modelled unit list. sel 0 uses the sub_500ED CC990 candidate's
+// [+0Eh]-1 list and its [+87h] owner. sel 10..0x7F is sub_5019C's forced-unit check.
+int CombatII::find_unit_index_ctx(uint8_t sel, uint8_t idx, int forced_context) const {
+    const int signed_sel = (int)(int8_t)sel;
+    if (signed_sel > 9) {
+        if (forced_context >= 0 && (size_t)forced_context < units_.size() &&
+            battle_effective_army(units_[(size_t)forced_context]) == signed_sel - 9)
+            return forced_context;
         return -1;
     }
-    if (units_.empty()) return -1;
-    if (sel == 0) {
-        // sub_500ED supplies a CC990 ID candidate and the original then searches that
-        // candidate's CC968 list for the same ID and [+87h] owner. Group remapping and
-        // copy membership are not modeled, so this group-0 ID scan is an approximation.
-        for (size_t i = 0; i < units_.size(); ++i)
-            if (units_[i].group == 0 && units_[i].id == (int)idx) return (int)i;
-        return -1;
+    if (signed_sel > 0) {
+        const int cc960_sel = signed_sel + 1;
+        if (cc960_sel > 6) return -1;              // CC998/BSS, not a list head
+        // The port parses VM events ahead of playback, so a unit staged by an earlier 0x03
+        // is still inactive here; the original executes it synchronously and would see it.
+        return battle_ai_cc960_member(cc960_sel, (int)idx, 0, true);
     }
-    // Selectors 1..3 address CC968 army lists 1..3 (effective army 2..4); selectors 4..9
-    // alias other arrays and fall back to the raw army byte. Neither scan reproduces list
-    // membership or order.
-    for (size_t i = 0; i < units_.size(); ++i) {
-        const bool army_matches = (sel <= 3)
-            ? battle_effective_army(units_[i]) == (int)sel + 1
-            : units_[i].army == (int)sel;
-        if (army_matches && units_[i].id == (int)idx) return (int)i;
+    if (signed_sel == 0) {
+        // sub_500ED: first CC990 record with the requested ID. The roster copy is the
+        // persistent list; a live-only member is the fallback for paths that have no roster
+        // mirror.
+        const CombatUnitPlacement* candidate = nullptr;
+        for (const auto& r : battle_roster_cc990_) {
+            if (r.id == (int)idx) { candidate = &r; break; }
+        }
+        if (!candidate) {
+            for (const auto& u : units_) {
+                if (u.active && u.id == (int)idx) { candidate = &u; break; }
+            }
+        }
+        if (!candidate) return -1;
+        const int list_index = (int)(int8_t)(uint8_t)(battle_effective_army(*candidate) - 1);
+        const int cc960_sel = list_index + 1;       // CC968[-1] -> CC960[0]
+        if (cc960_sel < 0 || cc960_sel > 6) return -1;
+        return battle_ai_cc960_member(cc960_sel, (int)idx, (int)candidate->owner_87, true);
     }
+    // 0xFF (-1) is the only signed alias that lands on a real head: CC968[-1] = CC960[0].
+    if (signed_sel == -1) return battle_ai_cc960_member(0, (int)idx, 0, true);
     return -1;
+}
+
+int CombatII::find_unit_index(uint8_t sel, uint8_t idx) const {
+    return find_unit_index_ctx(sel, idx, script_forced_target_);
 }
 
 const CombatUnitPlacement* CombatII::find_unit_ref(uint8_t sel, uint8_t idx) const {
@@ -801,11 +811,10 @@ CombatII::VmResult CombatII::run_vm(uint32_t offset) {
             uint8_t body[5];
             if (!script_fetch(c.off, body, 5)) { abort_range(); break; }
             c.skip(5);
-            // The VM collects events first, so ordinary selectors (0..9) are resolved at
-            // playback; selectors 10..0x7F keep the dword_11024C context and re-check that
-            // army then. A selector outside the ordinary/forced range is not ported (the
-            // AI CC960 path is separate).
-            if (sel <= 0x7F) {
+            // The VM collects events first, so ordinary selectors (0..9), the signed
+            // 0x80..0xFF alias path, and selectors 10..0x7F (forced context re-check)
+            // are all resolved at playback.
+            {
                 VmEvent ev; ev.type = VmEventType::AiSettings; ev.offset = op_pos;
                 memcpy(ev.ai_bytes, body, sizeof(body));
                 ev.unit_ref_sel = sel; ev.unit_ref_id = idx;
@@ -844,7 +853,7 @@ CombatII::VmResult CombatII::run_vm(uint32_t offset) {
             occupancy_event.offset = op_pos;
             occupancy_event.text = "VM faction/descriptor mutation";
             r.events.push_back(std::move(occupancy_event));
-            if (act == 0 && sel <= 0x7F) {
+            if (act == 0) {
                 // loc_5252E: the next byte is the new army and the unit moves to that list.
                 // The change must be applied in event order so later AI selectors see the
                 // list as of that moment, so nothing is modified while parsing. Ordinary
@@ -892,7 +901,7 @@ CombatII::VmResult CombatII::run_vm(uint32_t offset) {
             // Both the owner and the sub=2 target are resolved at playback for ordinary
             // list selectors. Forced selectors capture the dword_11024C context and check
             // the army byte as of that point.
-            if (sel <= 0x7F && sub <= 2) {
+            if (sub <= 2) {
                 VmEvent ev; ev.type = VmEventType::AiTarget; ev.offset = op_pos;
                 ev.unit_ref_sel = sel; ev.unit_ref_id = idx;
                 ev.forced_target_context = script_forced_target_;
@@ -1088,13 +1097,23 @@ CombatII::VmResult CombatII::run_vm(uint32_t offset) {
         case VM_TILE: { // sub_52C06 (0x10): [b0][b1][b2][u16][b4]; continues while the next byte is 0x10
             uint32_t start = c.off;
             int guard = 0;
+            int changes = 0;
             bool more = true;
             while (more && guard++ < 512) {
                 if (!script_in_range(c.off, 7)) { abort_range(); break; }
                 const uint8_t* p = script_buffer_.data() + c.off;
-                // Original: [b0] is the layer, word_78A04/word_83DB4 tile maps are updated
-                // here, and [b4]+[u16] drives sub_10957 to change the terrain buffer (word_6F7xx).
-                (void)p;
+                VmEvent ev;
+                ev.type = VmEventType::TileChange;
+                ev.offset = op_pos;
+                ev.tile_layer = p[0];
+                ev.tile_x = p[1];
+                ev.tile_y = p[2];
+                int tile = (int)(uint16_t)(p[3] | (p[4] << 8));
+                if (tile > 0) ++tile;             // sub_52C06: `test dx,dx; jle; inc`
+                ev.tile_value = tile;
+                ev.tile_attr_value = p[5];
+                r.events.push_back(std::move(ev));
+                ++changes;
                 c.off += 6;
                 uint8_t term = c.u8();
                 more = (term == 0x10);
@@ -1106,8 +1125,10 @@ CombatII::VmResult CombatII::run_vm(uint32_t offset) {
                 r.abort_opcode = op;
                 break;
             }
+            // sub_52C06 calls sub_4559F once after the record loop, not per record.
+            if (changes > 0) r.events.back().tile_last = true;
             if (script_trace_)
-                fprintf(stderr, "COMBAT: vm tile change -> off 0x%X\n", c.off);
+                fprintf(stderr, "COMBAT: vm tile change %d record(s) -> off 0x%X\n", changes, c.off);
             break;
         }
         case VM_SCENARIO: { // sub_52D33: [16-byte scenario name], then switch to the next scenario
@@ -1172,6 +1193,7 @@ CombatII::VmResult CombatII::run_vm(uint32_t offset) {
                 CombatUnitPlacement nu;
                 nu.x = rec[0]; nu.y = rec[1];
                 nu.id = rec[0x0F];
+                nu.owner_87 = rec[0x87];
                 nu.army = (int)rec[0x0E]; // raw Spawn payload; effective army is byte-incremented when nonzero, remapped for raw zero.
                 // The type code is the u16 at +0x61 (same slot as loc_4F02F / sub_12567).
                 nu.sprite_type = (int)rec[0x61] | ((int)rec[0x62] << 8);
@@ -1852,12 +1874,16 @@ bool CombatII::run_unit_hp_trigger(int victim_index, int other_index, int mode) 
 // sub_5394D(eax=unit, edx=other unit, ebx=mode): contact trigger. mode 0 = attack declaration
 //   (table 5), mode 1 = unit in front after a move (table 6).
 // Record: [skip 2][A][B][C][D][u16 length][condition block + bytecode]
-//   (A,B) is the first reference and (C,D) the second. When A (C) < 0Ah the unit comes from
+//   (A,B) is the first reference and (C,D) the second. When A < 0Ah the unit comes from
 //   sub_501BA(A, B); when A >= 0Ah the unit whose legion is A-9 is chosen (self or other), and
-//   dword_11024C becomes that unit too.
-//   mode 0 requires (unit==ref1 && other==ref2); mode 1 accepts either order.
-//   On fire the other unit's facing is turned to (unit facing + 2) % 4, the table's fire flag
-//   (one byte per table) is set, the sub_530F1 condition is evaluated and sub_52E55 runs.
+//   dword_11024C becomes that unit too. The second reference always runs sub_501BA(C,D), so
+//   a C >= 0Ah compares the just-forced unit's army through sub_5019C.
+//   mode 0 requires (unit,other) == (ref1,ref2); mode 1 accepts either order and continues
+//   the table when either reference is null. As in the original, references are compared by
+//   their [+0Eh] army, [+0Fh] id and [+87h] owner bytes, not by array index.
+//   On fire the other unit's facing is turned to (unit facing + 2) % 4, that record's fire
+//   flag (unk_110384[rec] / unk_1103E8[rec], 100 bytes per table) is incremented, the
+//   sub_530F1 condition is evaluated and sub_52E55 runs.
 // Deviation: the original's mode 0 saves and restores the F0648 list through
 //   sub_4FFEF/sub_5001F, but the port VM does not use that list.
 bool CombatII::run_contact_trigger(int unit_index, int target_index, int mode) {
@@ -1867,12 +1893,12 @@ bool CombatII::run_contact_trigger(int unit_index, int target_index, int mode) {
     const uint32_t base = script_table_base(table);            // sub_53512(0, 5/6)
     if (base >= script_buffer_.size()) return false;
 
-    uint8_t& fired = contact_trigger_fired_[mode == 0 ? 0 : 1];   // byte[table base + mode]
+    uint8_t* fired = contact_trigger_fired_[mode == 0 ? 0 : 1]; // unk_110384 / unk_1103E8
     const int saved_target = script_forced_target_;            // var_20
     script_forced_target_ = -1;                                // mov dword_11024C, 0
     bool ran = false;
     ScriptCursor c{script_buffer_.data(), base, (uint32_t)script_buffer_.size()};
-    for (int rec = 0; c.ok && rec < kTriggerRecordMax; ++rec) {
+    for (int rec = 0; c.ok && rec < 100; ++rec) {
         c.skip(2);
         const uint8_t sel_a = c.u8();
         const uint8_t val_b = c.u8();
@@ -1883,34 +1909,50 @@ bool CombatII::run_contact_trigger(int unit_index, int target_index, int mode) {
         const uint32_t payload = c.off;
         if (!script_in_range(payload, size)) break;
         c.off = payload + size;                                // loc_53BE9: edi += length
-        if (fired != 0) continue;                              // table already fired
+        if (fired[rec] != 0) continue;                         // this record already fired
 
-        // ---- reference resolution (sub_501BA or legion compare) ----
-        auto resolve = [&](uint8_t sel, uint8_t val, int& forced) {
-            if (sel < 0x0A) return find_unit_index(sel, val);
-            const int army = (int)sel - 9;
+        // ---- reference 1 (sub_5394D loc_539A9..loc_53A76) ----
+        // sel < 10 is sub_501BA(sel,val). sel >= 10 picks self/other by effective army
+        // sel-9 and writes dword_11024C (the forced context). Reference 2 always calls
+        // sub_501BA(C,D); for C >= 10 sub_5019C compares that forced unit's army, so it
+        // must not repeat the self/other selection.
+        int forced = -1;
+        int ref1 = -1;
+        if (sel_a < 0x0A) {
+            ref1 = find_unit_index(sel_a, val_b);
+        } else {
+            const int army = (int)sel_a - 9;
             if (battle_effective_army(units_[(size_t)unit_index]) == army) {
                 forced = unit_index;
-                return unit_index;
-            }
-            if (battle_effective_army(units_[(size_t)target_index]) == army) {
+                ref1 = unit_index;
+            } else if (battle_effective_army(units_[(size_t)target_index]) == army) {
                 forced = target_index;
-                return target_index;
+                ref1 = target_index;
             }
-            return -1;
-        };
-        int forced = -1;
-        const int ref1 = resolve(sel_a, val_b, forced);
-        if (forced >= 0) script_forced_target_ = forced;       // dword_11024C = that unit
-        const int ref2 = resolve(sel_c, val_d, forced);
+            if (forced >= 0) script_forced_target_ = forced;   // dword_11024C = that unit
+        }
+        const int ref2 = find_unit_index(sel_c, val_d);
 
+        // sub_5394D+0x151..0x233 compares the three bytes [+0Eh], [+0Fh], [+87h]
+        // rather than pointer/index identity. Duplicate army/id/owner records therefore
+        // match the same reference, as they do in the original.
+        auto same_ref = [&](int lhs, int rhs) {
+            if (lhs < 0 || rhs < 0 || (size_t)lhs >= units_.size() || (size_t)rhs >= units_.size())
+                return false;
+            const CombatUnitPlacement& a = units_[(size_t)lhs];
+            const CombatUnitPlacement& b = units_[(size_t)rhs];
+            return (uint8_t)battle_effective_army(a) == (uint8_t)battle_effective_army(b) &&
+                   a.id == b.id && a.owner_87 == b.owner_87;
+        };
         bool hit = false;
         if (mode == 0) {
-            hit = (ref1 == unit_index && ref2 == target_index);
+            hit = same_ref(unit_index, ref1) && same_ref(target_index, ref2);
         } else {
-            if (ref1 < 0 || ref2 < 0) return false;            // test ebx/ebx -> var_28 = 0
-            hit = (ref1 == unit_index && ref2 == target_index) ||
-                  (ref1 == target_index && ref2 == unit_index);
+            // loc_53B00: either reference missing sets var_28 = 0 and continues the table;
+            // it does not end the whole walk.
+            if (ref1 < 0 || ref2 < 0) continue;
+            hit = (same_ref(unit_index, ref1) && same_ref(target_index, ref2)) ||
+                  (same_ref(target_index, ref1) && same_ref(unit_index, ref2));
         }
         if (!hit) continue;
 
@@ -1920,7 +1962,7 @@ bool CombatII::run_contact_trigger(int unit_index, int target_index, int mode) {
         // The other unit turns to face: [other+63h] = (unit facing + 2) % 4
         units_[(size_t)target_index].facing =
             (int8_t)(((int)units_[(size_t)unit_index].facing + 2) & 3);
-        ++fired;
+        ++fired[rec];
         if (battle_trace_)
             fprintf(stderr, "COMBAT: contact trigger table=%d mode=%d unit=%d target=%d\n",
                     table, mode, units_[(size_t)unit_index].id, units_[(size_t)target_index].id);
@@ -3083,28 +3125,9 @@ void CombatII::play_vm_events(const std::vector<VmEvent>& events) {
     // Selectors 10..7F instead use the captured dword_11024C pointer and validate its current army
     // byte.
     auto resolve_vm_unit_ref = [this](uint8_t sel, uint8_t id, int forced_context) -> int {
-        // Selectors 1..3 use modeled effective army; selector 0 and aliased 4..9 retain group/raw
-        // fallbacks.
-        // Effective remap and CC990 membership are not stored for the paths that still use those
-        // fallbacks.
-        if (sel <= 9) {
-            for (size_t i = 0; i < units_.size(); ++i) {
-                const CombatUnitPlacement& unit = units_[i];
-                if (!unit.active || unit.id != (int)id) continue;
-                const bool army_matches = (sel == 0 && unit.group == 0) ||
-                    (sel >= 1 && sel <= 3
-                        ? battle_effective_army(unit) == (int)sel + 1
-                        : sel != 0 && unit.army == (int)sel);
-                if (army_matches) return (int)i;
-            }
-            return -1;
-        }
-        // sub_5019C checks effective [+0x0E] on the captured dword_11024C unit; raw+1 below is only
-        // a fallback.
-        if (sel <= 0x7F && forced_context >= 0 && (size_t)forced_context < units_.size() &&
-            battle_effective_army(units_[(size_t)forced_context]) == (int)sel - 9)
-            return forced_context;
-        return -1; // VM unit-ref selector is outside the ordinary/forced range
+        // Same sub_501BA model as parse time: ordinary lists through CC960[(sel+1)*8], the
+        // 0xFF -> CC960[0] signed alias, CC990 sel 0 with owner, and sub_5019C forced context.
+        return find_unit_index_ctx(sel, id, forced_context);
     };
     for (const auto& ev : events) {
         if (should_exit_ || skip_cutscene_) return;
@@ -3325,9 +3348,8 @@ void CombatII::play_vm_events(const std::vector<VmEvent>& events) {
                     // is
                     // not modelled, so the existing +73 value is left alone (separate from AI
                     // CC960).
-                    if (ev.target_a <= 0x7F)
-                        owner.ai_target_unit = resolve_vm_unit_ref(ev.target_a, ev.target_b,
-                                                                   ev.forced_target_context);
+                    owner.ai_target_unit = resolve_vm_unit_ref(ev.target_a, ev.target_b,
+                                                               ev.forced_target_context);
                 }
                 if (script_trace_)
                     fprintf(stderr, "COMBAT: play vm target unit=%d sub=%u (%u,%u) -> home=(%u,%u) watch=(%u,%u) target=%d\n",
@@ -3371,6 +3393,7 @@ void CombatII::play_vm_events(const std::vector<VmEvent>& events) {
                 // BLACKBOX 0x4E26 record while loading and has no consumer during battle, so there
                 // is
                 // no gameplay effect.
+                if (unit.owner_87 != 0) unit.owner_87 = (uint8_t)ev.army; // loc_5252E: [+87h] = payload when nonzero
                 const int eff = sce_fdaf6_lookup(ev.army);
                 if (eff >= 0) {
                     unit.memory_army = eff & 0xFF;
@@ -3503,6 +3526,22 @@ void CombatII::play_vm_events(const std::vector<VmEvent>& events) {
                 fprintf(stderr, "COMBAT: play faction transform unit=%d action=%d name=%s face=%d\n",
                         unit.id, ev.value, unit.name.c_str(), unit.face);
             present_cutscene_frame();
+            break;
+        }
+        case VmEventType::TileChange: {
+            // sub_52C06: layer 0 writes word_78A04, other layers write word_83DB4; the
+            // u16 is incremented when positive, and the terrain byte goes through sub_10957.
+            const int idx = ev.tile_y * map_w_ + ev.tile_x;
+            if (ev.tile_layer == 0) {
+                if (layer_base_tiles_ && idx >= 0 && idx < map_w_ * map_h_)
+                    layer_base_tiles_[idx] = (uint16_t)ev.tile_value;
+            } else {
+                if (layer_top_tiles_ && idx >= 0 && idx < map_w_ * (map_h_ + 6))
+                    layer_top_tiles_[idx] = (uint16_t)ev.tile_value;
+            }
+            if (idx >= 0 && (size_t)idx < tile_attr_.size())
+                tile_attr_[(size_t)idx] = (uint8_t)ev.tile_attr_value;
+            if (ev.tile_last) present_cutscene_frame(); // sub_4559F once after the record loop
             break;
         }
         case VmEventType::Weather:
