@@ -5991,6 +5991,7 @@ CombatUnitPlacement battle_unpack_unit_record(const uint8_t* rec) {
     p.memory_army = rec[0x0E];
     p.group = 2;
     p.id = rec[0x0F];
+    p.owner_87 = rec[0x87];
     p.face = rec[0x10];
     p.combat_class = rec[0x11];
     p.item_use_12 = rec[0x12];
@@ -6111,6 +6112,7 @@ void CombatII::battle_reload_record_4e81f(CombatUnitPlacement& u) {
     u.combat_acc57 = (uint16_t)(rec[0x57] | (rec[0x58] << 8));
 
     // ---- [87h] owner -> word_FDAF6 remap (loc_4E8FF..loc_4E982) ----
+    u.owner_87 = rec[0x87];
     int owner = rec[0x87];
     if (owner == 0 || owner == 0x63) owner = (int)fdf85_lo_;
     int fdaf6 = sce_fdaf6_lookup(owner);                     // word_FDAF6[owner] low

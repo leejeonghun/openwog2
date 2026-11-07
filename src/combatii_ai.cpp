@@ -16,7 +16,7 @@
 // global CC990 list. The original does not test HP here; active filters the port's copy of
 // records that have left the army list. List order follows list_seq, the modeled [+7Bh]
 // insertion order (initial load = 0, later tail inserts > 0).
-int CombatII::battle_ai_cc960_member(int selector, int id) const {
+int CombatII::battle_ai_cc960_member(int selector, int id, int owner, bool include_inactive) const {
     if (selector < 0 || selector > 6) return -1;
     // Selector 6 is dword_CC990, a separate roster list. Its records can be off-map
     // party/deploy entries, so the first matching roster record decides membership; the
@@ -24,12 +24,13 @@ int CombatII::battle_ai_cc960_member(int selector, int id) const {
     // live counterpart there is no index the callers can use.
     if (selector == 6) {
         for (const auto& r : battle_roster_cc990_) {
-            if (r.id != id) continue;
+            if (r.id != id || (owner >= 0 && (int)r.owner_87 != owner)) continue;
             int best = -1;
             uint64_t best_key = ~0ull;
             for (size_t i = 0; i < units_.size(); ++i) {
                 const CombatUnitPlacement& c = units_[i];
-                if (!c.active || c.id != id) continue;
+                if ((!c.active && !include_inactive) || c.id != id ||
+                    (owner >= 0 && (int)c.owner_87 != owner)) continue;
                 const uint64_t key = ((uint64_t)c.list_seq << 32) | (uint64_t)i;
                 if (best < 0 || key < best_key) {
                     best = (int)i;
@@ -45,7 +46,8 @@ int CombatII::battle_ai_cc960_member(int selector, int id) const {
     uint64_t best_key = ~0ull;
     for (size_t i = 0; i < units_.size(); ++i) {
         const CombatUnitPlacement& c = units_[i];
-        if (!c.active || c.id != id) continue;
+        if ((!c.active && !include_inactive) || c.id != id ||
+            (owner >= 0 && (int)c.owner_87 != owner)) continue;
         if (selector != 6 && battle_effective_army(c) != selector) continue;
         const uint64_t key = ((uint64_t)c.list_seq << 32) | (uint64_t)i;
         if (best < 0 || key < best_key) {

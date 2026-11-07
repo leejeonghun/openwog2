@@ -194,6 +194,7 @@ struct CombatUnitPlacement {
     // ---- Fields read directly from the SCE unit record ----
     int id = 0;       // +0x0F unit ID referenced by scripts
     int army = 0;     // Raw SCE/spawn/VM payload byte; not necessarily effective BattleUnit [+0x0E]
+    uint8_t owner_87 = 0; // BattleUnit +0x87 owner byte; sub_501BA checks it in the army/CC990 list
     int memory_army = -1; // BattleUnit [+0x0E] when derivable; -1 means remap/list path unknown
     bool battle_list_membership_modeled = false; // static SCE outer group 1..3, normal byte-INC army 1..4, no linked record
     uint32_t list_seq = 0; // CC968 list insert order (0 = initial load order, units_ index; >0 = later sub_1134F tail insert)
@@ -260,7 +261,8 @@ enum class VmEventType {
                     //  unit's current tile, so it is computed at playback, not at parse time
     Magic,          // 0x08 / 0x6C sub_51E8B scripted spell/weapon effect
     Item,           // 0x06 sub_5196F give/equip an item to the forced/random receiver
-    FactionTransform // 0x0C sub_52463 action 1..4: inline 0x88 record / type change
+    FactionTransform, // 0x0C sub_52463 action 1..4: inline 0x88 record / type change
+    TileChange        // 0x10 sub_52C06: one [layer][x][y][u16 tile][terrain] record
 };
 
 // One 0x07 target (dword_F0648[i] + word_F0430[i]).
@@ -332,6 +334,11 @@ struct VmEvent {
     int forced_target_context = -1;
     int value = 0;                    // Weather/Bgm/Flag value (Magic: spell byte, FactionTransform: action)
     int army = 0;                     // Faction new army (Magic: level byte)
+    // TileChange (0x10): layer 0 = word_78A04 base map, nonzero = word_83DB4 top map.
+    // sub_52C06 applies every record and calls sub_4559F once after the loop, so only the
+    // final record of a run carries tile_last.
+    int tile_layer = 0, tile_x = 0, tile_y = 0, tile_value = 0, tile_attr_value = 0;
+    bool tile_last = false;
     std::vector<uint8_t> record;      // inline 0x88 record for FactionTransform action 1/3
     // Spawn (0x03) effect mode - sub_50D9F var_10 (first payload byte).
     //   0 = walk the move-queue path (sub_16D3E), 1 = drop in (sub_508E6(3)).
@@ -1141,7 +1148,8 @@ private:
     // sub_1379A(sel,id): walk dword_CC960[sel*8] and return the first active unit with
     // [+0Fh]==id. Selectors 0..5 select effective-army lists 0..5, selector 6 the CC990 global
     // list. Only on-map units_ records are represented; list order follows list_seq.
-    int battle_ai_cc960_member(int selector, int id) const;
+    int battle_ai_cc960_member(int selector, int id, int owner = -1,
+                               bool include_inactive = false) const;
     // sub_3F321 (dasm 63212..63306): computes the whole AI action state 0/1/2/-1. Signed map kind
     // >= 4 -> 0, [+81h] -> 1, [+7Fh] -> 2, [+82h]!=FFh && HP>0x3E8 -> 1, [+80h]!=FFh -> 2,
     // [+6D]==4 -> -1, [+6D]==0 -> 0; any other [+6D] passes the type/link gate and splits into
@@ -1659,10 +1667,10 @@ private:
     static constexpr int kTriggerRecordMax = 128;
     uint8_t hp_trigger_fired_[2][kTriggerRecordMax] = {};    // unk_110514 (mode 0) / unk_110320 (mode 1)
     uint8_t region_trigger_fired_[kTriggerRecordMax] = {};   // unk_110254
-    // unk_110384+mode (table 5, attack declaration) / unk_1103E8+mode (table 6, contact after a
-    // move). The original uses the two bytes just before the table data as the fired flag, so
-    // there is only one per table.
-    uint8_t contact_trigger_fired_[2] = {};
+    // unk_110384 (table 5, attack declaration) / unk_1103E8 (table 6, contact after a
+    // move): sub_50086 clears 100 bytes for each table and sub_5394D uses
+    // `unk_110384[record]` / `unk_1103E8[record]` as the one-shot flag for that record.
+    uint8_t contact_trigger_fired_[2][100] = {};
     // word_F14D8: 0 = player (ring) path, 1 = AI (sub_3FFD4+10D) or script (loc_51F86) auto-target.
     // It decides whether a weapon special opens the 4A483 manual cursor or collects targets
     // automatically (sub_2CA39(1)).
@@ -2488,12 +2496,12 @@ private:
     bool vm_position_plausible(uint32_t off) const;
     // Variable form of sub_501BA: resolves a (sel, idx) unit reference to a real units_ entry.
     // sel==0 -> a CC990 candidate followed by the army-1 CC968 list and the [+87h] owner check.
-    // A non-zero sel addresses CC968+8*sel: sel 1..3 is approximated by comparing effective
-    // army = sel+1, sel 4 -> CC988, 5 -> CC990, and 6+ overlaps CC998/BSS so it cannot be pinned to
-    // a normal army list. sel 10..0x7F runs the sub_5019C forced-target check. sel 0x80..0xFF
-    // addresses signed CC968[sel] backwards (0xFF -> CC960) and is not modelled.
-    // This is separate from the AI watch selector path of BattleUnit [+0x71] (sub_1379A, 0xFF
-    // sentinel).
+    // A non-zero sel addresses CC968+8*sel, i.e. CC960[(sel+1)*8]: sel 1..5 -> effective army
+    // lists 2..6 (5 = CC990), sel 6..9 -> CC998/BSS (not lists), and the signed-AL path
+    // 0x80..0xFF treats 0xFF (-1) as CC960[0]; other negative indices have no modelled head.
+    // sel 10..0x7F runs the sub_5019C forced-target check. This is separate from the AI watch
+    // selector path of BattleUnit [+0x71] (sub_1379A, 0xFF sentinel).
+    int find_unit_index_ctx(uint8_t sel, uint8_t idx, int forced_context) const;
     CombatUnitPlacement* find_unit_ref_mut(uint8_t sel, uint8_t idx);
     int find_unit_index(uint8_t sel, uint8_t idx) const;
     // The two words of dword_F0BA0 (morale and scroll limits), set by sub_52757 (0x0D)

@@ -327,8 +327,8 @@ inline int battle_max_hp_raw(const CombatUnitPlacement& u) { return u.max_hp * 1
 
 // Single-target path: sub_1F738 -> sub_1DDF0(dx=1) -> sub_1E61D/sub_1EF5C -> sub_1ED45.
 //   Before: sub_53797(attacker, first target, mode 0), the attack declaration event. Abort when
-//   the attacker or target disappears through an event (sub_1DDF0 returns -1/-2). Table 5
-//   (contact, sub_5394D) is not ported.
+//   the attacker or target disappears through an event (sub_1DDF0 returns -1/-2). Table 5/6
+//   (contact, sub_5394D) is evaluated before the declaration and after a move.
 //   After (sub_1ED45): target HP <= 0 calls sub_1DB1D(attacker, target), otherwise
 //   sub_53797(target, attacker, mode 1).
 // The event VM can add units (0x03) and reallocate units_, so references are re-resolved by

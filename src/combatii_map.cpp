@@ -974,6 +974,7 @@ void CombatII::init_dummy_units(bool parse_sce_snapshot) {
                         // ---- Fields read directly from the original unit record (sub_4ED18 /
                         // sub_500ED / loc_4F0D3) ----
                         p.id       = u[0x0F];             // unit ID referenced by scripts
+                        p.owner_87 = u[0x87];             // [+87h] owner checked by sub_501BA
                         // [+0Eh] is the raw army byte, kept as an approximation of the effective CC968
                         // list slot: outer groups 1..3 increment it and append at
                         // CC968[(effective value)-1], while group 0 remaps through
