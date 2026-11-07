@@ -13,8 +13,8 @@
 //   ebp = target pointer returned by the selection branch (0 = branch failed).
 // The selection helpers (3E65E/3E739/3EADD/3EBB4/3ED51/3EF12/3EE2B/3E5AB/3F247/3E251/
 // 3DF3B) are the existing ones in combatii_ai.cpp and combatii_aimage.cpp.
-// Deviation: the route helpers (1419C/1499C/15342/15523/14FA4) reproduce the original
-// search order but approximate the budget cut instead of emulating it exactly.
+// The route helpers (1419C/1499C/15342/15523/14FA4) follow the original search order and
+// budget cut; the remaining 1x1 occupancy approximation is shared with sub_165C2.
 #include "combatii.h"
 #include "combatii_internal.h"
 #include "battle_tables.h"
@@ -290,7 +290,7 @@ int CombatII::battle_ai_15523_route(int unit_index, int dest_x, int dest_y,
 int CombatII::battle_ai_14fa4_route(int unit_index, int ref_x, int ref_y, int budget,
                                     const std::vector<int>& budget_grid,
                                     std::vector<std::pair<int,int>>& route,
-                                    int* out_cost) const {
+                                    int* out_cost, bool trace) const {
     (void)budget;
     if (out_cost) *out_cost = 0;
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return -1;
@@ -341,7 +341,7 @@ int CombatII::battle_ai_14fa4_route(int unit_index, int ref_x, int ref_y, int bu
         route.clear();                                       // EDD7E = E8F40[0]
         for (auto it = buckets[0].rbegin(); it != buckets[0].rend(); ++it)
             route.push_back(*it);
-        if (battle_trace_)
+        if (battle_trace_ && trace)
             fprintf(stderr, "COMBAT: AI unit=%d 14FA4 seed tail=(%d,%d) si=%d route=%zu facing=%d\n",
                     actor.id, cell.first, cell.second, si, route.size(), ret);
         return ret;
@@ -381,7 +381,7 @@ int CombatII::battle_ai_14fa4_route(int unit_index, int ref_x, int ref_y, int bu
                                   marker, rerouted, edd) != 0)
             route = rerouted;
         int facing = (int)walk_facing_toward(best.first, best.second, ref_x, ref_y);
-        if (battle_trace_)
+        if (battle_trace_ && trace)
             fprintf(stderr, "COMBAT: AI unit=%d 14FA4 diamond seed=(%d,%d) -> dest=(%d,%d) dist=%d si=%d route=%zu facing=%d\n",
                     actor.id, cell.first, cell.second, best.first, best.second,
                     best_dist, best_si, route.size(), facing);
@@ -409,7 +409,7 @@ bool CombatII::battle_ai_route_walk_path(int unit_index, int mobility, int budge
                                          int& dest_x, int& dest_y, bool use_wave,
                                          int ref_x, int ref_y, int& out_facing,
                                          std::vector<std::pair<int,int>>& out_walk,
-                                         int* out_cost) const {
+                                         int* out_cost, bool trace) const {
     out_walk.clear();
     if (out_cost) *out_cost = 0;
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return false;
@@ -440,7 +440,7 @@ bool CombatII::battle_ai_route_walk_path(int unit_index, int mobility, int budge
         if (battle_ai_15523_route(unit_index, dest_x, dest_y, grid, marker, route, edd76) == 0)
             return false;                                     // 13B37: no route -> di = -2
         const int f14 = battle_ai_14fa4_route(unit_index, ref_x, ref_y, budget, budget_grid,
-                                              route, nullptr);
+                                              route, nullptr, trace);
         if (route.empty()) return false;                      // 13B37
         if (f14 >= 0) out_facing = f14;                       // var_8 handed to 1620A
     } else {
