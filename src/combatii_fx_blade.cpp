@@ -133,8 +133,8 @@ int CombatII::battle_fx_2262c(int unit_index, int tx, int ty, int k) {
 //       499E4}
 //   (3) 1033B(0Ah); until the 20 particles reach frame 0Ah and var_4 becomes 0Fh: {draw every
 //       particle with 561F4; update particle age/motion; 454D5; 5E9E8; 499E4}.
-//   Port: (1) and (2) are ported as-is; (3) (the dword_112160 particle engine with rand_
-//   spawning) is not, so 30 frames of frames 0..5 approximate it.
+//   Port: (1) and (2) are ported as-is; 561F4 is 5F29D with the 61147(1,28h) LUT. (3) is still
+//   a 30-frame approximation of the dword_112160 particle engine, now drawn through 561F4.
 int CombatII::battle_fx_5637d(int unit_index, int tx, int ty, int k) {
     (void)unit_index; (void)k;
     if (!battle_nsp_load("fireblad.nsp") || magic_frames_.empty()) return 0;
@@ -157,15 +157,20 @@ int CombatII::battle_fx_5637d(int unit_index, int tx, int ty, int k) {
         battle_fx_present();
         wait_game_tick();
     }
+    auto blit_561f4 = [&](int f) {                          // sub_561F4 -> sub_5F29D
+        f = std::max(0, std::min(nframes - 1, f));
+        battle_fx_blit_tinted_unclipped(f, cx + magic_frames_[(size_t)f].xo,
+                                          cy + magic_frames_[(size_t)f].yo, 60);
+    };
     game_timer_set(0x0F);                                   // (2) sub_1033B(0Fh)
     for (int i = 0; i < 6 && !should_exit_; ++i) {
-        blit(i);                                            // 561F4(frame = i)
+        blit_561f4(i);                                      // 561F4(frame = i)
         battle_fx_present();
         wait_game_tick();
     }
     game_timer_set(0x0A);                                   // (3) particle afterimage (approximation)
     for (int i = 0; i < 30 && !should_exit_; ++i) {
-        blit(i % 6);
+        blit_561f4(i % 6);
         battle_fx_present();
         wait_game_tick();
     }
@@ -408,38 +413,77 @@ int CombatII::battle_fx_272ad(int unit_index, int tx, int ty, int k) {
 //       5E9E8; 499E4}
 //   (2) 4F4CD(32h) -> var_28 = 0Dh (frame), descent start var_30 = anchor y+0Ch,
 //       var_24 = anchor y-0BCh
-//   (3) descent loop: 5EFB9 (big star above the unit) + 5F29D + 5F305 (frames 8..) drawn from
-//       anchor y-0BCh down to -2Ah in steps of 8 -> 1FFCD.
-//   Port: the 5EFB9 scale/rotation and the separate 5F29D frame are not ported; battle_fx_blit /
-//   blit_tinted stand in for the 5F305 descent.
+//   (3) descent: 5 frames (13..17) + 15 hold frames (18..32) + 4 closing frames (33..36).
+//       Each frame draws frame 12 through 5EFB9, one 5F29D frame at y=anchor+0Ch, and 25
+//       5F305 rows from anchor+0Ch down to anchor-0BCh (step -8, last row excluded).
+//   5EFB9/5F29D/5F305 are all 1:1 blitters; 5EFB9 clips at 13Fh/C7h, 5F29D does not and
+//   applies the 61147 LUT, and 5F305 clips like 5EFB9. No scale/rotation is involved.
 int CombatII::battle_fx_59675(int target_index) {
     if (target_index < 0 || (size_t)target_index >= units_.size()) return 0;
     auto& u = units_[(size_t)target_index];
     if (!battle_nsp_load("bstar.nsp") || magic_frames_.empty()) return 0;
+    weather_tick_enabled_ = false;                         // sub_103A8
     u.anim_frame = 0x0A;                                    // [unit+64h] = 0Ah
     const int ux = (int)(int8_t)u.x, uy = (int)(int8_t)u.y;
     const int ax = (ux - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X + 12;  // 10971+0Ch
     const int ay = (uy - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y - 6;   // 10988-6
     const int nframes = (int)magic_frames_.size();
     game_timer_set(0x0F);                                   // sub_1033B(0Fh)
+    auto frame_ptr = [&](int f) -> const MagicFxFrame* {
+        return (f >= 0 && f < nframes) ? &magic_frames_[(size_t)f] : nullptr;
+    };
+    auto clipped = [&](int f, int x, int y) {               // sub_5EFB9
+        if (const MagicFxFrame* e = frame_ptr(f))
+            battle_fx_blit_clipped(f, x + e->xo, y + e->yo);
+    };
+    auto tinted_u = [&](int f, int x, int y) {              // sub_5F29D
+        if (const MagicFxFrame* e = frame_ptr(f))
+            battle_fx_blit_tinted_unclipped(f, x + e->xo, y + e->yo, 100);
+    };
+    auto column = [&](int f, int y0, int bottom) {          // sub_5F305, 25 rows
+        const MagicFxFrame* e = frame_ptr(f);
+        if (!e) return;
+        for (int yy = y0; yy > bottom; yy -= 8)
+            battle_fx_blit_tinted(f, ax + e->xo, yy + e->yo, 100);
+    };
     // (1) 13 frames as the star lands and stays above the unit
     for (int i = 0; i <= 0x0C && !should_exit_; ++i) {
-        const int f = std::min(nframes - 1, i);
-        battle_fx_blit(f, ax + magic_frames_[(size_t)f].xo, ay + magic_frames_[(size_t)f].yo);
+        clipped(i, ax, ay);
         battle_fx_present();                                // sub_5E9E8 (stands in for 12BEE/12F2A)
         wait_game_tick();
     }
     if (should_exit_) { battle_nsp_release(); return 1; }
     sfx(0x32);                                              // sub_4F4CD(32h)
-    // (3) descent: anchor y-0BCh -> anchor y-2Ah in steps of 8 (original 597DD does `sub esi,8`)
-    const int from = ay - 0xBC, to = ay - 0x2A;
-    for (int yy = from; yy <= to && !should_exit_; yy += 8) {
-        const int f = std::min(nframes - 1, 8);             // var_28 = 0Dh -> frame index 8 approx.
-        battle_fx_blit_tinted(f, ax + magic_frames_[(size_t)f].xo,
-                                 yy + magic_frames_[(size_t)f].yo, 100);   // sub_5F305
+    // (3) 5 frames 13..17, 15 hold frames 18..32, then 4 closing frames 33..36
+    const int base_y = ay + 0x0C;                           // var_30
+    const int bottom = ay - 0xBC;                           // var_24
+    for (int k = 0; k < 5 && !should_exit_; ++k) {
+        clipped(12, ax, ay);                                // fixed F0E3E/F0E42 frame
+        tinted_u(13 + k, ax, base_y);
+        column(18 + k, base_y, bottom);
         battle_fx_present();
         wait_game_tick();
     }
+    for (int n = 0; n < 15 && !should_exit_; ++n) {         // loc_59863 hold
+        clipped(12, ax, ay);
+        tinted_u(17, ax, base_y);
+        column(22, base_y, bottom);
+        battle_fx_present();
+        wait_game_tick();
+    }
+    for (int k = 0; k < 4 && !should_exit_; ++k) {          // loc_59943 closing sweep
+        clipped(12 - k, ax, ay);
+        tinted_u(16 - k, ax, base_y);
+        column(21 - k, base_y, bottom);
+        battle_fx_present();
+        wait_game_tick();
+    }
+    if (!should_exit_) {
+        present_cutscene_frame();                           // sub_45559 (454B3 + 5E9E8)
+        wait_game_tick();
+        wait_game_tick();
+    }
+    weather_tick_enabled_ = true;                           // sub_103A0
     reset_unit_pose(u);                                     // sub_12124
     battle_nsp_release();                                   // sub_1FFCD
     if (battle_trace_) fprintf(stderr, "COMBAT: 59675 bstar unit=%d\n", u.id);

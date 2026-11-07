@@ -285,10 +285,10 @@ int CombatII::battle_fx_5a267(int unit_index, int tx, int ty, int k) {
 //   Port signature: (unit_index, tx, ty, k); only unit_index is used (the caster).
 //   (1) 611AA (9-byte table dword_560F9, shade 0x3C) -> 1FEA4("sunl2.nsp") -> 103A8 -> 1033B(5)
 //       -> 11EE4 -> anchor (10971+0Ch / 10988) -> delta palette (5FC21) -> sfx(0x34).
-//   (2) 6 rounds (var_10 = 1..6): each frame draws var_10 copies via 5F570 (scaled) for
-//       var_1C = 6..13 (8 frames), with 5FD1C(mul += 2) per frame, so the sun grows.
-//   (3) sfx(0x32) -> 5 rounds (var_8 = 1..5) x 10 frames: frame 6 (unk_F0DAA+0x48) via 5F570
-//       with 5FD1C(mul += 2), mul capped at 0x64.
+//   (2) 5 rounds (var_10 = 1..5), each 8 frames (var_1C = 6..13): draws var_10 copies of
+//       frame var_1C at size 8*(count-1)+step-5, centered, with 454D5 + 5E9E8 per copy.
+//   (3) sfx(0x32) -> 5 rounds (var_8 = 1..5) x 10 frames: 5F29D frame var_8 at the anchor,
+//       then frame 6 via 5F570 at size 41..90, with 5FD1C(mul += 2), mul capped at 0x64.
 //   (4) 11E04 -> sfx(0x33) -> 5FD1C(0) -> 61115 -> 103A0 -> 1FFCD.
 int CombatII::battle_fx_5a566(int unit_index, int tx, int ty, int k) {
     (void)tx; (void)ty; (void)k;
@@ -302,41 +302,43 @@ int CombatII::battle_fx_5a566(int unit_index, int tx, int ty, int k) {
 
     game_timer_set(5);                                         // sub_1033B(5)
 
-    // (2) Sun grows: count 1..6, 8 frames each
-    int mul = 0;
-    for (int count = 1; count <= 6 && !should_exit_; ++count) {
+    // (2) count 1..5, step 6..13. The original draws `count` copies of frame `step` at
+    // size 8*(count-1)+step-5, centered on the frame offset (probe: 1..40 px).
+    for (int count = 1; count <= 5 && !should_exit_; ++count) {
         for (int step = 6; step <= 0x0D && !should_exit_; ++step) {
-            for (int n = 0; n < count; ++n) {
-                // Frame (count-1) scaled. The 5F570 arguments cannot be reconstructed, so the
-                // size is approximated from the step counter.
-                const int fi = std::min(nframes - 1, count - 1);
-                const int dw = magic_frames_[fi].w * step / 8;
-                const int dh = magic_frames_[fi].h * step / 8;
-                battle_fx_blit_scaled(fi, ax + magic_frames_[fi].xo + n * 2,
-                                      ay + magic_frames_[fi].yo - (step - 6) * 2,
-                                      dw > 0 ? dw : 1, dh > 0 ? dh : 1, true);
+            const int fi = std::min(nframes - 1, step);
+            const int sz = 8 * (count - 1) + (step - 5);
+            const MagicFxFrame& e = magic_frames_[(size_t)fi];
+            for (int n = 0; n < count && !should_exit_; ++n) {
+                battle_fx_blit_scaled(fi, ax + e.xo - sz / 2, ay + e.yo - sz / 2,
+                                      sz, sz, true);
+                battle_fx_overlay();                           // sub_454D5
+                battle_fx_present();
+                wait_game_tick();
             }
-            battle_fx_present();
-            wait_game_tick();
-            mul = std::min(0x64, mul + 2);
-            pal_shift_fade(mul);                               // 5FD1C
         }
     }
 
-    // (3) Frame 6 (unk_F0DAA+0x48), 5 rounds x 10 frames
+    // (3) 5 rounds: 5F29D frame 1..5 at the anchor, then frame 6 via 5F570 with the size
+    // 41..90 growing by one each frame (probe-confirmed).
     sfx(0x32);                                                 // sub_4F4CD(32h)
-    for (int outer = 0; outer < 5 && !should_exit_; ++outer) {
+    int fade = 0;
+    for (int round = 1; round <= 5 && !should_exit_; ++round) {
         for (int i = 0; i < 10 && !should_exit_; ++i) {
+            if (round < nframes) {
+                const MagicFxFrame& e = magic_frames_[(size_t)round];
+                battle_fx_blit_tinted_unclipped(round, ax + e.xo, ay + e.yo, 60); // 5F29D (611AA 3Ch)
+            }
+            const int sz = 41 + (round - 1) * 10 + i;
             if (6 < nframes) {
-                const int dw = magic_frames_[6].w * (outer + 1) / 5;
-                const int dh = magic_frames_[6].h * (outer + 1) / 5;
-                battle_fx_blit_scaled(6, ax + magic_frames_[6].xo, ay + magic_frames_[6].yo,
-                                      dw > 0 ? dw : 1, dh > 0 ? dh : 1, true);
+                const MagicFxFrame& e = magic_frames_[6];
+                battle_fx_blit_scaled(6, ax + e.xo - sz / 2, ay + e.yo - sz / 2,
+                                      sz, sz, true);          // 5F570
             }
             battle_fx_present();
             wait_game_tick();
-            mul = std::min(0x64, mul + 2);
-            pal_shift_fade(mul);                               // 5FD1C
+            pal_shift_fade(fade);                              // 5FD1C
+            fade = std::min(100, fade + 2);
         }
     }
 

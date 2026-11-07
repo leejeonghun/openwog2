@@ -1096,7 +1096,7 @@ void CombatII::battle_fx_32589_anim(int unit_index, int target_index) {
 
 // ==== sub_32BCB: i-star2 + slash + ice + icer.nsp (edi 3) ====
 // The original (ASM 47602~48220) uses three ice-particle routines:
-//   33C31  draws each particle frame byte (var_A0) through 5F29D (scaled and tinted).
+//   33C31  draws each particle frame byte (var_A0) through 5F29D (1:1, tinted by 61147(1Fh,46h)).
 //          The byte advances every 4 frames and wraps to 1Ch past 0x25 / 0x29.
 //   33E06  steps 60 particles (cos/sin tables flt_74A68/flt_744C8 at 1 degree steps,
 //          colour 18h 3x3 plus).
@@ -1183,7 +1183,13 @@ bool CombatII::battle_fx_32bcb_anim(int unit_index) {
             const int v = p_frame[(size_t)i];
             if (v <= 0 || v >= 0x64) continue;
             if (i >= cnt) continue;                                        // one particle per target
-            const int idx = (v >= 0x1F && v < 0x26) ? (0x3C - v) : v;       // 1Fh..25h mirror the frames
+            int idx;
+            if (v > 0x1E && v < 0x26) idx = 0x3C - v;                      // 1Fh..25h mirror
+            else if (v < 0x26) idx = v;
+            else if (v < 0x68) idx = 31;                                   // F0F1E (frame 31)
+            else if (v < 0x6C) idx = 32;                                   // F0F2A
+            else if (v < 0x70) idx = 33;                                   // F0F36
+            else idx = v;
             if (idx <= 0 || idx >= nframes) continue;
             const int ui = battle_target_list_[(size_t)i];
             if (ui < 0 || (size_t)ui >= units_.size()) continue;
@@ -1191,7 +1197,13 @@ bool CombatII::battle_fx_32bcb_anim(int unit_index) {
             const int ux = (U.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + UNIT_ANCHOR_X + 0x0C;
             const int uy = (U.y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + UNIT_ANCHOR_Y + 2;
             const MagicFxFrame& e = magic_frames_[(size_t)idx];
-            battle_fx_blit(idx, ux + e.xo, uy + e.yo);                     // 5F29D (scaler not ported)
+            battle_fx_blit_tinted_unclipped(idx, ux + e.xo, uy + e.yo, 70); // 5F29D (61147 1Fh,46h)
+            if (v >= 0x26 && v < 0x64 && 31 < nframes && 29 < nframes) {
+                // 33D3F: a second copy of frame 31 at the frame-29 offsets, shifted +-1 x.
+                const MagicFxFrame& b = magic_frames_[29];
+                const int parity = (frame_counter & 1) ? -1 : 1;
+                battle_fx_blit_tinted_unclipped(31, ux + b.xo + parity, uy + b.yo, 70);
+            }
             if ((frame_counter % 4) == 3) {                                // +1 every 4 frames, after drawing
                 int f = v + 1;
                 if (f < 0x26) { if (f > 0x21) f = 0x1C; }
