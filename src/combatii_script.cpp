@@ -982,7 +982,7 @@ CombatII::VmResult CombatII::run_vm(uint32_t offset) {
             int guard = 0;
             bool stop = false;
             bool saw_record = false;
-            bool all_group0_records_supported = true;
+            bool all_records_supported = true;
             size_t parsed_record_count = 0;
             std::vector<int> move_unit_indices;
             VmEvent ev;
@@ -1002,7 +1002,7 @@ CombatII::VmResult CombatII::run_vm(uint32_t offset) {
                 } else if (group != ref_group) {
                     // The mismatched record's selector is resolved and occupancy cleared before ASM
                     // stops the batch.
-                    all_group0_records_supported = false;
+                    all_records_supported = false;
                     stop = true;
                     break;
                 } // loc_5175A: records whose group differs are left out of the animation list
@@ -1030,8 +1030,9 @@ CombatII::VmResult CombatII::run_vm(uint32_t offset) {
                 // loc_51877 compares with `cmp ax, word_EDD74; jle`, so the maximum survives.
                 int frames = (group == 0) ? (int)points + 1 : 2;
                 if (frames > ev.walk_frames) ev.walk_frames = frames;
-                if (group != 0 || sel < 1 || sel > 3 || count == 0 || points > 31)
-                    all_group0_records_supported = false;
+                if (sel < 1 || sel > 3 ||
+                    (group == 0 && (count == 0 || points > 31)))
+                    all_records_supported = false;
                 if (move_idx >= 0) {
                     if (sel >= 1 && sel <= 3) {
                         int exact_list_index = -1;
@@ -1046,16 +1047,16 @@ CombatII::VmResult CombatII::run_vm(uint32_t offset) {
                             ++exact_list_matches;
                         }
                         if (exact_list_matches != 1 || exact_list_index != move_idx)
-                            all_group0_records_supported = false;
+                            all_records_supported = false;
                     } else {
-                        all_group0_records_supported = false;
+                        all_records_supported = false;
                     }
                     if (std::find(move_unit_indices.begin(), move_unit_indices.end(), move_idx) != move_unit_indices.end())
-                        all_group0_records_supported = false;
+                        all_records_supported = false;
                     move_unit_indices.push_back(move_idx);
                     ev.walk_units.push_back(std::move(wu));
                 } else {
-                    all_group0_records_supported = false;
+                    all_records_supported = false;
                 }
                 c.off += extra;
                 uint8_t term = script_buffer_[c.off];
@@ -1069,11 +1070,10 @@ CombatII::VmResult CombatII::run_vm(uint32_t offset) {
                 r.abort_opcode = op;
                 break;
             }
-            // Only a complete group-0 batch with uniquely modeled ordinary-list references can try
-            // the runtime path/occupancy proof. Other valid VM 0x05 records retain fail-closed
-            // behavior.
-            ev.walk_occupancy_preserving_candidate = saw_record && stop && ref_group == 0 &&
-                all_group0_records_supported && parsed_record_count != 0 &&
+            // Complete group-0 (sub_16D3E) and group!=0 (sub_50BAF) batches with uniquely
+            // modeled ordinary-list references can try the runtime path/occupancy proof.
+            ev.walk_occupancy_preserving_candidate = saw_record && stop &&
+                all_records_supported && parsed_record_count != 0 &&
                 parsed_record_count == ev.walk_units.size();
             if (saw_record && !ev.walk_occupancy_preserving_candidate) {
                 VmEvent occupancy_event;
@@ -3262,8 +3262,8 @@ void CombatII::play_vm_events(const std::vector<VmEvent>& events) {
                 battle_wc1_occupancy_unknown(occupancy_reject_reason
                     ? occupancy_reject_reason : "VM 0x05 scripted movement", ev.offset);
             else if (battle_trace_ || script_trace_)
-                fprintf(stderr, "COMBAT: WC1 occupancy pre-move proof passed for VM 0x05 group-0 batch @0x%X\n",
-                        ev.offset);
+                fprintf(stderr, "COMBAT: WC1 occupancy pre-move proof passed for VM 0x05 group-%d batch @0x%X\n",
+                        ev.walk_group, ev.offset);
             if (ev.walk_group == 0) {
                 int steps = 1; size_t pts = 0;
                 for (const auto& w : ev.walk_units) {
@@ -3307,8 +3307,8 @@ void CombatII::play_vm_events(const std::vector<VmEvent>& events) {
                                        !battle_wc1_static_occupancy_unambiguous()))
                 battle_wc1_occupancy_unknown("VM 0x05 post-move occupancy proof failed", ev.offset);
             else if (preserve_occupancy && (battle_trace_ || script_trace_))
-                fprintf(stderr, "COMBAT: WC1 occupancy preserved after VM 0x05 group-0 batch @0x%X\n",
-                        ev.offset);
+                fprintf(stderr, "COMBAT: WC1 occupancy preserved after VM 0x05 group-%d batch @0x%X\n",
+                        ev.walk_group, ev.offset);
             // sub_516D0/sub_16D3E returns to loc_50AA1 without calling sub_5401B. The original
             // area/region trigger is checked only by actual movement call sites (AI/player walks),
             // not by this scripted cutscene displacement. Keep this playback trigger-free.
