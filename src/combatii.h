@@ -249,6 +249,7 @@ enum class VmEventType {
     Bgm,            // 0x77 / 0x13
     NextScenario,   // 0x12 load the next .SCE
     Victory,        // 0x01 sub_506F3 -> sub_44CCA fade out, then end the module
+    Choice,         // 0x65 sub_50751: battle result menu / contmap handoff
     Attack,         // 0x07 sub_51C74 -> sub_1E61D/sub_1EF5C scripted attack/hit effect
     UnitPose,       // 0x07 no target and mode>=2 (loc_51E34): set attacker [63h]/[64h], hold 32 ticks
     Hp,             // 0x0A sub_5211D HP change (damage number/knockback); death at HP<=0 (sub_1DB1D)
@@ -282,8 +283,9 @@ struct VmWalkUnit {
     // For sub_508E6 (spawn effect): a mode-1 spawn is placed on its deployment tile and then
     // drops in. 0 = no drop, 1..8 = EVENT.SYB drop step (lands at 7, 8 = standing after landing).
     int drop = 0;
-    // Count1 - group appear delay in even frames. sub_50D9F sets unk_E5A50[idx] = -count1 and
-    // sub_508E6 (mode 3) increments every even frame, landing at 8. 0 = drop immediately.
+    // Count1 - group appear delay in even frames. sub_50D9F sets unk_E5A50[idx] = -count1;
+    // sub_16D3E (K==0 walk) and sub_508E6 (K==1 drop) both wait out that negative counter.
+    // 0 = start immediately.
     int spawn_delay = 0;
 };
 struct VmEvent {

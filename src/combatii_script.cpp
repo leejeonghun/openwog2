@@ -339,11 +339,11 @@ uint32_t CombatII::eval_condition(uint32_t offset, bool& satisfied) const {
     }
     // 5) Two-pass area unit count (cl = 1 then 3), 6-byte record:
     //    [x1][y1][x2][y2][expected][compare] or [0xFF][5 bytes] to skip this pass.
+    // sub_530F1 scans every CC998 footprint cell in the rectangle, reads effective [+0Eh]
+    // and counts it when `(army - cl) & 0xFFFF < 2`; cl is 1 (armies 1/2) then 3 (3/4).
+    // A large unit therefore contributes once per occupied cell, exactly as in the original.
     for (int pass = 0; pass < 2; ++pass) {
-    // The listing sets CL=1 then 3, sign-extends effective [+0Eh] and CL, subtracts and
-    // unsigned-skips differences >= 2, which counts armies {1,2} then {3,4};
-    // the port substitutes a coarse team hint instead of that army-list test.
-        uint8_t team = (pass == 0) ? 1 : 3;
+        const int army_base = (pass == 0) ? 1 : 3;
         uint8_t first = c.u8();
         if (!c.ok) return 0;
         if (first == 0xFF) {
@@ -359,13 +359,14 @@ uint32_t CombatII::eval_condition(uint32_t offset, bool& satisfied) const {
         if (x1 > x2) std::swap(x1, x2);
         if (y1 > y2) std::swap(y1, y2);
         int count = 0;
-        for (const auto& u : units_) {
-            // Static team comes from outer-group parity, spawned/Faction team from raw
-            // army == 0 vs non-zero. The port counts every units_ base-tile record,
-            // including inactive ones, rather than CC998 cells or list membership.
-            const bool team_match = (pass == 0) ? (u.team == 0) : (u.team != 0);
-            (void)team;
-            if (team_match && u.x >= x1 && u.x <= x2 && u.y >= y1 && u.y <= y2) count++;
+        for (int y = y1; y <= (int)y2; ++y) {
+            for (int x = x1; x <= (int)x2; ++x) {
+                const int occupant = battle_unit_index_at_footprint(x, y);
+                if (occupant < 0 || (size_t)occupant >= units_.size()) continue;
+                const int diff = battle_effective_army(units_[(size_t)occupant]) - army_base;
+                if ((uint16_t)diff >= 2u) continue;
+                ++count;
+            }
         }
         bool pass_ok = true;
         if (cmp_type == 0) pass_ok = (count == (int)expected);
@@ -1354,9 +1355,11 @@ CombatII::VmResult CombatII::run_vm(uint32_t offset) {
                         wu.path.push_back({ script_buffer_[q], script_buffer_[q + 1] });
                     }
                     if (!wu.path.empty()) {
+                        wu.spawn_delay = (int)count1;
                         sev.walk_units.push_back(std::move(wu));
-                        if ((int)(sev.walk_frames) < (int)pts + 1)
-                            sev.walk_frames = (int)pts + 1;
+                        // word_EDD74 = (count2-1) - (-count1) + 2 = points + count1 + 2.
+                        if ((int)(sev.walk_frames) < (int)pts + (int)count1 + 2)
+                            sev.walk_frames = (int)pts + (int)count1 + 2;
                     }
                 }
                 if (spawn_idx >= 0 && K == 1) {
@@ -1432,10 +1435,15 @@ CombatII::VmResult CombatII::run_vm(uint32_t offset) {
             }
             break;
         }
-        case VM_CHOICE: // sub_50751: no payload. Waits for input, then returns normally; the original keeps walking too.
+        case VM_CHOICE: { // sub_50751: no payload; the menu runs at playback time, then walking continues.
             r.choice = true;
+            VmEvent ev;
+            ev.type = VmEventType::Choice;
+            ev.offset = op_pos;
+            r.events.push_back(ev);
             if (script_trace_) fprintf(stderr, "COMBAT: vm choice/branch (0x65, payload 0)\n");
             break;
+        }
         default: // battle-only compound command: payload size unknown
             r.aborted = true;
             r.abort_opcode = op;
@@ -2008,15 +2016,16 @@ bool CombatII::run_region_count_trigger() {
 
         script_forced_target_ = -1;
         int count = 0;
+        const int wanted_army = (int)battle_incremented_raw_army(army_id);
         for (int y = y1; y <= y2; ++y) {
             for (int x = x1; x <= x2; ++x) {
-                for (size_t i = 0; i < units_.size(); ++i) {
-                    const CombatUnitPlacement& u = units_[i];
-                    if (!u.active || u.x != x || u.y != y ||
-                        battle_effective_army(u) != (int)battle_incremented_raw_army(army_id)) continue; // Byte INC wraps; CC998 footprint is still approximated by the base tile.
-                    ++count;
-                    if (script_forced_target_ < 0 || combat_rand(3) == 0) script_forced_target_ = (int)i;
-                }
+                const int occupant = battle_unit_index_at_footprint(x, y);
+                if (occupant < 0 || (size_t)occupant >= units_.size()) continue;
+                const CombatUnitPlacement& u = units_[(size_t)occupant];
+                if (battle_effective_army(u) != wanted_army) continue;
+                ++count;
+                if (script_forced_target_ < 0 || combat_rand(3) == 0)
+                    script_forced_target_ = occupant;
             }
         }
         bool hit = false;
@@ -2843,28 +2852,34 @@ void CombatII::animate_unit_walk(const VmEvent& ev) {
             u->anim_frame = (u->code_b >= 0x0F && u->code_b <= 0x16) ? 2 : 3;
         }
         for (int iter = 0; iter < steps; ++iter) {
-            const size_t next = (size_t)iter + 1;
-            // loc_16E1A: update facing towards this iteration's target (unk_E5210[iter] =
-            // path[iter+1]).
-            // Units whose path ended (0xFF) are left alone here; loc_16F57 in the sub-frame
-            // update sets [63h] = load for them.
+            // sub_16D3E keeps the unit in the prologue state while unk_E5A50 is still negative:
+            // count1 outer iterations pass before the first path step. The counter increments
+            // once per outer iteration, not once per subframe.
             for (auto& w : ev.walk_units) {
                 CombatUnitPlacement* u = unit_at(w.unit_index);
                 if (!u) continue;
-                if (next < w.path.size()) {
-                    int8_t f = walk_facing_toward(u->x, u->y, w.path[next].first, w.path[next].second);
-                    if (f >= 0) u->facing = f;
-                }
+                const int pi = iter - w.spawn_delay;
+                if (pi < 0 || (size_t)(pi + 1) >= w.path.size()) continue;
+                const size_t next = (size_t)pi + 1;
+                // loc_16E1A: update facing towards this iteration's target (unk_E5210[iter] =
+                // path[iter+1]).
+                // Units whose path ended (0xFF) are left alone here; loc_16F57 in the sub-frame
+                // update sets [63h] = load for them.
+                int8_t f = walk_facing_toward(u->x, u->y, w.path[next].first, w.path[next].second);
+                if (f >= 0) u->facing = f;
             }
             for (int sub = 0; sub < 4; ++sub) {
                 for (auto& w : ev.walk_units) {
                     CombatUnitPlacement* u = unit_at(w.unit_index);
                     if (!u) continue;
+                    const int pi = iter - w.spawn_delay;
+                    if (pi < 0) { u->walk_off_x = u->walk_off_y = 0; continue; }
+                    const size_t next = (size_t)pi + 1;
                     if (next < w.path.size()) {
-                        const int dx = w.path[next].first  - w.path[iter].first;
-                        const int dy = w.path[next].second - w.path[iter].second;
-                        u->x = w.path[(size_t)iter].first;
-                        u->y = w.path[(size_t)iter].second;
+                        const int dx = w.path[next].first  - w.path[(size_t)pi].first;
+                        const int dy = w.path[next].second - w.path[(size_t)pi].second;
+                        u->x = w.path[(size_t)pi].first;
+                        u->y = w.path[(size_t)pi].second;
                         // sub_16A6D: 6px horizontally / 4px vertically per sub-frame (tile units /
                         // 4).
                         // Rendering happens before the update, so sub=0 is the starting position.
@@ -2889,6 +2904,9 @@ void CombatII::animate_unit_walk(const VmEvent& ev) {
                 for (auto& w : ev.walk_units) {
                     CombatUnitPlacement* u = unit_at(w.unit_index);
                     if (!u) continue;
+                    const int pi = iter - w.spawn_delay;
+                    if (pi < 0) continue;             // still in the unk_E5A50 delay
+                    const size_t next = (size_t)pi + 1;
                     if (next < w.path.size()) {
                         // sub_16AEF -> sub_16A6D: advance the pose table every 2 sub-frames
                         // (`unk_E5A70 = (x+1)&3` when `unk_E5AB0++ == 2`).
@@ -2914,6 +2932,9 @@ void CombatII::animate_unit_walk(const VmEvent& ev) {
             for (auto& w : ev.walk_units) {
                 CombatUnitPlacement* u = unit_at(w.unit_index);
                 if (!u) continue;
+                const int pi = iter - w.spawn_delay;
+                if (pi < 0) { u->walk_off_x = u->walk_off_y = 0; continue; }
+                const size_t next = (size_t)pi + 1;
                 if (next < w.path.size()) {
                     u->x = w.path[next].first;
                     u->y = w.path[next].second;
@@ -3038,7 +3059,8 @@ VmEvent CombatII::battle_spawn_subevent(const VmEvent& ev, const std::vector<int
         if (std::find(units.begin(), units.end(), w.unit_index) == units.end()) continue;
         out.walk_units.push_back(w);
         if (ev.spawn_mode == 0 && !w.path.empty())
-            out.walk_frames = std::max(out.walk_frames, (int)w.path.size() + 1);   // word_EDD74
+            out.walk_frames = std::max(out.walk_frames,
+                                       (int)w.path.size() + w.spawn_delay + 2);   // word_EDD74
     }
     if (ev.spawn_mode != 0) out.walk_frames = ev.walk_frames;
     return out;
@@ -3672,6 +3694,52 @@ void CombatII::play_vm_events(const std::vector<VmEvent>& events) {
                 ua->facing = (int8_t)facing;
                 fprintf(stderr, "COMBAT: play face unit %d at (%d,%d) vs (%d,%d) -> facing=%d\n",
                         ua->id, ua->x, ua->y, ub->x, ub->y, (int)ua->facing);
+            }
+            present_cutscene_frame();
+            break;
+        }
+        case VmEventType::Choice: {
+            // sub_50751: if deployment was enabled, run the defeat/result table first
+            // (sub_53F2C(1)); then sub_44CCA(1) fades the battle frame out. The menu is called
+            // with eax=1 (no save/load). Return 2 writes unk_FDF68 with flag 1 and exits 1;
+            // return 8 fades and exits 0xFF; -1 reopens the menu.
+            if (battle_deploy_enabled_) {
+                VmResult result;
+                if (run_victory_script(1, result) && !result.events.empty())
+                    play_vm_events(result.events);
+                if (should_exit_) return;
+            }
+            victory_fade_out();                 // sub_44CCA(1)
+            for (;;) {
+                const int choice = battle_system_menu_4e0ee(1);   // sub_4E0EE(1)
+                if (should_exit_) return;
+                if (choice == 2) {
+                    std::string name = current_scenario_name_;
+                    if (name.empty()) name = map_info_.map_filename;
+                    write_contmap_dat(name, 1);  // sub_4FD6B(unk_FDF68, 1)
+                    next_scenario_fade_out();    // sub_55EBC
+                    return_code_ = 1;            // sub_61CFF(1)
+                    should_exit_ = true;
+                    return;
+                }
+                if (choice == 7) {
+                    // The original sub_4E0EE handles restart internally and never returns 7.
+                    std::string name = current_scenario_name_;
+                    if (name.empty()) name = map_info_.map_filename;
+                    write_contmap_dat(name, 0);  // sub_4FD6B(unk_FDF68, 0)
+                    next_scenario_fade_out();    // sub_55EBC
+                    return_code_ = 1;            // sub_61CFF(1)
+                    should_exit_ = true;
+                    return;
+                }
+                if (choice == 8) {
+                    next_scenario_fade_out();    // sub_55EBC
+                    return_code_ = 0xFF;         // sub_61CFF(0FFh)
+                    should_exit_ = true;
+                    return;
+                }
+                if (choice == -1) continue;      // loc_507B3: cancelled -> reopen
+                break;                           // any other code returns to the VM loop
             }
             present_cutscene_frame();
             break;
