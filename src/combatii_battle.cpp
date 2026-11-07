@@ -8929,16 +8929,28 @@ void CombatII::battle_fx_blit_tinted_unclipped(int frame, int x, int y, int tint
     magic_fx_draws_.push_back(MagicFxDraw{frame, x, y, tint_pct, 0, 0, false, true}); // sub_5F29D
 }
 
+// sub_5F093(eax=x, edx=y, ebx=[w][h]+pixels, cl=colour): solid silhouette. Every source pixel
+//   that is not 0FFh is replaced by the colour byte, with no palette lookup and no clip. The
+//   original walks the 480-stride framebuffer without bounds tests; the port keeps the same
+//   linear walk but drops writes outside the buffer.
+void CombatII::battle_fx_blit_silhouette(int frame, int x, int y, int color) {
+    if (frame < 0 || (size_t)frame >= magic_frames_.size()) return;
+    magic_fx_draws_.push_back(MagicFxDraw{frame, x, y, -1, 0, 0, false, false, false, false,
+                                          color & 0xFF}); // sub_5F093
+}
+
 // sub_5F570 / sub_5F611: draw a frame scaled up or down to the target size (the
 // Barrier/Black Hole/Amagedon family changes size over the 0Fh/0Eh timers). A target at
 // least as large as the source uses expand (5F570) and a smaller one shrink (5F611); the
 // original also calls them separately.
 // expand_only covers call sites where the original only calls 5F570 (276B9/2799A/27C5A):
 // a smaller target then still goes through 5F570 instead of the shrink routine.
-void CombatII::battle_fx_blit_scaled(int frame, int x, int y, int dst_w, int dst_h, bool expand_only) {
+void CombatII::battle_fx_blit_scaled(int frame, int x, int y, int dst_w, int dst_h,
+                                     bool expand_only, bool shrink_only) {
     if (frame < 0 || (size_t)frame >= magic_frames_.size()) return;
     if (dst_w <= 0 || dst_h <= 0) return;
-    magic_fx_draws_.push_back(MagicFxDraw{frame, x, y, -1, dst_w, dst_h, expand_only});
+    magic_fx_draws_.push_back(MagicFxDraw{frame, x, y, -1, dst_w, dst_h, expand_only, false,
+                                          false, shrink_only});
 }
 
 void CombatII::battle_fx_present() {
@@ -9032,11 +9044,24 @@ void CombatII::render_magic_effect_layer() {
         dbuf[2] = (uint8_t)(fr.h & 0xFF); dbuf[3] = (uint8_t)(fr.h >> 8);
         std::memcpy(dbuf.data() + 4, fr.flat.data(), fr.flat.size());
         if (d.dst_w > 0) {
-            // sub_5F570 / sub_5F611: expand when the target is at least the source size
-            if (d.expand_only || (d.dst_w >= fr.w && d.dst_h >= fr.h))
+            // sub_5F570 / sub_5F611: expand when the target is at least the source size;
+            // explicit 5F611 call sites force shrink even for a larger target.
+            if (d.expand_only || (!d.shrink_only && d.dst_w >= fr.w && d.dst_h >= fr.h))
                 blit_scale_expand(d.x, d.y, dbuf.data(), d.dst_w, d.dst_h);
             else
                 blit_scale_shrink(d.x, d.y, dbuf.data(), d.dst_w, d.dst_h);
+        } else if (d.silhouette >= 0) {
+            // sub_5F093: fill every non-transparent pixel with the colour byte.
+            const long base = (long)d.y * SCREEN_W + d.x;
+            const long limit = (long)SCREEN_W * SCREEN_H;
+            for (int row = 0; row < fr.h; ++row) {
+                for (int col = 0; col < fr.w; ++col) {
+                    if (fr.flat[(size_t)row * (size_t)fr.w + (size_t)col] == 0xFF) continue;
+                    const long off = base + (long)row * SCREEN_W + col;
+                    if (off < 0 || off >= limit) continue;
+                    video_.get_backbuffer()[off] = (uint8_t)d.silhouette;
+                }
+            }
         } else if (d.clip319) {
             blit_flat_clip319(d.x, d.y, dbuf.data());                       // sub_5EFB9
         } else if (d.tint_pct < 0) {

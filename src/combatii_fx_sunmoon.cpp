@@ -228,32 +228,26 @@ int CombatII::battle_fx_5a267(int unit_index, int tx, int ty, int k) {
 
     int counter = 0x19;                                        // var_C = 0x19
     const int step = 2;                                        // two frames per step
-    // (4) Shrink phase: counter 0x19 -> 6 (ends once it drops below 5)
+    // (4)/(5) 5F611 target width and height are both the counter (0x19..6, then 5..7), and the
+    //   top-left is anchor + counter/2 + frame offset (the dword reads extract entry+4/+6 as
+    //   xo/yo). 5F611 is the shrink blitter, so it is selected even when the target is larger.
+    auto draw_scaled = [&](int sz) {
+        if (nframes <= 0) return;
+        const MagicFxFrame& e = magic_frames_[0];
+        battle_fx_blit_scaled(0, ax + sz / 2 + e.xo, ay + sz / 2 + e.yo,
+                              sz, sz, false, true);            // sub_5F611
+    };
     while (counter > 5 && !should_exit_) {
         for (int i = 0; i < step && !should_exit_; ++i) {
-            if (0 < nframes) {
-                // 5F611 (scaled). The target size is an original local (var_18/var_1C) that
-                // cannot be read statically, so the port scales with the counter (0x19 = full,
-                // 6 = 1/4).
-                const int dw = magic_frames_[0].w * counter / 0x19;
-                const int dh = magic_frames_[0].h * counter / 0x19;
-                battle_fx_blit_scaled(0, ax + magic_frames_[0].xo, ay + magic_frames_[0].yo,
-                                      dw > 0 ? dw : 1, dh > 0 ? dh : 1, false);
-            }
+            draw_scaled(counter);
             battle_fx_present();
             wait_game_tick();
         }
         --counter;
     }
-    // (5) Grow phase: counter 6 -> 8 (ends once it reaches 8)
     while (counter < 8 && !should_exit_) {
         for (int i = 0; i < step && !should_exit_; ++i) {
-            if (0 < nframes) {
-                const int dw = magic_frames_[0].w * counter / 0x19;
-                const int dh = magic_frames_[0].h * counter / 0x19;
-                battle_fx_blit_scaled(0, ax + magic_frames_[0].xo, ay + magic_frames_[0].yo,
-                                      dw > 0 ? dw : 1, dh > 0 ? dh : 1, false);
-            }
+            draw_scaled(counter);
             battle_fx_present();
             wait_game_tick();
         }
