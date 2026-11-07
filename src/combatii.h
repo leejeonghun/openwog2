@@ -131,9 +131,10 @@ struct CombatUnitPlacement {
     // while units_'s effective-army scan cannot approximate the group-0 remap.
     uint8_t ai_home_x = 0xFF, ai_home_y = 0xFF; // BattleUnit +0x6F/+0x70
     // [+0x71]/[+0x72] list selector and unit ID that sub_3E18B resolves via sub_1379A(sel,id).
-    // For AI only +0x71 == 0xFF is a sentinel; in CC960+sel*8 the values 1..4 are CC968
-    // lists 0..3, while 5/6 alias CC988/CC990. sel=0 and the 5/6 membership are not modelled;
-    // 7..254 point past the CC998 occupancy table and are not treated as lists.
+    // dword_CC960[sel*8] is a linked-list head. sub_4ED18/sub_1134F insert each unit at
+    // CC968 + (effective_army-1)*8, so sel 0..5 are the effective-army lists 0..5
+    // (CC960, CC968..CC988) and sel 6 is the global CC990 list. 7..254 point past the
+    // list array (into CC998) and are not treated as lists.
     uint8_t ai_watch_sel = 0xFF, ai_watch_id = 0; // BattleUnit +0x71/+0x72
     // [+0x73] is a BattleUnit pointer in the original; the port stores a units_ index. A
     // non-zero dword marker in a static SCE is resolved like sub_4ED18 does, by looking up
@@ -1133,11 +1134,14 @@ private:
     bool battle_ai_41515_retreat(int unit_index);
     void battle_prepare_ai_gauge_baseline(CombatUnitPlacement& u); // sub_19FAB: baseline of the shared dword_F0426+2
     // sub_3E18B: -1 = watch target not found or distance <= 1, 0 = +71h (FFh) equals the home x,
-    // 1 = target distance > 1, 2 = signed x/y differ from both home coordinates. AI selectors 1..4
-    // approximate CC968 lists 0..3 (static/dynamic army remap not modelled). Selectors 0/5/6
-    // (CC960/CC988/CC990 membership) and the seven move/score branches are unported; -2 is a
-    // port-only diagnostic value.
+    // 1 = target distance > 1, 2 = signed x/y differ from both home coordinates. AI selectors 0..6
+    // resolve through the CC960/CC968..CC990 lists (effective armies 0..5 and the global
+    // roster); 7..254 are outside the list array and return the port-only -2 diagnostic.
     int battle_ai_watch_state(int unit_index) const;
+    // sub_1379A(sel,id): walk dword_CC960[sel*8] and return the first active unit with
+    // [+0Fh]==id. Selectors 0..5 select effective-army lists 0..5, selector 6 the CC990 global
+    // list. Only on-map units_ records are represented; list order follows list_seq.
+    int battle_ai_cc960_member(int selector, int id) const;
     // sub_3F321 (dasm 63212..63306): computes the whole AI action state 0/1/2/-1. Signed map kind
     // >= 4 -> 0, [+81h] -> 1, [+7Fh] -> 2, [+82h]!=FFh && HP>0x3E8 -> 1, [+80h]!=FFh -> 2,
     // [+6D]==4 -> -1, [+6D]==0 -> 0; any other [+6D] passes the type/link gate and splits into
@@ -1313,8 +1317,8 @@ private:
     // among cells with E8 >= 0 inside the same radius-r diamond. true means dest is meaningful.
     bool battle_ai_3f247(int unit_index, int radius, int edd72,
                          int& out_x, int& out_y) const;
-    // sub_3E21B: units_ index of the [+71h] list member (1379A approximation) or of the direct
-    // [+73h] target. -1 when there is none or when the selector is 0/5+ (lists not modelled).
+    // sub_3E21B: units_ index of the [+71h] list member (1379A) or of the direct [+73h]
+    // target. -1 when there is none; all list selectors 0..6 are resolved.
     int battle_ai_3e21b_target(int unit_index) const;
     // Grid-taking form of sub_3EBB4 (early path): for every hostile inside the sec-radius
     // diamond it scores wc<6 with 3D3E5 and wc>=6 with 3CA3C. grid is the E8 left by 3F0E4 and
@@ -1468,8 +1472,7 @@ private:
 
     // ---- Mage AI (wc==2, combatii_aimage.cpp; dasm 68230..69404 + 61343..62060 + 63307) ----
     // sub_3E21B: watched unit as a units_ index (-1 when none). [+71h] != 0xFF resolves through
-    // sub_1379A(sel,id), otherwise [+73h] is used. Selectors 1..4 use the same army+ID
-    // approximation as battle_ai_watch_state.
+    // sub_1379A(sel,id) for selectors 0..6, otherwise [+73h] is used.
     int battle_ai_watch_unit(int unit_index) const;
     // sub_42B77(u, mode, radius): scans the caster's facing triangle (1AF22/1B00D, start cell
     // excluded) for mode 0 = allied unit with an ailment, 1 = allied unit below 70% HP or an

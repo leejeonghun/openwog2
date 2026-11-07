@@ -67,15 +67,7 @@ int CombatII::battle_ai_watch_unit(int unit_index) const {
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return -1;
     const CombatUnitPlacement& u = units_[(size_t)unit_index];
     if (u.ai_watch_sel != 0xFF) {
-        const int sel = (int)u.ai_watch_sel;
-        if (sel >= 1 && sel <= 4) {
-            for (size_t i = 0; i < units_.size(); ++i) {
-                const auto& c = units_[i];
-                if (c.active && battle_effective_army(c) == sel && c.id == (int)u.ai_watch_id)
-                    return (int)i;
-            }
-        }
-        return -1;
+        return battle_ai_cc960_member((int)u.ai_watch_sel, (int)u.ai_watch_id);
     }
     if (u.ai_target_unit >= 0 && (size_t)u.ai_target_unit < units_.size()) return u.ai_target_unit;
     return -1;
@@ -1331,6 +1323,7 @@ bool CombatII::battle_ai_mage_turn(int ui, int type) {
     // sub_15523 route + sub_1620A walk + 3C993 settlement + 167C9/5401B/17310.
     auto do_walk = [&](int dx, int dy, int facing, int S, int ref_x, int ref_y, bool facing_to_ref) -> Mv {
         (void)facing_to_ref;  // 14FA4 returns the seed/dest -> ref facing directly.
+        if (ref_x < 0 || ref_y < 0) { ref_x = dx; ref_y = dy; }  // 43526 tail always has a valid ref
         battle_ai_budget_override_ = S * 4;
         // The 43526/438AE movement tail runs 14300(D2)/1419C/1499C/15342/15523/14FA4 in that order.
         // The route comes from the route pipeline inside branch_walk, and the facing is overwritten
@@ -1390,7 +1383,21 @@ bool CombatII::battle_ai_mage_turn(int ui, int type) {
             }
             trace("decide", di, S);
             if (di == 1) {                                         // 15523 route -> 1620A walk
-                const Mv m = do_walk(dx, dy, face, S, -1, -1, false);
+                // 43526/438AE pass the selected unit reference to 14FA4. Use the
+                // 3E739 hostile, else the 3E5AB watch target; the destination is the
+                // last-resort reference when neither exists.
+                int ref_x = -1, ref_y = -1;
+                if (hostile >= 0 && (size_t)hostile < units_.size()) {
+                    ref_x = (int)(int8_t)units_[(size_t)hostile].x;
+                    ref_y = (int)(int8_t)units_[(size_t)hostile].y;
+                } else {
+                    const int wt = battle_ai_watch_unit(ui);
+                    if (wt >= 0 && (size_t)wt < units_.size()) {
+                        ref_x = (int)(int8_t)units_[(size_t)wt].x;
+                        ref_y = (int)(int8_t)units_[(size_t)wt].y;
+                    }
+                }
+                const Mv m = do_walk(dx, dy, face, S, ref_x, ref_y, false);
                 if (m == Mv::Exit) return true;
                 if (m == Mv::Stay) di = -2;
             } else if (di == -1) {
