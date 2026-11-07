@@ -410,8 +410,8 @@ int CombatII::battle_fx_272ad(int unit_index, int tx, int ty, int k) {
 //       var_24 = anchor y-0BCh
 //   (3) descent loop: 5EFB9 (big star above the unit) + 5F29D + 5F305 (frames 8..) drawn from
 //       anchor y-0BCh down to -2Ah in steps of 8 -> 1FFCD.
-//   Port: the scale and rotation of 5EFB9/5F29D are not ported, so battle_fx_blit / blit_tinted
-//   stand in for them.
+//   Port: the 5EFB9 scale/rotation and the separate 5F29D frame are not ported; battle_fx_blit /
+//   blit_tinted stand in for the 5F305 descent.
 int CombatII::battle_fx_59675(int target_index) {
     if (target_index < 0 || (size_t)target_index >= units_.size()) return 0;
     auto& u = units_[(size_t)target_index];

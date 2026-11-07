@@ -64,7 +64,7 @@
 //
 // Port mapping: 1A1F8->battle_weapon_collect_screen, 1FEA4->battle_nsp_load,
 //   1FFCD->battle_nsp_release, 1FFFE->battle_fx_blit, 5EE51->battle_fx_blit,
-//   5F305->battle_fx_blit_tinted, 5F29D->battle_fx_blit_tinted,
+//   5F305->battle_fx_blit_tinted, 5F29D->battle_fx_blit_tinted_unclipped,
 //   5F517->blit_nc2_frame_solid, 5F3FD->blit_nc2_frame,
 //   454B3->battle_fx_world, 5E9E8->battle_fx_commit, 454B3+5E9E8->battle_fx_present,
 //   1033B->game_timer_set, 499E4->wait_game_tick, 4F4CD->sfx, 499BD->combat_rand,
@@ -410,7 +410,7 @@ int CombatII::battle_fx_31283_anim(int unit_index) {
                 for (int k = 0; k < 3 && k < count; ++k) column_trail(k, sub_frame);
                 if (esi < nframes) {
                     const MagicFxFrame& fr = magic_frames_[(size_t)esi];
-                    battle_fx_blit_tinted(esi, base_x + fr.xo, base_y + fr.yo, 0x50);  // 5F29D
+                    battle_fx_blit_tinted_unclipped(esi, base_x + fr.xo, base_y + fr.yo, 0x50); // 5F29D
                 }
                 battle_fx_present();
                 wait_game_tick();
@@ -474,7 +474,7 @@ int CombatII::battle_fx_31283_anim(int unit_index) {
                 // loc_32347: memset(loc_17700, 0, 0BB80h); skipped, the port has no such buffer.
             } else if (di < nframes) {
                 const MagicFxFrame& fr = magic_frames_[(size_t)di];
-                battle_fx_blit_tinted(di, fr.xo, 0x61 + fr.yo, 0x50);   // sub_5F29D
+                battle_fx_blit_tinted_unclipped(di, fr.xo, 0x61 + fr.yo, 0x50); // sub_5F29D
             }
             battle_fx_commit();
             wait_game_tick();

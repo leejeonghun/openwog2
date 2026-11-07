@@ -461,7 +461,7 @@ int CombatII::battle_fx_26810(int unit_index, int tx, int ty, int k) {
     const int dir = (k / 3) & 0x3;                                       // variant (edi), groups of 4
     for (int t = 0; t < 0x1E && !should_exit_; ++t) {                    // `cmp cx,1Eh`
         const int f = dir * 4 + (t % 4);                                 // `idiv 4` -> remainder
-        if (f < nframes) battle_fx_blit_tinted(f, cx, cy, shade);        // sub_5F29D (5F305 family)
+        if (f < nframes) battle_fx_blit_tinted_unclipped(f, cx, cy, shade); // sub_5F29D
         battle_fx_present();
         wait_game_tick();
     }

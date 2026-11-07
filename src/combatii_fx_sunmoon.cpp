@@ -267,8 +267,8 @@ int CombatII::battle_fx_5a267(int unit_index, int tx, int ty, int k) {
     for (int outer = 0; outer < 6 && !should_exit_; ++outer) {
         for (int i = 0; i < 10 && !should_exit_; ++i) {
             if (frame_no < nframes)
-                battle_fx_blit_tinted(frame_no, ax + magic_frames_[frame_no].xo,
-                                      ay + magic_frames_[frame_no].yo, 0x3C);
+                battle_fx_blit_tinted_unclipped(frame_no, ax + magic_frames_[frame_no].xo,
+                                                ay + magic_frames_[frame_no].yo, 0x3C);
             battle_fx_present();
             wait_game_tick();
             mul = std::min(0x64, mul + 2);
