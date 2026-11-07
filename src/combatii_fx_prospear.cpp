@@ -4,7 +4,7 @@
 // combatii_fx_fire.cpp:
 //   sub_1FEA4           -> battle_nsp_load("<file>.nsp"); appending uses the local lambda here
 //   sub_1FFFE / sub_5EE51 -> battle_fx_blit(frame, x + frame.xo, y + frame.yo)
-//   sub_5F305 / sub_5F29D -> battle_fx_blit_tinted(...); 5F29D sites are approximated as tinted
+//   sub_5F305 / sub_5F29D -> battle_fx_blit_tinted / battle_fx_blit_tinted_unclipped
 //   sub_454B3 + sub_5E9E8 -> battle_fx_present()
 //   sub_454D5           -> covered by the renderer's overlay pass
 //   sub_499E4           -> wait_game_tick()
@@ -90,7 +90,7 @@ void pro_kill(int idx) {
 //   (1) game_timer_set(7), then for 9 frames raise table frames 0..8 at
 //       (x + (tile_w > 1 ? 0x0C : 0), y)
 //   (2) sfx(0x32), then an h-row loop: per row present (sub_454B3) and blit the main frame, the
-//       secondary frame and the 8-fold plume through the tinted path (sub_5F29D)
+//       secondary frame and the 8-fold plume through the unclipped tinted path (sub_5F29D)
 //   (3) game_timer_set(0x1E), one wait, sfx(0x33). The caller releases the table.
 // The port reads battle_d66a8_raw with the unit's sprite_type instead of a slot and derives
 // x/y from unit_screen_center + 0x0C.
@@ -136,7 +136,7 @@ int CombatII::battle_fx_21944(int unit_index, int tx, int ty, int k) {
     auto blit_t = [&](int f, int x, int y, int pct) { // sub_5F29D (tinted blit)
         if (f < 0 || f >= nframes) return;
         const MagicFxFrame& fr = magic_frames_[(size_t)f];
-        battle_fx_blit_tinted(f, x + fr.xo, y + fr.yo, pct);
+        battle_fx_blit_tinted_unclipped(f, x + fr.xo, y + fr.yo, pct);
     };
     for (int r = 0; r < h && !should_exit_; ++r) {   // loc_21BAC: var_14 < [edx+3]
         const int p = r % 5;                         // remainder of `idiv 5`

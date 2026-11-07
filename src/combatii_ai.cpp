@@ -262,11 +262,11 @@ bool CombatII::battle_ai_terrain_bucket_compatible(int base_x, int base_y, int c
 }
 
 // Port of the decision step: sub_14032 (blocker marks) + sub_143F3 (cost spread).
-// Only a 1x1 ordinary footprint is supported, so the single actor cell is seeded with
-// the budget (sub_1430E equivalent). Blockers use gate-proven 1x1 vector occupancy
-// instead of CC998. Reproduces the E65B0 fringe, the LIFO stack spread, strict max
-// updates and the budget+1 actor refresh. sub_1419C (-0x1E fringe), the execution tail
-// (0xD2 budget) and path restoration are not included.
+// sub_1430E seeds every cell of the actor's D66A8 footprint with the budget, and
+// sub_14032 marks every CC998-occupied cell of a hostile blocker. Reproduces the E65B0
+// fringe, the LIFO stack spread, strict max updates and the budget+1 actor refresh.
+// sub_1419C (-0x1E fringe), the execution tail (0xD2 budget) and path restoration are
+// not included.
 std::vector<int> CombatII::battle_ai_build_diffusion(int unit_index, int budget,
                                                      std::vector<char>* out_fringe) const {
     std::vector<int> grid;
@@ -300,19 +300,25 @@ std::vector<int> CombatII::battle_ai_build_diffusion(int unit_index, int budget,
     };
     static constexpr int kDirX[4] = { 0, -1, 0, 1 }; // S,W,N,E (order does not affect values)
     static constexpr int kDirY[4] = { 1, 0, -1, 0 };
-    for (size_t i = 0; i < units_.size(); ++i) {
-        const auto& u = units_[i];
-        if (!u.active || u.hp <= 0) continue;
-        if (!is_blocker_army(battle_effective_army(u))) continue;
-        const int ux = (int)(int8_t)u.x, uy = (int)(int8_t)u.y;
-        if (ux < 0 || uy < 0 || ux >= map_w || uy >= map_h) continue;
-        const int idx = uy * map_w + ux;
-        grid[(size_t)idx] = -(battle_effective_army(u) + 1); // `inc esi; neg esi`
-        for (int d = 0; d < 4; ++d) {
-            const int nx = ux + kDirX[d], ny = uy + kDirY[d];
-            if (nx < 0 || ny < 0 || nx >= map_w || ny >= map_h) continue;
-            const int nidx = ny * map_w + nx;
-            if (grid[(size_t)nidx] == -1) visited[(size_t)nidx] = (char)0xF9;
+    // sub_14032 walks CC998, not the unit list: every footprint cell of a hostile
+    // blocker is stored as -(army+1), and the four neighbours of each such cell get
+    // E65B0 = 0xF9 when they are otherwise unreached.
+    for (int cy = 0; cy < map_h; ++cy) {
+        for (int cx = 0; cx < map_w; ++cx) {
+            const int occ = battle_unit_index_at_footprint(cx, cy);
+            if (occ < 0) continue;
+            const auto& u = units_[(size_t)occ];
+            if (!u.active || u.hp <= 0) continue;
+            const int cell_eff = battle_effective_army(u);
+            if (!is_blocker_army(cell_eff)) continue;
+            const int idx = cy * map_w + cx;
+            grid[(size_t)idx] = -(cell_eff + 1); // `inc esi; neg esi`
+            for (int d = 0; d < 4; ++d) {
+                const int nx = cx + kDirX[d], ny = cy + kDirY[d];
+                if (nx < 0 || ny < 0 || nx >= map_w || ny >= map_h) continue;
+                const int nidx = ny * map_w + nx;
+                if (grid[(size_t)nidx] == -1) visited[(size_t)nidx] = (char)0xF9;
+            }
         }
     }
     // sub_13FB5 two-cell border set to -1 at the end of sub_14032. Already -1 from the
@@ -323,16 +329,38 @@ std::vector<int> CombatII::battle_ai_build_diffusion(int unit_index, int budget,
                 grid[(size_t)y * (size_t)map_w + (size_t)x] = -1;
         }
     }
-    // sub_1430E: seed and push the actor footprint with the budget; 1x1 means one cell.
+    // sub_1430E: seed every cell of the actor's D66A8 footprint. The original walks
+    // the base row first and then moves one row upward (x..x+w-1, y-h+1..y), pushing
+    // each cell through sub_13AB1.
+    int foot_w = 1, foot_h = 1;
+    if (!battle_d66a8_footprint(actor.sprite_type, (int)actor.facing & 3, &foot_w, &foot_h) ||
+        foot_w < 1 || foot_h < 1) {
+        foot_w = foot_h = 1;
+    }
     const int start_idx = actor_y * map_w + actor_x;
-    grid[(size_t)start_idx] = budget;
     std::vector<int> stack;
-    stack.push_back(start_idx);
     auto push_bounded = [&](int nidx) {
         // sub_13AB1: past 0xA0 entries drop the whole queue and reset count to 0.
         if (stack.size() >= 0xA0) { stack.clear(); return; }
         stack.push_back(nidx);
     };
+    bool seeded = false;
+    for (int row = 0; row < foot_h; ++row) {
+        const int cy = actor_y - row;
+        if (cy < 0 || cy >= map_h) continue;
+        for (int col = 0; col < foot_w; ++col) {
+            const int cx = actor_x + col;
+            if (cx < 0 || cx >= map_w) continue;
+            const int idx = cy * map_w + cx;
+            grid[(size_t)idx] = budget;
+            push_bounded(idx);
+            seeded = true;
+        }
+    }
+    if (!seeded) {
+        grid[(size_t)start_idx] = budget;
+        push_bounded(start_idx);
+    }
     while (!stack.empty()) {
         const int cur = stack.back();
         stack.pop_back();
@@ -2883,8 +2911,9 @@ bool CombatII::battle_ai_dispatch_plus6c(int unit_index, int watch_state) {
         if (state == 1) {
             // F0648 equivalent: hostile list inside the budget-radius diamond, using the
             // same rule as the k=0 sub_3E65E approximation. The original F0648 is filled by
-            // sub_4016A -> sub_1D124 (classes 0x0B/0x0C collect at radius 7/9), which is
-            // not ported here. sub_1D124 never holds the own cell, so self is excluded.
+            // sub_4016A -> sub_1D124 (classes 0x0B/0x0C collect at radius 7/9); the k=0
+            // branch below scans directly through sub_3E65E. sub_1D124 never holds the own
+            // cell, so self is excluded.
             std::vector<int> hostiles;
             const int actor_x = (int)(int8_t)ready.x;
             const int actor_y = (int)(int8_t)ready.y;
@@ -4458,7 +4487,7 @@ bool CombatII::battle_ai_40295_move(int unit_index, int wc) {
             }
         } else {
             if (battle_trace_) {
-                fprintf(stderr, "COMBAT: AI weapon_class=%d unit=%d no port target candidate (effective hostility checked; sub_1D124 tile-pattern scan unported; watch_state=%d pos=(%d,%d) shared_gauge=%d hostility_inverted=%d)\n",
+                fprintf(stderr, "COMBAT: AI weapon_class=%d unit=%d no port target candidate (effective hostility checked; ported sub_1D124 scan found no target; watch_state=%d pos=(%d,%d) shared_gauge=%d hostility_inverted=%d)\n",
                         wc, ready.id, watch_state, ready.x, ready.y, (int)battle_ai_gauge_baseline_,
                         battle_hostility_inverted_ ? 1 : 0);
             }

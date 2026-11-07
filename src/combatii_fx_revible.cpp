@@ -56,8 +56,8 @@
 //     port wraps through the palette (&0FFh).
 //
 // Deviations from the original:
-//   1. The 611AA tint LUT is handled by battle_fx_blit_tinted(pct=50h), the same convention as
-//      the other fx files. Palette save/restore (61115/103A8/103A0) is covered by the port.
+//   1. The 611AA tint LUT is handled by battle_fx_blit_tinted_unclipped(pct=50h) (sub_5F29D
+//      does not clip). Palette save/restore (61115/103A8/103A0) is covered by the port.
 //   2. 5ECC7/5EDDE/6104A/6106C (clip, dim, LUT setup) and the 45x screen preparation already
 //      happen in render/present.
 //   3. 11EE4/11E04 (occupancy release/restore) are omitted: the port derives occupancy from
@@ -202,7 +202,7 @@ int CombatII::battle_fx_59a70(int caster_index, int revived_index) {
         const int ft = 5 + (f & 1);
         if (ft < nframes) {
             const MagicFxFrame& fr = magic_frames_[(size_t)ft];
-            battle_fx_blit_tinted(ft, 0xA0 + fr.xo, 0x4C + fr.yo, 0x50);  // sub_5F29D(611AA)
+            battle_fx_blit_tinted_unclipped(ft, 0xA0 + fr.xo, 0x4C + fr.yo, 0x50); // sub_5F29D(611AA)
         }
         battle_fx_present();
         apply_pal(0, 0x100, wash, 0x64 - f * 0x0A);                // 5FD1C(pct 64h,5Ah,...)
@@ -221,18 +221,18 @@ int CombatII::battle_fx_59a70(int caster_index, int revived_index) {
         const int ft = 7 + (f & 1);
         if (ft < nframes) {
             const MagicFxFrame& fr = magic_frames_[(size_t)ft];
-            battle_fx_blit_tinted(ft, 0xA0 + fr.xo, 0x4C + fr.yo, 0x50);
+            battle_fx_blit_tinted_unclipped(ft, 0xA0 + fr.xo, 0x4C + fr.yo, 0x50);
         }
         if (f <= 0x0C) {                                            // frame ((edi&3)+9)
             const int fx = (f & 3) + 9;
             if (fx < nframes) {
                 const MagicFxFrame& fr = magic_frames_[(size_t)fx];
-                battle_fx_blit(fx, 0xA0 + fr.xo, 0x4C + fr.yo);
+                battle_fx_blit_tinted_unclipped(fx, 0xA0 + fr.xo, 0x4C + fr.yo, 0x50); // sub_5F29D(611AA)
             }
         } else if (f <= 0x0F) {                                     // frame edi (0Dh..0Fh), tinted
             if (f < nframes) {
                 const MagicFxFrame& fr = magic_frames_[(size_t)f];
-                battle_fx_blit_tinted(f, 0xA0 + fr.xo, 0x4C + fr.yo, 0x50);
+                battle_fx_blit_tinted_unclipped(f, 0xA0 + fr.xo, 0x4C + fr.yo, 0x50);
             }
         }
         render_battle_frame();                                      // sub_454B3

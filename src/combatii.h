@@ -119,9 +119,9 @@ struct CombatUnitPlacement {
     uint16_t reward_money_85 = 0; // BattleUnit +0x85 (sub_17A20 kill reward gold)
     // Patrol/guard state machine of sub_40295 (wc1 AI, no-target branch); dasm 61565..62984
     // (sub_3E18B plus branches sub_3E65E/3E739/3EADD/3EBB4/3ED51/3EF12/3EE2B, off_40279).
-    // [+0x6C] AI decision state (0..6, jump table off_40279). The seven branches themselves
-    // (scan + sub_3CA3C scoring) are not ported; only the state/target fields, the
-    // sub_3E18B test and the VM assignments are.
+    // [+0x6C] AI decision state (0..6, jump table off_40279). The VM writes the state; the
+    // port dispatches it through battle_ai_wc1_pursuit / battle_ai_dispatch_plus6c (scan,
+    // sub_3CA3C scoring and the loc_40470 k=1..6 table).
     uint8_t ai_decision_state = 0;  // BattleUnit +0x6C
     uint8_t ai_field_6d = 0, ai_field_6e = 0; // BattleUnit +0x6D/+0x6E, state bytes written by VM_AI
     uint8_t ai_field_7f = 0, ai_field_81 = 0; // BattleUnit +0x7F/+0x81, sub_3F321 AI mode gates
@@ -1292,9 +1292,9 @@ private:
     // in the original. The outer loop picks the hostile with the strict maximum of
     // score = si + (90 - dist) + (facing match ? 4 : 0). The E8F46 scratch is snapshotted and
     // restored per facing/hostile from the caller's diffusion copy, and the 1C685 flood residue
-    // is left behind exactly as DOS leaves it. 165C2 tests only the 1x1 gate (unoccupied, or self
-    // with diffusion >= 0); F0B8E==2 (E8 score) and ==3 (sub_3D7B2 distance) are supported,
-    // while non-1x1 units and large footprints are not ported. Machine-code emulation matched
+    // is left behind exactly as DOS leaves it. 165C2 walks the actor's full D66A8 footprint
+    // (base row upward); every cell must be unoccupied (or self) with diffusion >= 0.
+    // F0B8E==2 (E8 score) and ==3 (sub_3D7B2 distance) are supported. Machine-code emulation matched
     // the E8F46 end state. On the 1-5 sample the DOS
     // observation (A -> id3, C -> Hammil) differs for A (Mark instead of id3) and C (keeps
     // Hammil instead of id4), so the port keeps the verified original target choice and records
@@ -2051,8 +2051,8 @@ private:
     // The 4D7EA redisplay loop does not call 1A0F0.
     void battle_player_show_menu(int unit_index, bool first_entry = false);
     bool battle_player_enter_ring(int unit_index); // sub_4D674 entry (4D582+1124A+455BD+1CC09+ring, FDAF2 branch)
-    std::pair<int,int> battle_4d582_tile(int unit_index); // sub_4D582 1x1 approximation (sprite centre + facing 3 px -> tile)
-    void battle_4d582_center(int unit_index); // sub_4D582+1124A (1x1 approximation; large units are a tripwire)
+    std::pair<int,int> battle_4d582_tile(int unit_index); // sub_4D582 (D66A8 visual centre + wc5/0x0B facing 3 px -> tile)
+    void battle_4d582_center(int unit_index); // sub_4D582+1124A (large units use the raw footprint)
     bool battle_free_input();                    // sub_5580F free wait (hover, click, right click, info, Space)
     void battle_ring_cancel_to_free(int unit_index); // ring cancel -1 -> free wait (queue kept, gauge restored)
     void battle_show_info_modal(int unit_index); // sub_493A3 equivalent (banner off + dim + blocking 499EF(4B0h) wait)
@@ -2120,7 +2120,8 @@ private:
     // them.
     //   expand_only = true forces the 5F570 upscale even when the destination is smaller than the
     //   source; 276B9/2799A/27C5A rely on that.
-    struct MagicFxDraw { int frame; int x, y; int tint_pct; int dst_w, dst_h; bool expand_only = false; };
+    //   unclipped = true selects sub_5F29D (same tint LUT as 5F305, but no 13Fh/C7h clip).
+    struct MagicFxDraw { int frame; int x, y; int tint_pct; int dst_w, dst_h; bool expand_only = false; bool unclipped = false; };
     std::vector<MagicFxDraw> magic_fx_draws_;
     // dword_F9F08 + word ptr dword_FA8B6+2: units that sub_44DCC redraws inside 454D5.
     // The original stores raw unit pointers and does not deduplicate (at most 59h entries).
@@ -2140,14 +2141,18 @@ private:
     // ---- Shared effect blitters and present (used by every driver) ----
     // battle_fx_blit: sub_5EE51, one flat [w][h]+px frame (0FFh transparent).
     // battle_fx_blit_tinted: sub_5F305 (scale the palette entry to tint_pct%% brightness, then
-    // alpha-blend it over the background).
+    // alpha-blend it over the background; clips at 13Fh/C7h).
+    // battle_fx_blit_tinted_unclipped: sub_5F29D (same LUT, but walks the framebuffer stride
+    // without the 13Fh/C7h clip, like the original).
     void battle_fx_blit(int frame, int x, int y);
     void battle_fx_blit_tinted(int frame, int x, int y, int tint_pct);
+    void battle_fx_blit_tinted_unclipped(int frame, int x, int y, int tint_pct);
     // sub_13669: fill the live unit's pose-0 frame with `color` (5F517). When [77h] exists and
     // [5Ch] <= 6, the stored record's sprite is filled at the live unit's anchor too.
     void battle_fx_silhouette_13669(int unit_index, int color);
     void battle_fx_present();                                  // sub_454B3 + sub_5E9E8
-    void blit_frame_tinted(int x, int y, const MagicFxFrame& fr, int tint_pct); // sub_5F305
+    void blit_frame_tinted(int x, int y, const MagicFxFrame& fr, int tint_pct,
+                           bool clip = true); // sub_5F305 (clip) / sub_5F29D (no clip)
     int  battle_fx_frame_count() const { return (int)magic_frames_.size(); }
     bool battle_fx_loaded() const { return !magic_frames_.empty(); }
     // ---- Individual drivers (defined in their own .cpp; arguments are caster index, target tile

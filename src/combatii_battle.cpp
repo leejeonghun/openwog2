@@ -824,8 +824,9 @@ int CombatII::battle_hit_kind(CombatUnitPlacement& a) {
 
 // sub_1D770(attacker, target, ebx=hit_kind, ecx=area_mode, guard bonus): damage x100
 //   (negative = healing). The guard bonus is what sub_1DDF0 adds to [target+46h] temporarily.
-//   The byte_E518D inversion is applied inside the sub_44913 AI dispatch. Not ported: large-unit
-//   occupancy tiles, sub_17E17 (summon attack recalculation), contact triggers.
+//   The byte_E518D inversion is applied inside the sub_44913 AI dispatch. Large-unit occupancy
+//   and the contact trigger are handled by the move/attack callers; sub_17E17 runs after the
+//   damage is stored (battle_attack_execute), not inside this calculation.
 int CombatII::battle_damage(int attacker_index, int target_index, int hit_kind, int area_mode, int def_bonus) {
     if (attacker_index < 0 || target_index < 0 || (size_t)attacker_index >= units_.size() ||
         (size_t)target_index >= units_.size()) return 0;
@@ -1596,14 +1597,15 @@ void CombatII::play_hp_change(const VmEvent& ev) {
         play_unit_death(ev.hp_unit, ev.hp_killer);
         return;
     }
-    if (delta == 0x7FFF) {                  // sub_462A7(U, (max-hp)*100): HP-bar heal animation (not ported)
-        U.hp = U.max_hp;
-        fprintf(stderr, "COMBAT: play hp: unit %d -> full (%d)\n", U.id, U.hp);
+    if (delta == 0x7FFF) {                  // sub_462A7(U, (max-hp)*100)
+        const int missing_raw = battle_max_hp_raw(U) - battle_hp_raw(U);
+        battle_heal_462a7(ev.hp_unit, missing_raw);
+        if (battle_trace_) fprintf(stderr, "COMBAT: play hp: unit %d -> full (%d)\n", U.id, U.hp);
         return;
     }
     if (delta > 0) {                        // sub_462A7(U, delta*100)
-        U.hp = std::min(U.max_hp, U.hp + delta);
-        fprintf(stderr, "COMBAT: play hp: unit %d +%d -> %d\n", U.id, delta, U.hp);
+        battle_heal_462a7(ev.hp_unit, delta * 100);
+        if (battle_trace_) fprintf(stderr, "COMBAT: play hp: unit %d +%d -> %d\n", U.id, delta, U.hp);
         return;
     }
     // Damage: sub_45BFB (prepare digits) -> subtract HP -> sub_45ED2 (facing tail) -> period 5 ->
@@ -5244,8 +5246,8 @@ bool CombatII::battle_player_enter_ring(int unit_index) {
     // battle_move_input), 83210 (entry after 4D582), 83284 (ring display loop - the ring
     // hover block below) and 83407 (target cursor loop - battle_attack_input).
     battle_hud_panel_relocate(input_.get_mouse_x(), input_.get_mouse_y());
-    // sub_4D582 + 1124A approximation: sprite centre + 3 px facing -> tile (large sprites
-    // trip a warning).
+    // sub_4D582 + 1124A: D66A8 visual centre + wc5/0x0B facing offset -> tile; large
+    // sprites use the raw footprint.
     battle_4d582_center(unit_index); // sub_1124A (the later 49FE1 + 4A106 is drawn as hover/ring)
     if (should_exit_) return true;
     // No diffusion in the ring phase; E8 is the 1CC09 range.
@@ -6716,8 +6718,9 @@ void CombatII::battle_apply_spell_hit(int caster_index, const std::vector<int>& 
 }
 
 // sub_462A7(unit, amount_raw): HP healing. Clamp to max HP, halve on map kind 3 / weather 3,
-// then require at least 100 (`cmp ecx,64h; jl loc_46356`) and add it in 100 steps. The
-// presentation (4A321/454B3/4A106) is replaced by trace output.
+// then require at least 100 (`cmp ecx,64h; jl loc_46356`) and add it in 100-raw steps. Each
+// step draws the world, speaker frame and HP bar, presents, adds the chunk and waits one
+// timer tick; the final frame gets a fresh 30-tick hold (loc_46342/46356).
 void CombatII::battle_heal_462a7(int unit_index, int amount_raw) {
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return;
     auto& u = units_[(size_t)unit_index];
@@ -6726,12 +6729,44 @@ void CombatII::battle_heal_462a7(int unit_index, int amount_raw) {
     if (cur + amount_raw > maxv) c = maxv - cur;       // clamp before loc_462BE
     if (sce_map_kind_ == 3 || weather_ == 3) c /= 2;   // sar/sub/sar 1 (truncates toward 0)
     if (c < 100) return;                               // jl loc_46356
-    const int new_raw = cur + c;                       // the loop adds in 100s, including the remainder
-    const int new_hp = (new_raw + 99) / 100;
-    u.hp_deficit = new_hp * 100 - new_raw;
-    u.hp = new_hp;
+    game_timer_set(3);                                 // mov eax,3; call sub_1033B
+    int applied = 0;
+    int remaining = c;
+    while (remaining > 0 && !should_exit_ && !skip_cutscene_) {
+        // sub_454B3 -> sub_4A106 -> sub_5E9E8: draw the pre-chunk HP, present, then add.
+        render_battle_frame();
+        draw_speaker_frame(unit_index);
+        video_.present();
+        const int chunk = std::min(100, remaining);
+        applied += chunk;
+        remaining -= chunk;
+        const int new_raw = cur + applied;
+        const int new_hp = (new_raw + 99) / 100;
+        u.hp_deficit = new_hp * 100 - new_raw;
+        u.hp = new_hp;
+        wait_game_tick();                              // sub_499E4
+    }
+    if (should_exit_) return;
+    // Esc during the loop skips the presentation; apply the chunks that were not drawn yet
+    // so the heal is not lost (the original cannot be interrupted).
+    if (remaining > 0) {
+        applied += remaining;
+        remaining = 0;
+        const int new_raw = cur + applied;
+        const int new_hp = (new_raw + 99) / 100;
+        u.hp_deficit = new_hp * 100 - new_raw;
+        u.hp = new_hp;
+    }
+    // loc_46342: one final frame, then a 30-tick hold.
+    if (!skip_cutscene_) {
+        render_battle_frame();
+        draw_speaker_frame(unit_index);
+        video_.present();
+        game_timer_set(0x1E);
+        wait_game_tick();
+    }
     if (battle_trace_)
-        fprintf(stderr, "COMBAT: heal unit=%d +%d_raw hp=%d (sub_462A7)\n", u.id, c, new_hp);
+        fprintf(stderr, "COMBAT: heal unit=%d +%d_raw hp=%d (sub_462A7)\n", u.id, c, u.hp);
 }
 
 // sub_2ACCB(caster, edx = base, bx = p1): handles the F0648 list. [0Dh]==2 takes damage
@@ -8886,6 +8921,11 @@ void CombatII::battle_fx_blit_tinted(int frame, int x, int y, int tint_pct) {
     magic_fx_draws_.push_back(MagicFxDraw{frame, x, y, tint_pct, 0, 0}); // sub_5F305
 }
 
+void CombatII::battle_fx_blit_tinted_unclipped(int frame, int x, int y, int tint_pct) {
+    if (frame < 0 || (size_t)frame >= magic_frames_.size()) return;
+    magic_fx_draws_.push_back(MagicFxDraw{frame, x, y, tint_pct, 0, 0, false, true}); // sub_5F29D
+}
+
 // sub_5F570 / sub_5F611: draw a frame scaled up or down to the target size (the
 // Barrier/Black Hole/Amagedon family changes size over the 0Fh/0Eh timers). A target at
 // least as large as the source uses expand (5F570) and a smaller one shrink (5F611); the
@@ -8914,7 +8954,7 @@ void CombatII::battle_fx_present() {
 //   source colour by it, 609F9 weights the destination by (100 - it) and adds 9 to each
 //   channel. Both sums are stored as bytes, so they wrap modulo 256 exactly like `mov [var],
 //   al`. The nearest palette entry is chosen by L1 distance, first match wins.
-void CombatII::blit_frame_tinted(int x, int y, const MagicFxFrame& fr, int tint_pct) {
+void CombatII::blit_frame_tinted(int x, int y, const MagicFxFrame& fr, int tint_pct, bool clip) {
     if (fr.flat.empty() || fr.w <= 0 || fr.h <= 0) return;
     uint8_t* dst = video_.get_backbuffer();
     if (!dst) return;
@@ -8928,12 +8968,23 @@ void CombatII::blit_frame_tinted(int x, int y, const MagicFxFrame& fr, int tint_
 
     const int arg = std::max(0, std::min(100, tint_pct));   // 611AA ebx
     const int dest_weight = 100 - arg;                      // dword_128558
+    const long base = (long)y * SCREEN_W + x;               // sub_5EB00 destination
+    const long limit = (long)SCREEN_W * SCREEN_H;
     for (int row = 0; row < fr.h; ++row) {
-        const int dy = y + row;
-        if (dy < 0 || dy >= 0xC7) continue;               // 5F305 clips at C7h
         for (int col = 0; col < fr.w; ++col) {
-            const int dx = x + col;
-            if (dx < 0 || dx >= 0x13F) continue;          // 5F305 clips at 13Fh
+            long off;
+            if (clip) {
+                const int dy = y + row;
+                if (dy < 0 || dy >= 0xC7) continue;       // 5F305 clips at C7h
+                const int dx = x + col;
+                if (dx < 0 || dx >= 0x13F) continue;      // 5F305 clips at 13Fh
+                off = (long)dy * SCREEN_W + dx;
+            } else {
+                // sub_5F29D advances the framebuffer pointer by the stride with no bounds
+                // test. Keep the same linear walk but drop writes outside the buffer.
+                off = base + (long)row * SCREEN_W + col;
+                if (off < 0 || off >= limit) continue;
+            }
             const uint8_t px = fr.flat[(size_t)row * (size_t)fr.w + (size_t)col];
             if (px == 0xFF) continue;                               // transparent
             const uint32_t key = ((uint32_t)px << 8) | (uint32_t)arg;
@@ -8961,7 +9012,7 @@ void CombatII::blit_frame_tinted(int x, int y, const MagicFxFrame& fr, int tint_
                 }
                 it = cache.emplace(key, std::move(lut)).first;
             }
-            dst[(size_t)dy * SCREEN_W + (size_t)dx] = it->second[dst[(size_t)dy * SCREEN_W + (size_t)dx]];
+            dst[(size_t)off] = it->second[dst[(size_t)off]];
         }
     }
 }
@@ -8986,7 +9037,7 @@ void CombatII::render_magic_effect_layer() {
         } else if (d.tint_pct < 0) {
             blit_flat_transparent(d.x, d.y, dbuf.data());                   // sub_5EE51
         } else {
-            blit_frame_tinted(d.x, d.y, fr, d.tint_pct);                    // sub_5F305
+            blit_frame_tinted(d.x, d.y, fr, d.tint_pct, !d.unclipped);      // sub_5F305 / 5F29D
         }
     }
     magic_fx_draws_.clear();
