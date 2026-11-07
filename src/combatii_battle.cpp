@@ -6757,11 +6757,9 @@ void CombatII::battle_heal_462a7(int unit_index, int amount_raw) {
         u.hp_deficit = new_hp * 100 - new_raw;
         u.hp = new_hp;
     }
-    // loc_46342: one final frame, then a 30-tick hold.
+    // loc_46342: sub_45559 (454B3 + 5E9E8) redraws the map only, then a 30-tick hold.
     if (!skip_cutscene_) {
-        render_battle_frame();
-        draw_speaker_frame(unit_index);
-        video_.present();
+        present_cutscene_frame();                      // sub_45559
         game_timer_set(0x1E);
         wait_game_tick();
     }
