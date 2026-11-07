@@ -2054,8 +2054,9 @@ bool CombatII::battle_quick_save_4f4ef() {
     char magic[8] = {'G','2','Q','S','V','2',0,0};
     bool ok = fwrite(magic, 1, sizeof(magic), f) == sizeof(magic);
     // V4 appends the two morale words (dword_F0BA0 / +2): sub_4F4EF writes them right after
-    // F0420/422/424 and sub_4F85C reads them back.
-    ok = ok && qsv_write_u32(f, 4);
+    // F0420/422/424 and sub_4F85C reads them back. V5 appends the eight 100-byte trigger fire
+    // flag arrays in the exact sub_4F4EF order (they live in genesis.qsv, not BLACKBOX.DAT).
+    ok = ok && qsv_write_u32(f, 5);
     const std::string& scen = current_scenario_name_;
     ok = ok && qsv_write_u32(f, (uint32_t)scen.size());
     if (ok && !scen.empty()) ok = fwrite(scen.data(), 1, scen.size(), f) == scen.size();
@@ -2121,6 +2122,21 @@ bool CombatII::battle_quick_save_4f4ef() {
     ok = ok && qsv_write_u32(f, battle_instant_camera_ ? 1u : 0u);
     ok = ok && qsv_write_u32(f, (uint32_t)(uint16_t)morale_lo_);   // dword_F0BA0
     ok = ok && qsv_write_u32(f, (uint32_t)(uint16_t)morale_hi_);   // dword_F0BA0+2
+    // sub_4F4EF: 64h bytes each for unk_11044C, unk_1102BC, unk_110384, unk_110514,
+    // unk_110320, unk_1103E8, unk_110254 and byte_1104B0. The hp/region arrays in the
+    // original are 100 bytes wide, so only that prefix is serialized.
+    if (ok) ok = fwrite(script_fired_, 1, 100, f) == 100;        // unk_11044C
+    if (ok) ok = fwrite(area_trigger_fired_, 1, 100, f) == 100;  // unk_1102BC
+    if (ok) ok = fwrite(contact_trigger_fired_[0], 1, 100, f) == 100; // unk_110384
+    if (ok) ok = fwrite(hp_trigger_fired_[0], 1, 100, f) == 100;     // unk_110514
+    if (ok) ok = fwrite(hp_trigger_fired_[1], 1, 100, f) == 100;     // unk_110320
+    if (ok) ok = fwrite(contact_trigger_fired_[1], 1, 100, f) == 100; // unk_1103E8
+    if (ok) ok = fwrite(region_trigger_fired_, 1, 100, f) == 100;    // unk_110254
+    {
+        uint8_t morale_flags[100] = {};                           // byte_1104B0
+        morale_flags[0] = morale_trigger_fired_;
+        if (ok) ok = fwrite(morale_flags, 1, sizeof(morale_flags), f) == sizeof(morale_flags);
+    }
     fclose(f);
     if (!ok) {
         fprintf(stderr, "COMBAT: warning: quick save write failed (%s)\n", path.c_str());
@@ -2160,7 +2176,8 @@ bool CombatII::battle_quick_load_4fd25() {
               memcmp(magic, "G2QSV2", 6) == 0;
     uint32_t scen_len = 0, uw = 0;
     int32_t i32 = 0;
-    ok = ok && qsv_read_u32(f, h.version) && (h.version == 2 || h.version == 3 || h.version == 4) &&
+    ok = ok && qsv_read_u32(f, h.version) &&
+         (h.version == 2 || h.version == 3 || h.version == 4 || h.version == 5) &&
          qsv_read_u32(f, scen_len) && scen_len < 256;
     if (ok && scen_len) {
         h.scen.resize(scen_len);
@@ -2200,7 +2217,8 @@ bool CombatII::battle_quick_load_4fd25() {
         char m2[8] = {};
         auto skip_u32 = [&](uint32_t& v) { return qsv_read_u32(f, v); };
         if (fread(m2, 1, 8, f) != 8 || memcmp(m2, "G2QSV2", 6) != 0 ||
-            !skip_u32(uw) || (uw != 2 && uw != 3 && uw != 4) || !skip_u32(uw) || uw >= 256) {
+            !skip_u32(uw) || (uw != 2 && uw != 3 && uw != 4 && uw != 5) ||
+            !skip_u32(uw) || uw >= 256) {
             fclose(f); return false;
         }
         if (uw && fseek(f, (long)uw, SEEK_CUR) != 0) { fclose(f); return false; }
@@ -2263,6 +2281,23 @@ bool CombatII::battle_quick_load_4fd25() {
         const int tail_n = (h.version >= 4) ? 17 : 15;   // v4 adds the two morale words
         for (int i = 0; i < tail_n; ++i)
             if (!qsv_read_u32(f, tail[i])) { tail_ok = false; break; }
+    }
+    if (ok && tail_ok && h.version >= 5) {
+        // V5 trigger fire flags (sub_4F85C reads the same eight 100-byte blocks).
+        auto read_flags = [&](uint8_t* dst, size_t n) {
+            if (!ok) return;
+            ok = fread(dst, 1, n, f) == n;
+        };
+        read_flags(script_fired_, 100);        // unk_11044C
+        read_flags(area_trigger_fired_, 100);  // unk_1102BC
+        read_flags(contact_trigger_fired_[0], 100); // unk_110384
+        read_flags(hp_trigger_fired_[0], 100);      // unk_110514
+        read_flags(hp_trigger_fired_[1], 100);      // unk_110320
+        read_flags(contact_trigger_fired_[1], 100); // unk_1103E8
+        read_flags(region_trigger_fired_, 100);     // unk_110254
+        uint8_t morale_flags[100] = {};             // byte_1104B0
+        read_flags(morale_flags, sizeof(morale_flags));
+        if (ok) morale_trigger_fired_ = morale_flags[0];
     }
     fclose(f);
     if (!ok || !tail_ok) { fprintf(stderr, "COMBAT: warning: quick load body corrupt (%s)\n", path.c_str()); return false; }
