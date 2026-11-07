@@ -10,9 +10,9 @@
 //     1FFFE/1FFFC add the frame table entry's x/y offset, so magic_frames_[f].xo/.yo are added
 //     here too, the same rule already used by 2016A/203CC.
 //   - Not ported: sub_12BEE (redraw the unit in enchant colours), 10AEB (commit the camera),
-//     61011/6104A/61147 (per-weapon palette ramps), 5F611/5F570/5F29D (expand, rotate and shrink
-//     blitters), 602E3/602BF (palette scroll), 56129/56178/561F4 (particle engine), 20021 (.rpl),
-//     103A8 and 12F2A. All of them only redraw a unit or change colours for that frame, so the
+//     61011/6104A/61147 (per-weapon palette ramps), 5F611/5F570 (expand and rotate blitters),
+//     602E3/602BF (palette scroll), 20021 (.rpl), 103A8 and 12F2A. 5F29D and the 56129/56178/
+//     561E5 particle table are ported locally in 5637D (the original table is one global).
 //     call sites keep a note and preserve only the draw order and frame placement.
 #include "combatii.h"
 #include "combatii_internal.h"
@@ -123,18 +123,24 @@ int CombatII::battle_fx_2262c(int unit_index, int tx, int ty, int k) {
     return 1;
 }
 
-// sub_5637D(eax=tx, edx=ty, ebx=N?): fireblad.nsp particle vortex.
+// sub_5637D(eax=unit, edx=ty, ebx=tx): fireblad.nsp particle vortex.
 //   Prologue: 61011(0) / 61147(1,0x28) / 61011(1) set the weapon palette ramp (not ported).
 //   1FEA4("fireblad.nsp") -> 1124A -> 11DB2/135EB (centre of the occupying unit) -> 1033B(5) ->
-//   56129 (initialise particles).
-//   (1) 0x14 (20) frames: {56178 (spawn 5 particles, angle = frame); 10AEB;
-//       1FFFE(frame = (i % 0Eh) + 6); 12BEE; 454D5; 5E9E8; 499E4}
-//   (2) 1033B(0Fh); 6 frames: {10AEB; 12BEE; 561F4(frame = i) in place of 1FFFE; 454D5; 5E9E8;
+//   56129 (100-slot table) -> 56178(slot 0..19, x=0, y=0, base=14h, cycle=5, state=0).
+//   (1) 30 frames (0..29): {10AEB; 1FFFE(frame = (i % 0Eh) + 6); 12BEE; 454D5; 5E9E8;
 //       499E4}
-//   (3) 1033B(0Ah); until the 20 particles reach frame 0Ah and var_4 becomes 0Fh: {draw every
-//       particle with 561F4; update particle age/motion; 454D5; 5E9E8; 499E4}.
-//   Port: (1) and (2) are ported as-is; 561F4 is 5F29D with the 61147(1,28h) LUT. (3) is still
-//   a 30-frame approximation of the dword_112160 particle engine, now drawn through 561F4.
+//   (2) 1033B(0Fh); 6 frames: {10AEB; 12BEE; 561F4(frame = i); 454D5; 5E9E8; 499E4}
+//   (3) 1033B(0Ah); every frame draws F0DE6 (frame 5) with 561F4, then walks slots 0..19:
+//       - state != 1: respawn at x = cx-0Ah+rand%1Eh, y = cy-32h+rand%14h, base=14h,
+//         cycle=5, state=rand%0Fh. Only state 1 is active. (The original reads the two
+//         centre locals transposed: var_12 supplies y and [esp+0Ah] supplies x.)
+//       - state == 1: ++frame, ++age; age > 1Eh kills the slot and increments the death
+//         counter; when it reaches 0Fh the effect ends after that frame. While alive, frame
+//         wraps at cycle=5 (that frame is not drawn), otherwise draw frame base+frame at
+//         (x,y) through 561F4 and move y += 2.
+//   The table layout is the original dword_112160 one: +0 x, +2 y, +4 state, +6 age,
+//   +8 base frame, +0A cycle, +0C frame. This is a per-effect port of the same engine used by
+//   combatii_fx_fire.cpp, kept local because the original table is a single global.
 int CombatII::battle_fx_5637d(int unit_index, int tx, int ty, int k) {
     (void)unit_index; (void)k;
     if (!battle_nsp_load("fireblad.nsp") || magic_frames_.empty()) return 0;
@@ -147,32 +153,84 @@ int CombatII::battle_fx_5637d(int unit_index, int tx, int ty, int k) {
         cy = (ty - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y + 8;
     }
     const int nframes = (int)magic_frames_.size();
-    auto blit = [&](int f) {
-        f = std::max(0, std::min(nframes - 1, f));
-        battle_fx_blit(f, cx + magic_frames_[(size_t)f].xo, cy + magic_frames_[(size_t)f].yo);
+
+    struct BladeParticle {
+        int16_t x = 0, y = 0;       // +00, +02
+        int16_t state = 0;          // +04
+        int16_t age = 0;            // +06
+        int16_t base = 0;           // +08
+        int16_t cycle = 0;          // +0A
+        int16_t frame = 0;          // +0C
+        int16_t pad = 0;            // +0E
     };
+    std::vector<BladeParticle> slots(100);
+    auto spawn = [&](int i, int x, int y, int base, int cycle, int state) {
+        BladeParticle& p = slots[(size_t)i];
+        p.x = (int16_t)x;
+        p.y = (int16_t)y;
+        p.state = (int16_t)state;
+        p.age = 0;
+        p.base = (int16_t)base;
+        p.cycle = (int16_t)cycle;
+        p.frame = 0;
+        p.pad = 0;
+    };
+    auto kill = [&](int i) { slots[(size_t)i].state = 0; };  // sub_561E5
+    auto draw_1fffe = [&](int f, int x, int y) {            // sub_1FFFE -> sub_5EE51
+        if (f < 0 || f >= nframes) return;
+        battle_fx_blit(f, x + magic_frames_[(size_t)f].xo, y + magic_frames_[(size_t)f].yo);
+    };
+    auto draw_561f4 = [&](int f, int x, int y) {            // sub_561F4 -> sub_5F29D
+        if (f < 0 || f >= nframes) return;
+        battle_fx_blit_tinted_unclipped(f, x + magic_frames_[(size_t)f].xo,
+                                          y + magic_frames_[(size_t)f].yo, 60);
+    };
+
+    // sub_56129 + 56178: clear the table and seed slots 0..19 as inactive.
+    for (int i = 0; i < 0x14; ++i) spawn(i, 0, 0, 0x14, 5, 0);
+
     game_timer_set(5);                                      // sub_1033B(5)
-    for (int i = 0; i < 0x14 && !should_exit_; ++i) {        // (1) 20 frames
-        blit((i % 0x0E) + 6);                               // (i % 14) + 6
+    for (int i = 0; i < 0x1E && !should_exit_; ++i) {        // (1) 30 frames
+        draw_1fffe((i % 0x0E) + 6, cx, cy);
         battle_fx_present();
         wait_game_tick();
     }
-    auto blit_561f4 = [&](int f) {                          // sub_561F4 -> sub_5F29D
-        f = std::max(0, std::min(nframes - 1, f));
-        battle_fx_blit_tinted_unclipped(f, cx + magic_frames_[(size_t)f].xo,
-                                          cy + magic_frames_[(size_t)f].yo, 60);
-    };
     game_timer_set(0x0F);                                   // (2) sub_1033B(0Fh)
     for (int i = 0; i < 6 && !should_exit_; ++i) {
-        blit_561f4(i);                                      // 561F4(frame = i)
+        draw_561f4(i, cx, cy);                              // 561F4(frame = i)
         battle_fx_present();
         wait_game_tick();
     }
-    game_timer_set(0x0A);                                   // (3) particle afterimage (approximation)
-    for (int i = 0; i < 30 && !should_exit_; ++i) {
-        blit_561f4(i % 6);
-        battle_fx_present();
-        wait_game_tick();
+    game_timer_set(0x0A);                                   // (3) 1033B(0Ah)
+    int dead = 0;                                           // var_4
+    for (int guard = 0; guard < 0x10000 && !should_exit_ && dead != 0x0F; ++guard) {
+        draw_561f4(5, cx, cy);                              // unk_F0DE6 = F0DAA + 5*12
+        for (int i = 0; i < 0x14 && !should_exit_; ++i) {
+            BladeParticle& p = slots[(size_t)i];
+            if (p.state != 1) {
+                const int state = combat_rand(0x0F);
+                const int py = cy - 0x32 + combat_rand(0x14);   // second rand: y
+                const int px = cx - 0x0A + combat_rand(0x1E);   // third rand: x
+                spawn(i, px, py, 0x14, 5, state);           // 56178
+                continue;
+            }
+            ++p.frame;
+            ++p.age;
+            if (p.age > 0x1E) {
+                kill(i);                                    // 561E5
+                if (++dead == 0x0F) break;                  // loc_5663A
+                // The original falls through and still runs the frame check/draw for
+                // the slot it just killed; state=0 only affects the next frame.
+            }
+            if (p.frame == p.cycle) {
+                p.frame = 0;                                // loc_56589: wrap, no draw
+                continue;
+            }
+            draw_561f4(p.base + p.frame, p.x, p.y);         // loc_56594
+            p.y = (int16_t)(p.y + 2);
+        }
+        battle_fx_present();                                // 454D5 + 5E9E8
+        wait_game_tick();                                   // 499E4
     }
     battle_nsp_release();
     if (battle_trace_) fprintf(stderr, "COMBAT: 5637D fireblad tile=(%d,%d)\n", tx, ty);
