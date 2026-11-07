@@ -1183,11 +1183,10 @@ void CombatII::battle_ai_wc5_m_c31a(std::vector<int>& grid, int eax0, int edx0,
     }
 }
 
-// WC5 165C2 gate: every footprint cell must be inside the sub_11DB2 padded edge, have
-// spread >= 0, and be free or self in CC998. The source uses the actor's current facing
-// (the WC5 caller does not keep the candidate facing at this point).
+// WC5 165C2 gate: every candidate-facing footprint cell must be inside the sub_11DB2
+// padded edge, have spread >= 0, and be free or self in CC998.
 bool CombatII::battle_ai_wc5_165c2_gate(const std::vector<int>& grid, int nx,
-                                        int ny, int unit_index) const {
+                                        int ny, int unit_index, int facing) const {
     if (map_w_ == 0 || map_h_ == 0) return false;
     const uint32_t xu = (uint32_t)(nx & 0xFFFF), yu = (uint32_t)(ny & 0xFFFF);
     if (((xu - 2) & 0xFFFFu) >= map_w_ - 4) return false;
@@ -1198,9 +1197,8 @@ bool CombatII::battle_ai_wc5_165c2_gate(const std::vector<int>& grid, int nx,
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return false;
     int foot_w = 1, foot_h = 1;
     const auto& actor = units_[(size_t)unit_index];
-    battle_d66a8_footprint(actor.sprite_type, (int)actor.facing & 3, &foot_w, &foot_h);
-    if (foot_w < 1) foot_w = 1;
-    if (foot_h < 1) foot_h = 1;
+    if (!battle_d66a8_footprint(actor.sprite_type, facing & 3, &foot_w, &foot_h) ||
+        foot_w < 1 || foot_h < 1) return false;
     for (int dy = 0; dy < foot_h; dy++) {
         const int cy = ny - (foot_h - 1) + dy;
         for (int dx = 0; dx < foot_w; dx++) {
@@ -1365,7 +1363,7 @@ void CombatII::battle_ai_wc5_1c685(std::vector<int>& grid, Wc5Iter& it,
             battle_ai_wc5_diff_write(grid, x, y, si);
         }
         if (si <= wc5_s16(st.b84s)) continue;
-        if (!battle_ai_wc5_165c2_gate(grid, x, y, unit_index)) continue;
+        if (!battle_ai_wc5_165c2_gate(grid, x, y, unit_index, f)) continue;
         st.b84x = wc5_s16(x);
         st.b84s = wc5_s16(si);
         st.b82 = wc5_s16(y);
@@ -2254,14 +2252,18 @@ int CombatII::battle_ai_3ca3c_cell(int unit_index, int wc, int hx, int hy,
             return i < tile_attr_.size() ? (int)tile_attr_[i] : 0;
         };
         auto footprint_step = [&](int x, int y, int d, int& sx, int& sy) {
-            // sub_1A146: [0]/[1] step of the D66A8 record (slot = actor appearance, dir).
-            // The AI detail path only opens behind the class-0 1x1 ordinary gate, so
-            // fw = fh = 1 (plain sub_49ABC step); larger footprints stay outside it.
+            // sub_1A146: the D66A8 record supplies w/h for the selected direction.
+            // Case 0 increments y; 1 decrements x and y by h-1; 2 adds w-1 to x and
+            // subtracts h from y; 3 adds w to x. This is the large-footprint edge step,
+            // not the plain 1x1 sub_49ABC step.
+            int fw = 1, fh = 1;
+            if (!battle_d66a8_footprint(actor.sprite_type, d & 3, &fw, &fh) ||
+                fw < 1 || fh < 1) { sx = x; sy = y; return; }
             switch (d & 3) {
-                case 0:  sx = x;      sy = y + 1;       break;
-                case 1:  sx = x - 1;  sy = y - 0;       break;
-                case 2:  sx = x + 0;  sy = y - 1;       break;
-                default: sx = x + 1;  sy = y;           break;
+                case 0:  sx = x;          sy = y + 1;       break;
+                case 1:  sx = x - 1;      sy = y - (fh - 1); break;
+                case 2:  sx = x + (fw - 1); sy = y - fh;    break;
+                default: sx = x + fw;     sy = y;           break;
             }
         };
         // sub_3C9AC: hostile count (sub_1201D) in the sub_1A452 (cx=2) area past one sub_1A146
@@ -4462,8 +4464,9 @@ bool CombatII::battle_ai_40295_move(int unit_index, int wc) {
             }
         }
 
-        // No-target movement is not ported. Do not synthesize sub_5401B while stationary:
-        // the original reaches area/region triggers from actual movement call sites.
+        // The main battle_ai_40295_body already implements the no-target sub_3DF3B
+        // radius-30 arm. This fallback is reached only when the conservative WC1
+        // occupancy gate is closed, so do not synthesize a move without that proof.
         return true;
     }
     // sub_40295 [+6Ch]==0 branch equivalent: approach the hostile inside the budget radius
@@ -4476,13 +4479,13 @@ bool CombatII::battle_ai_40295_move(int unit_index, int wc) {
     {
         const int watch_state = battle_ai_watch_state(unit_index);
         const auto& uu = units_[(size_t)unit_index];
-        // +6Ch != 0: the sub_40295 jump table (k=1..6) is ported. This generic path cannot
-        // prove the class-0 .NC2 1x1 occupancy gate, so sub_165C2 stays a 1x1 approximation
-        // (logged). Unported arms (wc5, wc6+ sub_3CA3C, sub_3D3E5 wc5) leave dispatch false.
+        // +6Ch != 0: the sub_40295 jump table (k=1..6) is wired through the footprint-aware
+        // sub_165C2/3CA3C/3D3E5 helpers. The generic path still lacks the class-0 static
+        // occupancy proof, so it logs that limitation instead of asserting a narrow gate.
         if (watch_state <= 0 && uu.ai_decision_state >= 1 && uu.ai_decision_state <= 6 &&
             battle_ai_dispatch_plus6c(unit_index, watch_state)) {
             if (battle_trace_ && uu.ai_decision_state != 0)
-                fprintf(stderr, "COMBAT: AI weapon_class=%d unit=%d +6Ch=%u dispatched on generic path (165C2 1x1 approximation)\n",
+                fprintf(stderr, "COMBAT: AI weapon_class=%d unit=%d +6Ch=%u dispatched on generic path (footprint-aware 165C2)\n",
                         wc, uu.id, (unsigned)uu.ai_decision_state);
             return true;
         }

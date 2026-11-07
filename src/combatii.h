@@ -315,7 +315,7 @@ struct VmEvent {
     int walk_group = 0;
     int walk_frames = 0;
     bool walk_sets_start_tile = false; // VM 0x05 group-0 start coordinates are applied at playback, not parse time.
-    bool walk_occupancy_preserving_candidate = false; // Complete group-0 records; runtime still proves source and destination occupancy.
+    bool walk_occupancy_preserving_candidate = false; // Complete group-0/group!=0 records; runtime still proves source and destination footprints.
     std::vector<VmWalkUnit> walk_units;
     std::vector<int> leave_units;     // UnitLeave (0x04): units_ indices to remove, in record order
     // A 0x04 (sub_51449) record is five bytes [sel][idx][mode][step][dir]. sub_17071 uses
@@ -1096,7 +1096,7 @@ private:
     int  battle_cc998_occupant(int x, int y, bool apply_guard) const;
     // Compatibility name for callers that need the guarded sub_11DB2 lookup.
     int  battle_unit_index_at_footprint(int x, int y) const;
-    bool battle_wc1_static_occupancy_unambiguous() const;          // exact only for complete static SCE, ordinary armies, unique 1x1 NC2 tiles
+    bool battle_wc1_static_occupancy_unambiguous() const;          // complete static SCE, ordinary armies, unique D66A8 footprints
     bool battle_wc1_group0_move_preserves_occupancy(const VmEvent& ev, const char** reject_reason = nullptr) const;
     void battle_wc1_occupancy_unknown(const char* reason, uint32_t offset = 0xFFFFFFFFu); // fail-closed latch; reopened only by next complete SCE snapshot
     // Keeps the latch when the gate still passes after a verified 1x1 add/remove/move; closes it as
@@ -1169,10 +1169,9 @@ private:
     // sub_1665B: combat_class -> mobility selector (unk_70A68, falling back to [+14h]&1).
     // -1 means unmodelled (out of range or outside the grid).
     int battle_ai_mobility_selector(const CombatUnitPlacement& u) const;
-    // 1x1 approximation of sub_16699: checks the map bounds, CC998 occupancy (vector approximation,
-    // excluding self) and terrain cost (unk_70B0D) of a single tile. Large footprints, the flying
-    // bit gate and the full original descriptor are unported, so anything but 1x1 ordinary is
-    // false.
+    // Footprint-aware sub_16699 check (name kept for compatibility): every D66A8 cell must be
+    // in bounds, free in CC998 (excluding self), and have a positive unk_70B0D terrain cost.
+    // The flying-bit gate and the full original descriptor remain outside this helper.
     bool battle_ai_candidate_tile_legal_1x1(int x, int y, int unit_index, int mobility_selector) const;
     // Diagnostic for the home-referenced path of sub_3E251 only (radius-9 diamond, sub_1AC08/1AC59/
     // 1AD2E plus sub_49ADF scoring). With no [+73h] target and no [+71h] watch it picks a legal
@@ -1371,7 +1370,7 @@ private:
     // 165C2 gate: the whole D66A8 footprint is unoccupied (or self) and every cell has
     // diffusion >= 0 (includes the 11DB2 gate). battle_d66a8_footprint supplies the footprint.
     bool battle_ai_wc5_165c2_gate(const std::vector<int>& grid, int nx, int ny,
-                                  int unit_index) const;
+                                  int unit_index, int facing) const;
     // sub_1CB53/sub_1CBB1/sub_1B7D4.
     void battle_ai_wc5_snapshot(const std::vector<int>& grid, Wc5Iter& it,
                                 Wc5Score& st, int ax, int dx, int cx, int bx,

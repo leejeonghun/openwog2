@@ -455,37 +455,49 @@ bool CombatII::battle_wc1_static_occupancy_unambiguous() const {
             unit.x < 0 || unit.y < 0 || unit.x >= (int)map_w_ || unit.y >= (int)map_h_ ||
             unit.sprite_type < 0 || unit.sprite_type >= 0x12C || unit.linked_class >= 0 ||
             !char_file_name_for_type(unit.sprite_type)) return false;
-        // The tile_w/tile_h=1 guarantee is specific to successfully loaded class-0 .NC2 data.
-        // Do not silently trust the filename table when assets were disabled, absent, or malformed.
+        // sub_11E04 uses the D66A8 footprint (not the NC2 render frame's tile_w/tile_h).
+        // Require the complete NC2 descriptor set for drawing, but derive occupancy from the
+        // same raw table entry the original uses. This also covers large WC1 units.
         const auto nc2_it = nc2_chars_.find(unit.sprite_type);
         if (nc2_it == nc2_chars_.end() || !nc2_it->second ||
             nc2_it->second->count() != NC2Parser::DIR_COUNT * NC2Parser::POSE_COUNT) return false;
-        for (int dir = 0; dir < NC2Parser::DIR_COUNT; ++dir) {
-            for (int pose = 0; pose < NC2Parser::POSE_COUNT; ++pose) {
-                const NC2Frame* descriptor = nc2_it->second->frame(dir, pose);
-                if (!descriptor || descriptor->tile_w != 1 || descriptor->tile_h != 1) return false;
+        int foot_w = 1, foot_h = 1;
+        if (!battle_d66a8_footprint(unit.sprite_type, (int)unit.facing & 3,
+                                    &foot_w, &foot_h) ||
+            foot_w < 1 || foot_h < 1) return false;
+        const int ux = (int)(int8_t)unit.x, uy = (int)(int8_t)unit.y;
+        // sub_11E04 only writes when the base tile itself passes the padded guard.
+        if (ux < 2 || ux >= (int)map_w_ - 2 || uy < 4 || uy >= (int)map_h_ - 4) return false;
+        for (int row = 0; row < foot_h; ++row) {
+            const int cy = uy - row;
+            for (int col = 0; col < foot_w; ++col) {
+                const int cx = ux + col;
+                if (cx < 0 || cy < 0 || cx >= (int)map_w_ || cy >= (int)map_h_) return false;
+                const size_t tile = (size_t)cy * map_w_ + (size_t)cx;
+                if (occupied[tile] != 0) return false;
+                occupied[tile] = 1;
             }
         }
-        const size_t tile = (size_t)unit.y * map_w_ + (size_t)unit.x;
-        if (occupied[tile] != 0) return false;
-        occupied[tile] = 1;
     }
     return true;
 }
 
-// sub_516D0 clears each selected unit with sub_11EE4, then group-0 sub_16D3E updates
-// occupancy while stepping and writes final footprints with sub_11E04. sub_16CF3 links a mover
-// to an existing occupant on its committed tile; sub_16AEF removes it from the old tile while
-// stepping. Therefore routes of different selected movers may share tiles. The WC1 shortcut
-// still rejects self-revisits, stationary-unit tiles, and any unproven final occupancy.
+// sub_516D0 clears each selected unit with sub_11EE4, then either group-0 sub_16D3E or
+// group!=0 sub_50BAF updates occupancy and writes final footprints with sub_11E04. sub_16CF3
+// links a mover to an existing occupant on its committed tile; sub_16AEF removes it from the
+// old tile while stepping. Therefore routes of different selected movers may share tiles. The
+// WC1 shortcut still rejects self-revisits, stationary-unit tiles, and any unproven final
+// occupancy, now using the D66A8 footprint instead of a 1x1 base cell.
 bool CombatII::battle_wc1_group0_move_preserves_occupancy(const VmEvent& ev, const char** reject_reason) const {
     auto reject = [&](const char* reason) {
         if (reject_reason) *reject_reason = reason;
         return false;
     };
-    if (!ev.walk_occupancy_preserving_candidate || ev.walk_group != 0 ||
-        !ev.walk_sets_start_tile || ev.walk_units.empty())
-        return reject("VM 0x05 is not a complete modeled group-0 batch");
+    if (!ev.walk_occupancy_preserving_candidate || ev.walk_units.empty())
+        return reject("VM 0x05 is not a complete modeled batch");
+    const bool group0 = ev.walk_group == 0;
+    if (group0 != ev.walk_sets_start_tile)
+        return reject("VM 0x05 walk group/start-tile mismatch");
     if (!battle_sce_snapshot_complete_ || !battle_wc1_occupancy_state_known_)
         return reject("occupancy snapshot/latch is not valid before VM 0x05");
     if (!battle_wc1_static_occupancy_unambiguous())
@@ -506,26 +518,49 @@ bool CombatII::battle_wc1_group0_move_preserves_occupancy(const VmEvent& ev, con
         if (!unit.active || !unit.battle_list_membership_modeled || unit.group < 1 || unit.group > 3 ||
             unit.memory_army < 1 || unit.memory_army > 4)
             return reject("VM 0x05 unit is outside the modeled ordinary army lists");
-        if (walk.path.empty() || walk.path.size() > 31 || ev.walk_frames < (int)walk.path.size() + 1)
-            return reject("VM 0x05 group-0 path length is outside the proven batch format");
-        if (walk.path.front().first != unit.x || walk.path.front().second != unit.y)
-            return reject("VM 0x05 path start differs from the current unit tile");
+        if (group0) {
+            if (walk.path.empty() || walk.path.size() > 31 ||
+                ev.walk_frames < (int)walk.path.size() + 1)
+                return reject("VM 0x05 group-0 path length is outside the proven batch format");
+            if (walk.path.front().first != unit.x || walk.path.front().second != unit.y)
+                return reject("VM 0x05 path start differs from the current unit tile");
+        } else {
+            // sub_50BAF reads exactly one destination and keeps the current start tile.
+            if (walk.path.size() != 1 || ev.walk_frames < 2)
+                return reject("VM 0x05 non-group path is outside the proven batch format");
+        }
         if (walk.path.back().first != unit.x || walk.path.back().second != unit.y)
             vacates_start[ui] = 1;
     }
     for (size_t ui = 0; ui < units_.size(); ++ui) {
         const CombatUnitPlacement& unit = units_[ui];
         if (!unit.active) continue;
-        const size_t tile = (size_t)unit.y * map_w_ + (size_t)unit.x;
-        if (tile >= map_cells || initial_occupant[tile] >= 0)
-            return reject("pre-move unit tiles are not unique in the occupancy map");
-        initial_occupant[tile] = (int)ui;
+        int foot_w = 1, foot_h = 1;
+        if (!battle_d66a8_footprint(unit.sprite_type, (int)unit.facing & 3,
+                                    &foot_w, &foot_h) || foot_w < 1 || foot_h < 1)
+            return reject("pre-move unit footprint descriptor is unavailable");
+        const int ux = (int)(int8_t)unit.x, uy = (int)(int8_t)unit.y;
+        if (ux < 2 || ux >= (int)map_w_ - 2 || uy < 4 || uy >= (int)map_h_ - 4)
+            return reject("pre-move unit base is outside the CC998 interior");
+        for (int row = 0; row < foot_h; ++row) {
+            const int cy = uy - row;
+            for (int col = 0; col < foot_w; ++col) {
+                const int cx = ux + col;
+                if (cx < 0 || cy < 0 || cx >= (int)map_w_ || cy >= (int)map_h_)
+                    return reject("pre-move unit footprint leaves the occupancy map");
+                const size_t tile = (size_t)cy * map_w_ + (size_t)cx;
+                if (initial_occupant[tile] >= 0)
+                    return reject("pre-move unit footprints are not unique in the occupancy map");
+                initial_occupant[tile] = (int)ui;
+            }
+        }
     }
 
     for (const VmWalkUnit& walk : ev.walk_units) {
         std::vector<uint8_t> path_seen(map_cells, 0);
         int previous_x = -1, previous_y = -1;
-        for (const auto& point : walk.path) {
+        for (size_t pi = 0; pi < walk.path.size(); ++pi) {
+            const auto& point = walk.path[pi];
             const int x = point.first, y = point.second;
             // SCE and BattleUnit coordinates are signed bytes; also require the exact interior
             // accepted by sub_11DB2/sub_11F74 so no edge clipping or CC998 omission is ambiguous.
@@ -538,21 +573,58 @@ bool CombatII::battle_wc1_group0_move_preserves_occupancy(const VmEvent& ev, con
             previous_y = y;
 
             const size_t tile = (size_t)y * map_w_ + (size_t)x;
-            const int occupant = initial_occupant[tile];
-            const bool occupant_will_vacate = occupant >= 0 &&
-                (size_t)occupant < vacates_start.size() && vacates_start[(size_t)occupant] != 0;
-            if (occupant >= 0 && occupant != walk.unit_index && !occupant_will_vacate)
-                return reject("VM 0x05 path crosses a stationary unit's pre-move occupied tile");
-
             if (path_seen[tile] != 0)
                 return reject("VM 0x05 unit revisits a path tile");
             path_seen[tile] = 1;
+
+            int facing = (int)(int8_t)units_[(size_t)walk.unit_index].facing & 3;
+            if (group0 && pi + 1 < walk.path.size()) {
+                const auto& next = walk.path[pi + 1];
+                const int f = walk_facing_toward(x, y, next.first, next.second);
+                if (f >= 0) facing = f;
+            } else if (pi + 1 == walk.path.size()) {
+                facing = walk.load & 3;
+            }
+            int foot_w = 1, foot_h = 1;
+            if (!battle_d66a8_footprint(units_[(size_t)walk.unit_index].sprite_type, facing,
+                                        &foot_w, &foot_h) || foot_w < 1 || foot_h < 1)
+                return reject("VM 0x05 path footprint descriptor is unavailable");
+            for (int row = 0; row < foot_h; ++row) {
+                const int cy = y - row;
+                for (int col = 0; col < foot_w; ++col) {
+                    const int cx = x + col;
+                    if (cx < 0 || cy < 0 || cx >= (int)map_w_ || cy >= (int)map_h_)
+                        return reject("VM 0x05 path footprint leaves the occupancy map");
+                    const size_t cell = (size_t)cy * map_w_ + (size_t)cx;
+                    const int occupant = initial_occupant[cell];
+                    const bool occupant_will_vacate = occupant >= 0 &&
+                        (size_t)occupant < vacates_start.size() && vacates_start[(size_t)occupant] != 0;
+                    if (occupant >= 0 && occupant != walk.unit_index && !occupant_will_vacate)
+                        return reject("VM 0x05 path crosses a stationary unit's pre-move footprint");
+                }
+            }
         }
         const auto& endpoint = walk.path.back();
-        const size_t endpoint_tile = (size_t)endpoint.second * map_w_ + (size_t)endpoint.first;
-        if (final_occupant[endpoint_tile] >= 0)
-            return reject("VM 0x05 movers have overlapping final tiles");
-        final_occupant[endpoint_tile] = walk.unit_index;
+        const int ex = endpoint.first, ey = endpoint.second;
+        int foot_w = 1, foot_h = 1;
+        if (!battle_d66a8_footprint(units_[(size_t)walk.unit_index].sprite_type,
+                                    walk.load & 3, &foot_w, &foot_h) ||
+            foot_w < 1 || foot_h < 1)
+            return reject("VM 0x05 final footprint descriptor is unavailable");
+        if (ex < 2 || ex >= (int)map_w_ - 2 || ey < 4 || ey >= (int)map_h_ - 4)
+            return reject("VM 0x05 final base is outside the CC998 interior");
+        for (int row = 0; row < foot_h; ++row) {
+            const int cy = ey - row;
+            for (int col = 0; col < foot_w; ++col) {
+                const int cx = ex + col;
+                if (cx < 0 || cy < 0 || cx >= (int)map_w_ || cy >= (int)map_h_)
+                    return reject("VM 0x05 final footprint leaves the occupancy map");
+                const size_t tile = (size_t)cy * map_w_ + (size_t)cx;
+                if (final_occupant[tile] >= 0)
+                    return reject("VM 0x05 movers have overlapping final footprints");
+                final_occupant[tile] = walk.unit_index;
+            }
+        }
     }
     if (reject_reason) *reject_reason = nullptr;
     return true;
