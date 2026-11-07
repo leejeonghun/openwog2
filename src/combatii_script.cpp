@@ -638,7 +638,8 @@ CombatII::VmResult CombatII::run_vm(uint32_t offset) {
             if (!c.ok) { abort_range(); break; }
             // sub_5196F resolves the receiver while the command runs: dword_11024C when a
             // unit is forced, otherwise the dword_CC968 list walk keeps the first node and
-            // replaces it with probability 2/3 at every following node (sub_499BD(3) != 0).
+            // replaces it at every following node only when sub_499BD(3) == 0 (probability
+            // 1/3; loc_51A32 `mov ebp, edx` is reached on zero, loc_51A34 skips otherwise).
             int target = script_forced_target_;
             if (target < 0 || (size_t)target >= units_.size()) {
                 std::vector<int> list;
@@ -658,7 +659,7 @@ CombatII::VmResult CombatII::run_vm(uint32_t offset) {
                 if (!list.empty()) {
                     target = list[0];
                     for (size_t k = 1; k < list.size(); ++k)
-                        if (combat_rand(3) != 0) target = list[k];
+                        if (combat_rand(3) == 0) target = list[k];
                 }
             }
             VmEvent ev;
@@ -1109,8 +1110,11 @@ CombatII::VmResult CombatII::run_vm(uint32_t offset) {
                 ev.tile_layer = p[0];
                 ev.tile_x = p[1];
                 ev.tile_y = p[2];
-                int tile = (int)(uint16_t)(p[3] | (p[4] << 8));
-                if (tile > 0) ++tile;             // sub_52C06: `test dx,dx; jle; inc`
+                // sub_52C06 reads the value with `mov edx,[var_18]` but branches on
+                // `test dx,dx; jle`, i.e. a signed 16-bit compare: 0x8000..0xFFFF are
+                // negative and are stored without the increment.
+                int tile = (int)(int16_t)(p[3] | (p[4] << 8));
+                if (tile > 0) ++tile;
                 ev.tile_value = tile;
                 ev.tile_attr_value = p[5];
                 r.events.push_back(std::move(ev));
@@ -3545,12 +3549,12 @@ void CombatII::play_vm_events(const std::vector<VmEvent>& events) {
         case VmEventType::TileChange: {
             // sub_52C06: layer 0 writes word_78A04, other layers write word_83DB4; the
             // u16 is incremented when positive, and the terrain byte goes through sub_10957.
-            const int idx = ev.tile_y * map_w_ + ev.tile_x;
+            const int idx = ev.tile_y * (int)map_w_ + ev.tile_x;
             if (ev.tile_layer == 0) {
-                if (layer_base_tiles_ && idx >= 0 && idx < map_w_ * map_h_)
+                if (layer_base_tiles_ && idx >= 0 && (size_t)idx < (size_t)map_w_ * (size_t)map_h_)
                     layer_base_tiles_[idx] = (uint16_t)ev.tile_value;
             } else {
-                if (layer_top_tiles_ && idx >= 0 && idx < map_w_ * (map_h_ + 6))
+                if (layer_top_tiles_ && idx >= 0 && (size_t)idx < (size_t)map_w_ * ((size_t)map_h_ + 6))
                     layer_top_tiles_[idx] = (uint16_t)ev.tile_value;
             }
             if (idx >= 0 && (size_t)idx < tile_attr_.size())
