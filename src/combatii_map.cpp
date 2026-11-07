@@ -93,9 +93,9 @@ bool CombatII::battle_d66a8_raw(int type_code, int dir, int pose, uint8_t out13[
     return true;
 }
 
-bool CombatII::battle_d66a8_footprint(int type_code, int dir, int* w, int* h) const {
+bool CombatII::battle_d66a8_footprint_pose(int type_code, int dir, int pose, int* w, int* h) const {
     uint8_t raw[13];
-    if (battle_d66a8_raw(type_code, dir & 3, 0, raw)) {
+    if (battle_d66a8_raw(type_code, dir & 3, pose, raw)) {
         if (w) *w = raw[0] ? raw[0] : 1;
         if (h) *h = raw[1] ? raw[1] : 1;
         return true;
@@ -103,6 +103,10 @@ bool CombatII::battle_d66a8_footprint(int type_code, int dir, int* w, int* h) co
     if (w) *w = 1;
     if (h) *h = 1;
     return false;
+}
+
+bool CombatII::battle_d66a8_footprint(int type_code, int dir, int* w, int* h) const {
+    return battle_d66a8_footprint_pose(type_code, dir, 0, w, h);
 }
 
 // Blit a strip (w*h, 0xFF = transparent), matching the staging-buffer layout made by sub_10083.

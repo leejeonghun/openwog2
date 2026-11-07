@@ -964,6 +964,8 @@ private:
     bool battle_d66a8_raw(int type_code, int dir, int pose, uint8_t out13[13]) const;
     // D66A8 footprint (entry[0]/[1], facing pose 0). Falls back to 1x1 and false when missing.
     bool battle_d66a8_footprint(int type_code, int dir, int* w, int* h) const;
+    // Same lookup for a specific D66A8 pose (sub_11E04 uses the current [unit+64h]).
+    bool battle_d66a8_footprint_pose(int type_code, int dir, int pose, int* w, int* h) const;
     // Draws a w*h strip, skipping 0xFF (transparent) pixels (the sub_10083 convention).
     void blit_nc2_frame(int x, int y, const NC2Frame& fr);
     // sub_5F517: ignore the frame pixels and fill every opaque pixel with a solid colour (the
@@ -1088,9 +1090,11 @@ private:
     int  battle_damage(int attacker_index, int target_index, int hit_kind, int area_mode, int def_bonus); // sub_1D770 (x100)
     BattleAttackRoll battle_attack_roll(int attacker_index, int target_index, int shared_hit_kind = -1); // sub_1DDF0 (dx != 1 part) + sub_1D6B1
     int  battle_hit_kind(CombatUnitPlacement& attacker);          // sub_1D6B1
-    int  battle_unit_index_at(int x, int y) const;                // sub_11DB2 (vector approximation)
-    // Approximation that widens sub_11DB2's CC998 lookup to the whole D66A8 footprint (large
-    // units).
+    int  battle_unit_index_at(int x, int y) const;                // sub_11DB2 guarded CC998 footprint lookup
+    // sub_11DB2/sub_11E04 cell lookup over the modeled CC998 occupancy. apply_guard=false is for
+    // direct grid scans (sub_530F1/sub_53C12) that do not apply the (x-2)/(y-4) filter.
+    int  battle_cc998_occupant(int x, int y, bool apply_guard) const;
+    // Compatibility name for callers that need the guarded sub_11DB2 lookup.
     int  battle_unit_index_at_footprint(int x, int y) const;
     bool battle_wc1_static_occupancy_unambiguous() const;          // exact only for complete static SCE, ordinary armies, unique 1x1 NC2 tiles
     bool battle_wc1_group0_move_preserves_occupancy(const VmEvent& ev, const char** reject_reason = nullptr) const;
@@ -1441,11 +1445,12 @@ private:
     // but this also tests the self tile: 1201D applies to the unit itself, so an E518D
     // inversion makes it true (sub_3E3BF includes the centre cell, so sub_3EF12 hits this quirk).
     int battle_ai_hostile_unit_at(int x, int y, int unit_index) const;
-    // 1x1 ordinary approximation of sub_165C2: inside the sub_13CBD range, E8F46 >= 0, and no
-    // sub_11DB2 occupant other than self. Outside 11DB2's padding guard (x in [2,w-3],
-    // y in [4,h-5]) nothing is occupied, so a cell there still passes when E8F46 >= 0.
-    bool battle_ai_165c2_1x1_ok(int x, int y, int unit_index,
-                                const std::vector<int>& e8) const;
+    // sub_165C2 for a specific facing: walk the D66A8 w x h footprint (rows go up from the
+    // base tile), require E8F46 >= 0 on every cell and no sub_11DB2 occupant other than self.
+    // The sub_11DB2 guard leaves cells outside x in [2,w-3], y in [4,h-5] unoccupied, while
+    // sub_13CBD returns -128 outside the map; both cases are reproduced here.
+    bool battle_ai_165c2_ok(int x, int y, int unit_index, const std::vector<int>& e8,
+                            int facing) const;
     // sub_40295 [+6Ch]==1 branch (sub_3E739, mode=2, sec=var_18). Rebuilds the 143F3 end state and
     // picks destination/facing through phases A (r=mode diamond of -1 per hostile), B (E65B0
     // ordering), C (E8 += 0x320 plus fringe) and D (actor r=sec strict maximum + 165C2 si=0/1),
@@ -1638,7 +1643,7 @@ private:
     bool battle_ai_jump_3ebb4(int unit_index, int sec, int diff_budget,
                               int& out_dx, int& out_dy, int& out_facing,
                               int& out_hostile, int* out_metric = nullptr) const;
-    // K=6 (sub_3EE2B): for each dir 0..3, when 165C2 (1x1) plus 1D124(dir) yields exactly one
+    // K=6 (sub_3EE2B): for each dir 0..3, when 165C2 plus 1D124(dir) yields exactly one
     // unit, F0648[0] becomes a candidate and the strict minimum HP wins. dest is the actor
     // position (rotation only), facing is the winning direction (own facing when none) and the
     // return is the candidate unit (-1 when none). A negative return means the branch failed

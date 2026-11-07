@@ -223,7 +223,7 @@ bool CombatII::battle_ai_15342_fallback(int unit_index, int dest_x, int dest_y,
             const int metric = val + 4 * (std::abs(x - dest_x) + std::abs(y - dest_y));
             if (metric >= best) continue;
             if (x < 0 || y < 0 || x >= w || y >= h) continue;
-            if (!battle_ai_165c2_1x1_ok(x, y, unit_index, grid)) continue; // si = 0/1
+            if (!battle_ai_165c2_ok(x, y, unit_index, grid, (int)actor.facing & 3)) continue; // 165C2
             best = metric;
             out_x = x; out_y = y;
         }
@@ -319,9 +319,8 @@ int CombatII::battle_ai_14fa4_route(int unit_index, int ref_x, int ref_y, int bu
         for (const auto& b : buckets) if (!b.empty()) return false;
         return true;
     };
-    auto gate = [&](Cell c, int si) {                        // 165C2
-        (void)si;  // ordinary 1x1 unit: si (footprint mode) makes no difference
-        return c.first >= 0 && battle_ai_165c2_1x1_ok(c.first, c.second, unit_index, budget_grid);
+    auto gate = [&](Cell c, int si) {                        // 165C2(cell, facing)
+        return c.first >= 0 && battle_ai_165c2_ok(c.first, c.second, unit_index, budget_grid, si);
     };
     // loc_15003: push the previous route into bucket 0 from the actor end; drop E8 < 0.
     for (auto it = prior.rbegin(); it != prior.rend(); ++it)

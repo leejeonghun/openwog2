@@ -391,7 +391,7 @@ void CombatII::battle_deploy_54a82(const std::vector<size_t>& party, std::vector
     for (int idx = 0; idx < w * h; ++idx) {
         if (sce_zone_grid_[(size_t)idx] != 1) continue;                  // cmp E8F46+2[idx*2],1
         const int x = idx % w, y = idx / w;
-        if (battle_unit_index_at_footprint(x, y) >= 0) continue;         // cmp dword_CC998[idx*4],0
+        if (battle_cc998_occupant(x, y, false) >= 0) continue;          // cmp dword_CC998[idx*4],0
         const size_t ri = party[cur];
         CombatUnitPlacement& edi = battle_roster_cc990_[ri];
         CombatUnitPlacement nu = edi;                                    // sub_112FD + memcpy 0x88
