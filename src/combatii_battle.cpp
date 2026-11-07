@@ -5500,17 +5500,8 @@ void CombatII::battle_panel_ai_4b4ca(int unit_index) {
         residue = kRetAddrLow4B581;
     } else {
         int found = -1;
-        if (u.ai_watch_sel != 0xFF) {
-            if (u.ai_watch_sel >= 1 && u.ai_watch_sel <= 4) {   // sub_1379A(sel, id): CC960[sel] linked list
-                for (size_t i = 0; i < units_.size(); ++i) {
-                    const auto& c = units_[i];
-                    if (!c.active || battle_effective_army(c) != (int)u.ai_watch_sel ||
-                        c.id != (int)u.ai_watch_id) continue;
-                    found = (int)i;
-                    break;
-                }
-            }
-        }
+        if (u.ai_watch_sel != 0xFF)   // sub_1379A(sel, id): CC960[sel] linked list
+            found = battle_ai_cc960_member((int)u.ai_watch_sel, (int)u.ai_watch_id);
         if (found >= 0) {
             unit_portrait_and_name(units_[(size_t)found]);
         } else {

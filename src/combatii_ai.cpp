@@ -8,8 +8,31 @@
 // sub_3E18B (dasm 61565..61635): distance state for watch target / direct target / home.
 // Returns -1 = watch-list target absent or within 1 tile, 0 = [+71h] is FFh and matches
 // home-x, 1 = target farther than 1 tile, 2 = signed position differs from both
-// zero-extended home coordinates. -2 is a port-only diagnostic for unmodeled watch
-// selectors, not an original return value.
+// zero-extended home coordinates. -2 is a port-only diagnostic for selectors outside the
+// seven list heads (7..254), not an original return value.
+// sub_1379A(sel,id): walk the dword_CC960[sel*8] linked list and return the first unit
+// whose [+0Fh] equals id. sub_4ED18/sub_1134F insert a record at CC968+(effective_army-1)*8,
+// so selectors 0..5 address the effective-army lists 0..5 and selector 6 addresses the
+// global CC990 list. The original does not test HP here; active filters the port's copy of
+// records that have left the army list. List order follows list_seq, the modeled [+7Bh]
+// insertion order (initial load = 0, later tail inserts > 0).
+int CombatII::battle_ai_cc960_member(int selector, int id) const {
+    if (selector < 0 || selector > 6) return -1;
+    int best = -1;
+    uint64_t best_key = ~0ull;
+    for (size_t i = 0; i < units_.size(); ++i) {
+        const CombatUnitPlacement& c = units_[i];
+        if (!c.active || c.id != id) continue;
+        if (selector != 6 && battle_effective_army(c) != selector) continue;
+        const uint64_t key = ((uint64_t)c.list_seq << 32) | (uint64_t)i;
+        if (best < 0 || key < best_key) {
+            best = (int)i;
+            best_key = key;
+        }
+    }
+    return best;
+}
+
 int CombatII::battle_ai_watch_state(int unit_index) const {
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return -1;
     const CombatUnitPlacement& u = units_[(size_t)unit_index];
@@ -17,26 +40,17 @@ int CombatII::battle_ai_watch_state(int unit_index) const {
     const int unit_y = (int)(int8_t)u.y;
 
     if (u.ai_watch_sel != 0xFF) {
-        // dword_CC960[sel] is address 0xCC960 + sel*8: sel 1..4 alias CC968 slots 0..3
-        // (effective armies 1..4), sel 5/6 overlap the CC988 special-unit and CC990
-        // global lists. units_ keeps no CC968 membership, so this approximates by
-        // effective army and ID; static/dynamic group-0 remap and CC990 stay unmodeled.
         const int selector = (int)u.ai_watch_sel;
-        if (selector >= 1 && selector <= 4) {
-            const int watched_effective_army = selector;
-            for (const CombatUnitPlacement& candidate : units_) {
-                if (!candidate.active || battle_effective_army(candidate) != watched_effective_army ||
-                    candidate.id != (int)u.ai_watch_id) continue;
-                const int distance = std::abs(unit_x - (int)(int8_t)candidate.x) +
-                                     std::abs(unit_y - (int)(int8_t)candidate.y);
-                return distance > 1 ? 1 : -1;
-            }
-            return -1; // sub_1379A found no such ID in that list
+        if (selector >= 0 && selector <= 6) {
+            const int target = battle_ai_cc960_member(selector, (int)u.ai_watch_id);
+            if (target < 0) return -1; // sub_1379A found no such ID in that list
+            const CombatUnitPlacement& candidate = units_[(size_t)target];
+            const int distance = std::abs(unit_x - (int)(int8_t)candidate.x) +
+                                 std::abs(unit_y - (int)(int8_t)candidate.y);
+            return distance > 1 ? 1 : -1;
         }
-        // Sel=0 is a separate CC960 slot whose init and list layout are unknown. For 5/6
-        // the address is known but special/global membership cannot be split from units_.
         // sel>=7 runs into the CC998 occupancy map, so it is no valid list descriptor.
-        return -2; // port diagnostic: this selector path is unmodeled (not an original value)
+        return -2; // port diagnostic: outside the modeled selector range
     }
 
     // [+73h] is a BattleUnit pointer in the original; the port reads the stored unit index.
@@ -2576,26 +2590,8 @@ void CombatII::battle_ai_169d7_reset(int unit_index,
 }
 
 int CombatII::battle_ai_3e21b_target(int unit_index) const {
-    if (unit_index < 0 || (size_t)unit_index >= units_.size()) return -1;
-    const CombatUnitPlacement& u = units_[(size_t)unit_index];
-    if (u.ai_watch_sel != 0xFF) {
-        // sub_1379A(sel, id): first unit with [+0Fh] == id in the dword_CC960[sel] list.
-        // Same effective-army/ID approximation as battle_ai_watch_state.
-        const int selector = (int)u.ai_watch_sel;
-        if (selector >= 1 && selector <= 4) {
-            for (size_t i = 0; i < units_.size(); ++i) {
-                const CombatUnitPlacement& c = units_[i];
-                if (!c.active || battle_effective_army(c) != selector ||
-                    c.id != (int)u.ai_watch_id) continue;
-                return (int)i;
-            }
-        }
-        return -1; // sel 0/5/6, or not found (sub_1379A returned 0)
-    }
-    // [+71h]==FF: [+73h] is the direct target pointer.
-    if (u.ai_target_unit >= 0 && (size_t)u.ai_target_unit < units_.size())
-        return u.ai_target_unit;
-    return -1;
+    // sub_3E21B resolves [+71h] through sub_1379A first and falls back to [+73h].
+    return battle_ai_watch_unit(unit_index);
 }
 
 void CombatII::battle_ai_3f0e4(int unit_index, std::vector<int>& grid,
