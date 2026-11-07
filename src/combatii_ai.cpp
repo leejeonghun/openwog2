@@ -97,31 +97,38 @@ int CombatII::battle_ai_mobility_selector(const CombatUnitPlacement& u) const {
     return sel;
 }
 
-// Conservative 1x1 approximation of sub_16699 (dasm 9461..9578).
-// The original walks the unk_D66A8 descriptor footprint (larger than 1x1 included)
-// against CC998 occupancy and unk_88BD4 attr -> dword_EDD6C (unk_70B0D grid) cost.
-// The port tests one tile, only for WC1 calls where the class-0 .NC2 1x1 ordinary gate
-// is open: map bounds, self-excluding vector occupancy and signed cost>0 must all hold.
+// sub_16699 footprint gate (dasm 9461..9578).
+// The original walks the unk_D66A8 descriptor footprint against CC998 occupancy
+// and unk_88BD4 attr -> dword_EDD6C (unk_70B0D grid) cost. The base tile is the
+// bottom-left cell: (x..x+w-1, y-h+1..y), where w/h are entry[0]/[1] of
+// the D66A8 record for the actor's appearance and current facing. Every cell
+// must pass the padded bounds, signed cost>0 and self-excluding occupancy tests.
 bool CombatII::battle_ai_candidate_tile_legal_1x1(int x, int y, int unit_index,
                                                   int mobility_selector) const {
     if (mobility_selector < 0 || mobility_selector >= kMobilityGridCount) return false;
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return false;
     if (map_w_ == 0 || map_h_ == 0 || tile_attr_.empty()) return false;
-    if (x < 0 || y < 0 || x >= (int)map_w_ || y >= (int)map_h_) return false;
-    // Same padded edge as the sub_11DB2 guard, shared with the WC1 threat scan.
-    // The footprint padding inside sub_16699 (x-2/y-4 style) is not fully reproduced,
-    // so the outer edge fails closed.
-    if (x < 2 || x >= (int)map_w_ - 2 || y < 4 || y >= (int)map_h_ - 4) return false;
-    const size_t tile_idx = (size_t)y * map_w_ + (size_t)x;
-    if (tile_idx >= tile_attr_.size()) return false;
-    const int attr = (int)tile_attr_[tile_idx]; // unk_88BD4 equivalent
-    if (attr < 0 || attr >= kMobilityGridStride) return false;
-    const int8_t cost = (int8_t)kMobilityCostGrids[mobility_selector][attr];
-    if (cost <= 0) return false; // `cmp byte,0; jle fail` (0 and 0xFF both rejected)
-    const int occupant = battle_unit_index_at(x, y);
-    if (occupant >= 0 && occupant != unit_index) return false;
-    const auto& other = units_[(size_t)unit_index];
-    (void)other;
+    int foot_w = 1, foot_h = 1;
+    const auto& actor = units_[(size_t)unit_index];
+    battle_d66a8_footprint(actor.sprite_type, (int)actor.facing & 3, &foot_w, &foot_h);
+    if (foot_w < 1) foot_w = 1;
+    if (foot_h < 1) foot_h = 1;
+    for (int dy = 0; dy < foot_h; dy++) {
+        const int cy = y - (foot_h - 1) + dy; // entry rows extend upward from the base tile
+        for (int dx = 0; dx < foot_w; dx++) {
+            const int cx = x + dx;
+            // Same padded edge as the sub_11DB2 guard, shared with the WC1 threat scan.
+            if (cx < 2 || cx >= (int)map_w_ - 2 || cy < 4 || cy >= (int)map_h_ - 4) return false;
+            const size_t tile_idx = (size_t)cy * map_w_ + (size_t)cx;
+            if (tile_idx >= tile_attr_.size()) return false;
+            const int attr = (int)tile_attr_[tile_idx]; // unk_88BD4 equivalent
+            if (attr < 0 || attr >= kMobilityGridStride) return false;
+            const int8_t cost = (int8_t)kMobilityCostGrids[mobility_selector][attr];
+            if (cost <= 0) return false; // `cmp byte,0; jle fail` (0 and 0xFF both rejected)
+            const int occupant = battle_unit_index_at_footprint(cx, cy);
+            if (occupant >= 0 && occupant != unit_index) return false;
+        }
+    }
     return true;
 }
 
@@ -1180,8 +1187,24 @@ bool CombatII::battle_ai_wc5_165c2_gate(const std::vector<int>& grid, int nx,
     if (nx < 0 || ny < 0 || nx >= (int)map_w_ || ny >= (int)map_h_) return false;
     const size_t idx = (size_t)yu * map_w_ + xu;
     if (idx >= grid.size() || grid[idx] < 0) return false;
-    const int occupant = battle_unit_index_at(nx, ny);
-    return occupant < 0 || occupant == unit_index;
+    if (unit_index < 0 || (size_t)unit_index >= units_.size()) return false;
+    int foot_w = 1, foot_h = 1;
+    const auto& actor = units_[(size_t)unit_index];
+    battle_d66a8_footprint(actor.sprite_type, (int)actor.facing & 3, &foot_w, &foot_h);
+    if (foot_w < 1) foot_w = 1;
+    if (foot_h < 1) foot_h = 1;
+    for (int dy = 0; dy < foot_h; dy++) {
+        const int cy = ny - (foot_h - 1) + dy;
+        for (int dx = 0; dx < foot_w; dx++) {
+            const int cx = nx + dx;
+            if (cx < 2 || cx >= (int)map_w_ - 2 || cy < 4 || cy >= (int)map_h_ - 4) return false;
+            const size_t cidx = (size_t)cy * map_w_ + (size_t)cx;
+            if (cidx >= grid.size() || grid[cidx] < 0) return false;
+            const int occupant = battle_unit_index_at_footprint(cx, cy);
+            if (occupant >= 0 && occupant != unit_index) return false;
+        }
+    }
+    return true;
 }
 
 // sub_1C685 body. Takes the adjacent tile, facing and range, runs the flood, then

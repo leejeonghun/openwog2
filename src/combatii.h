@@ -945,15 +945,15 @@ private:
     //   (4 facings x 11 poses) into the slot table. The port loads each type code once and caches
     //   it. The raw D66A8 table is read from this cache with the `combatii_d66a8.h` layout
     //   (slot = per-type block, minus the [9..12] sprite pointer).
-    std::unordered_map<int, std::unique_ptr<NC2Parser>> nc2_chars_;
-    std::string characte_path(const char* filename);
+    mutable std::unordered_map<int, std::unique_ptr<NC2Parser>> nc2_chars_;
+    std::string characte_path(const char* filename) const;
     // Loads the NC2 file for a type code on demand and returns the (facing, pose) frame.
-    const NC2Frame* nc2_frame_for(int type_code, int dir, int pose);
+    const NC2Frame* nc2_frame_for(int type_code, int dir, int pose) const;
     // Raw 13-byte D66A8 entry (the sub_11575 loader, minus [9..12]); false when the frame is
     // missing.
-    bool battle_d66a8_raw(int type_code, int dir, int pose, uint8_t out13[13]);
+    bool battle_d66a8_raw(int type_code, int dir, int pose, uint8_t out13[13]) const;
     // D66A8 footprint (entry[0]/[1], facing pose 0). Falls back to 1x1 and false when missing.
-    bool battle_d66a8_footprint(int type_code, int dir, int* w, int* h);
+    bool battle_d66a8_footprint(int type_code, int dir, int* w, int* h) const;
     // Draws a w*h strip, skipping 0xFF (transparent) pixels (the sub_10083 convention).
     void blit_nc2_frame(int x, int y, const NC2Frame& fr);
     // sub_5F517: ignore the frame pixels and fill every opaque pixel with a solid colour (the
@@ -1081,7 +1081,7 @@ private:
     int  battle_unit_index_at(int x, int y) const;                // sub_11DB2 (vector approximation)
     // Approximation that widens sub_11DB2's CC998 lookup to the whole D66A8 footprint (large
     // units).
-    int  battle_unit_index_at_footprint(int x, int y);
+    int  battle_unit_index_at_footprint(int x, int y) const;
     bool battle_wc1_static_occupancy_unambiguous() const;          // exact only for complete static SCE, ordinary armies, unique 1x1 NC2 tiles
     bool battle_wc1_group0_move_preserves_occupancy(const VmEvent& ev, const char** reject_reason = nullptr) const;
     void battle_wc1_occupancy_unknown(const char* reason, uint32_t offset = 0xFFFFFFFFu); // fail-closed latch; reopened only by next complete SCE snapshot
@@ -1350,9 +1350,8 @@ private:
                                int edx0, int f, int ecx0) const;
     void battle_ai_wc5_m_c31a(std::vector<int>& grid, int eax0, int edx0,
                                int f, int ecx0) const;
-    // 1x1 approximation of the 165C2 gate: unoccupied, or self with diffusion >= 0 (includes the
-    // 11DB2 gate). The raw D66A8 table (battle_d66a8_footprint) showed every AI unit in 1-5/1-7
-    // to be 1x1, so large rectangles are not wired up; the WC1 gate requires 1x1 in every pose.
+    // 165C2 gate: the whole D66A8 footprint is unoccupied (or self) and every cell has
+    // diffusion >= 0 (includes the 11DB2 gate). battle_d66a8_footprint supplies the footprint.
     bool battle_ai_wc5_165c2_gate(const std::vector<int>& grid, int nx, int ny,
                                   int unit_index) const;
     // sub_1CB53/sub_1CBB1/sub_1B7D4.

@@ -635,7 +635,7 @@ int CombatII::battle_unit_index_at(int x, int y) const {
 // (x..x+w-1, y-h+1..y) with the unit pointer and sub_11EE4 clears it. The (x-2)/(y-4) guards
 // from sub_11DB2 still apply. Needed when a click lands on a non-base cell of a large unit,
 // such as a mount target or a dismount destination.
-int CombatII::battle_unit_index_at_footprint(int x, int y) {
+int CombatII::battle_unit_index_at_footprint(int x, int y) const {
     if (map_w_ == 0 || map_h_ == 0) return -1;
     if ((uint32_t)(x - 2) >= (uint32_t)(map_w_ - 4)) return -1;
     if ((uint32_t)(y - 4) >= (uint32_t)(map_h_ - 8)) return -1;
