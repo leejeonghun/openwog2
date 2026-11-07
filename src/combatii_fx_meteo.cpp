@@ -55,7 +55,11 @@ int CombatII::battle_fx_21e16(int unit_index, int tx, int ty, int k) {
     uint8_t pal[0x100 * 3];
     pal_snapshot_range(0, 0x100, pal);                               // sub_5F945(0, 100h)
     game_timer_set(5);                                               // sub_1033B(5)
+    // The original records the shake in dword_BA838 during the meteor loop and the next
+    // frame's 454B3 reads it, so the value trails the meteor update by one frame.
+    int16_t pending_shake = cam_fine_y_;
     while (spawned < 0x15 && !should_exit_) {                        // `cmp [var_4],15h; jge`
+        cam_fine_y_ = pending_shake;                                 // 454B3 reads the previous frame
         // (1) palette advance (loc_21EBD) + DAC update (sub_5F9AE)
         pal_cycle_entries(pal, 0x100);
         pal_load_range(0, 0x100, pal);
@@ -84,7 +88,7 @@ int CombatII::battle_fx_21e16(int unit_index, int tx, int ty, int k) {
                 }
             } else {                                                 // falling/gone (loc_21F4C)
                 const int f = 7 - life[i] / 2;                       // 7 - life/2
-                cam_fine_y_ = (int16_t)((life[i] % 2) ? 0 : -6);     // dword_BA838
+                pending_shake = (int16_t)((life[i] % 2) ? 0 : -6);   // dword_BA838 for the next frame
                 const int y = my[i], x = mx[i];
                 if (y > -0x32 && y < 0xFA && f >= 0 && f < nframes) {
                     const MagicFxFrame& fr = magic_frames_[(size_t)f];

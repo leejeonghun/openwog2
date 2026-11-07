@@ -9,8 +9,9 @@
 // killed when frame-in-period reaches the period. Empty slots spawn particles with rand%N.
 //
 // Deviations, all replaced inside this file:
-//  - Palette ramps (sub_5623E/sub_562C1/sub_56245/5FA2C) and screen fades are omitted: the port
-//    has no ramp runtime, so the "wait for the fade to finish" loops fall straight through.
+//  - Palette ramps use the shared runtime: 5623E -> pal_ramp_set_width, 562C1 -> pal_ramp_step,
+//    56245/5FA2C -> pal_ramp_apply. The pre-loop 562C1(4Bh,0) fade-in wait of 5666E is not
+//    reproduced; the loop's per-tick 562C1(4Bh,32h) starts the ramp from 0 instead.
 //  - sub_10AEB/sub_12BEE (redraw map and units) are replaced by battle_fx_present(), which draws
 //    the complete battle frame.
 //  - sub_56102/sub_561F4/sub_5EFB9/sub_5F29D (frame offsets and the 480-stride blitter) are

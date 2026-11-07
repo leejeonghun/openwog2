@@ -323,18 +323,20 @@ int CombatII::battle_fx_229cc(int unit_index, int tx, int ty, int k) {
 
 // sub_2690B(bl=flag, eax=ty, edx=tx): barrier.nsp barrier.
 //   20021("barrier.rpl") is not ported. 1FEA4("barrier.nsp") -> 1124A -> 11DB2/135EB (centre of
-//   the occupying unit) -> 1033B(5) -> 601E5(0F0h) (reset the table scroll, not ported) ->
-//   4F4CD(32h).
-//   (1) edi = 3Ch decreasing by 4 (15 frames): {10AEB; 5F611 (expand blitter, not ported);
-//       12BEE; 454D5; 5E9E8; 602E3; 499E4}
-//   (2) when flag > 0: edi = 2 growing by (flag*4) up to 3Ch*flag, drawn with 5F570 (shrink
-//       blitter, not ported)
-//   (3) when flag == 0: one more frame through 1FFFE (loc_26AB6)
-//   (4) 30 frames of 602E3 (palette flash) -> 602BF -> 1FFCD.
-//   Port: 5F611 is ported in combatii_fx_gfx.cpp and drawn by battle_fx_blit_scaled with the radius
-//   r as the target size. The 602E3 flash is replaced by a plain frame render.
+//   the occupying unit) -> 1033B(5) -> 601E5(0F0h, 0Fh, frame table) -> 4F4CD(32h).
+//   601E5 copies the 15 DAC entries [0F0h,0FFh) into a 16-entry ring and 602E3 rotates one step
+//   per frame and uploads it with 5F9AE. All three size phases draw frame 0 (esi stays at
+//   unk_F0DAA).
+//   (1) 15 frames: size 3Ch down to 4 (step -4), 5F611 with width=size, height=size/2 at
+//       (centre + size/2 + xo, centre + size/4 + yo); 602E3 after 5E9E8.
+//   (2) flag > 0: size starts at 2 and grows by flag*4 while < flag*3Ch, 5F570 with
+//       width=size, height=size/2 at (centre - size/2 + xo, centre - size/4 + yo).
+//   (3) flag == 0: one frame through 1FFFE at (centre + xo, centre + yo).
+//   (4) 30 palette-scroll frames (602E3 + 499E4, no redraw) -> 602BF -> 1FFCD.
+//   The port's handler k is the flag. Phase 4 still presents the frame so the palette change
+//   reaches the display; the original only waits for the retrace.
 int CombatII::battle_fx_2690b(int unit_index, int tx, int ty, int k) {
-    (void)unit_index; (void)k;
+    (void)unit_index;
     if (!battle_nsp_load("barrier.nsp") || magic_frames_.empty()) return 0;
     camera_center_on(tx, ty);                               // sub_1124A
     int cx = 0, cy = 0;
@@ -346,26 +348,61 @@ int CombatII::battle_fx_2690b(int unit_index, int tx, int ty, int k) {
     }
     game_timer_set(5);                                      // sub_1033B(5)
     sfx(0x32);                                              // sub_4F4CD(32h)
-    const int nframes = (int)magic_frames_.size();
-    // (1) edi = 0x3C, -4 per frame (15 frames)
-    for (int r = 0x3C, i = 0; r > 0 && !should_exit_; r -= 4, ++i) {
-        const int f = std::min(nframes - 1, i);
-        const int half = r / 2;
-        // sub_5F611(eax=centre-r/2+xo, edx=centre-r/2+yo, ecx=r, push r, ebx=frame)
-        battle_fx_blit_scaled(f, cx - half + magic_frames_[(size_t)f].xo,
-                                 cy - half + magic_frames_[(size_t)f].yo, r, r);
+    const int flag = k;                                     // bl
+    const MagicFxFrame& fr = magic_frames_[0];              // esi = unk_F0DAA throughout
+    // sub_601E5(0F0h, 0Fh, unk_F0DAA): snapshot DAC [0F0h,0FFh) into the ring buffer.
+    int scroll_pos = 0x0F;                                  // byte_12820F
+    uint8_t scroll[0x10 * 3] = {};
+    pal_snapshot_range(0xF0, 0xF0 + 0x0F, scroll);          // sub_5F945(start, count)
+    auto scroll_step = [&]() {                              // sub_602E3
+        const int p = scroll_pos;
+        if (p > 0) {
+            // Rotate the first p entries right by one: [a0..a(p-1)] -> [a(p-1),a0..a(p-2)]
+            uint8_t first[3] = {scroll[(p - 1) * 3], scroll[(p - 1) * 3 + 1],
+                                scroll[(p - 1) * 3 + 2]};
+            for (int i = p - 1; i > 0; --i)
+                for (int c = 0; c < 3; ++c)
+                    scroll[i * 3 + c] = scroll[(i - 1) * 3 + c];
+            for (int c = 0; c < 3; ++c) scroll[c] = first[c];
+            scroll_pos = p - 1;
+            if (scroll_pos == 0) scroll_pos = 0x0F;          // reload byte_12820E
+        }
+        pal_load_range(0xF0, 0xF0 + 0x0F, scroll);           // sub_5F9AE(start, count)
+    };
+    // (1) edi = 0x3C, -4 per frame (15 frames); 5F611 shrink, width r, height r/2.
+    for (int r = 0x3C; r > 0 && !should_exit_; r -= 4) {
+        battle_fx_blit_scaled(0, cx + r / 2 + fr.xo, cy + r / 4 + fr.yo,
+                              r, r / 2, false, true);        // sub_5F611
         battle_fx_present();                                // sub_454D5 + sub_5E9E8
+        scroll_step();                                      // sub_602E3 (after 5E9E8)
         wait_game_tick();
     }
-    // (2) the flag > 0 variant shrinks with 5F570 up to flag*3Ch in the original. The port's
-    //    callers pass no flag, so it is omitted (use k as the flag if it is ever needed).
-    // (4) 30 frames of 602E3 (palette flash, replaced by a frame render)
-    for (int i = 0; i < 0x1E && !should_exit_; ++i) {
+    if (flag > 0) {
+        // (2) 5F570 expand: size starts at 2, +flag*4 per frame, until < flag*3Ch.
+        const int limit = flag * 0x3C;
+        for (int sz = 2; sz < limit && !should_exit_; sz += flag * 4) {
+            battle_fx_blit_scaled(0, cx - sz / 2 + fr.xo, cy - sz / 4 + fr.yo,
+                                  sz, sz / 2, true);         // sub_5F570
+            battle_fx_present();
+            scroll_step();
+            wait_game_tick();
+        }
+    } else if (!should_exit_) {
+        // (3) loc_26AB6: one 1FFFE frame at the centre.
+        battle_fx_blit(0, cx + fr.xo, cy + fr.yo);
         battle_fx_present();
+        scroll_step();
         wait_game_tick();
     }
+    // (4) 30 palette-scroll frames; the original does not redraw the world here.
+    for (int i = 0; i < 0x1E && !should_exit_; ++i) {
+        scroll_step();                                      // sub_602E3
+        battle_fx_present();
+        wait_game_tick();                                   // sub_499E4
+    }
+    scroll_pos = 0;                                         // sub_602BF disables the entry
     battle_nsp_release();                                   // sub_1FFCD
-    if (battle_trace_) fprintf(stderr, "COMBAT: 2690B barrier tile=(%d,%d)\n", tx, ty);
+    if (battle_trace_) fprintf(stderr, "COMBAT: 2690B barrier tile=(%d,%d) flag=%d\n", tx, ty, flag);
     return 1;
 }
 
@@ -411,15 +448,15 @@ int CombatII::battle_fx_275a4(int unit_index, int tx, int ty, int k) {
 
 // sub_272AD(eax=ty, edx=tx, ebx=?): soulreca.nsp summon landing.
 //   1FEA4("soulreca.nsp", 0A0h) -> 1124A -> anchor 10971(tx)+0Ch / 10988(ty)+2 -> 1033B(3) ->
-//   initialise the 21-slot trail -> 4F4CD(32h).
-//   Every frame: 454B3; while the progress counter (var_10) is > -2Ah
-//     {angle += 14h (20); radius var_C; position = centre + (cos,sin)(angle/100)*radius;
-//      shift the 21-slot trail; draw every third slot with 5EFB9 (scale blitter); 5E9E8; 499E4;
-//      counter -= 2}
-//   Once the counter reaches -2Ah, frames are drawn from top to bottom 30 times (5EFB9), then
-//   284A3 (sound-stop family, not ported) -> 1FFCD.
-//   Port: 5EFB9 (shrink/rotate blitter) is not ported and becomes battle_fx_blit, and the radius
-//   shrinks from 160 to 0 over the frames to imitate the contraction.
+//   fill the trail with the anchor -> 4F4CD(32h).
+//   var_C is both the radius and the countdown: 0A0h, -2 per frame, while > -2Ah (101 frames).
+//   Every frame: 454B3; when the radius is >= 0 {angle += 14h (wrap 280h); the new point is
+//   (anchor + (cos,sin)(angle/100)*radius) and its frame is (radius/2)%8}; shift the 22-entry
+//   trail slots 21..1 (slot 1 therefore duplicates the new slot 0); draw slots 0,3,...,21 with
+//   5EFB9 (clipped 1:1) -> 5E9E8 -> 499E4. While the radius is negative the insert is skipped
+//   but the trail still shifts and draws (20 more frames).
+//   Tail (loc_27546): 31 rows at x = last inserted x, y = last y down to y-30, frame 0 through
+//   1FFFE -> 284A3 (not ported) -> 1FFCD.
 int CombatII::battle_fx_272ad(int unit_index, int tx, int ty, int k) {
     (void)unit_index; (void)k;
     if (!battle_nsp_load("soulreca.nsp") || magic_frames_.empty()) return 0;
@@ -429,35 +466,41 @@ int CombatII::battle_fx_272ad(int unit_index, int tx, int ty, int k) {
     game_timer_set(3);                                      // sub_1033B(3)
     sfx(0x32);                                              // sub_4F4CD(32h)
     const int nframes = (int)magic_frames_.size();
-    const int kSlots = 0x15;                                // 21
-    std::vector<FxPoint> trail((size_t)kSlots, FxPoint{ax, ay});
-    int angle = 0;
-    int descend = 0;                                        // high word of var_10 (0 -> -2Ah)
-    for (int guard = 0; guard < 0x200 && descend > -0x2A && !should_exit_; ++guard) {
-        angle = (angle + 0x14) % 0x280;
-        const double rad = (double)angle / 100.0;           // flt_77325 = 100.0
-        const double radius = 160.0 * (1.0 - (double)(descend + 0x2A) / (double)0x2A);
-        FxPoint p;
-        p.x = ax + (int)std::lround(std::cos(rad) * radius);
-        p.y = ay + (int)std::lround(std::sin(rad) * radius);
+    constexpr int kSlots = 0x16;                            // 22 entries (init fills 0..20)
+    struct TrailPoint { int x = 0; int y = 0; int frame = 0; };
+    std::vector<TrailPoint> trail((size_t)kSlots, TrailPoint{ax, ay, 0});
+    int angle = 0;                                          // var_10
+    int radius = 0xA0;                                      // var_C
+    int last_x = ax, last_y = ay;                           // var_4 / var_8
+    for (int guard = 0; guard < 0x400 && radius > -0x2A && !should_exit_; ++guard) {
+        if (radius >= 0) {                                  // `test di,di; jl loc_274BA`
+            angle += 0x14;
+            if (angle >= 0x280) angle = 0;                  // `cmp ax,280h`
+            const double rad = (double)angle / 100.0;       // flt_77325 = 100.0
+            last_x = ax + (int)std::lround(std::cos(rad) * (double)radius);
+            last_y = ay + (int)std::lround(std::sin(rad) * (double)radius);
+            trail[0].x = last_x;
+            trail[0].y = last_y;
+            trail[0].frame = std::min(nframes - 1, (radius / 2) % 8);  // (var_C/2) % 8
+        }
         for (int s = kSlots - 1; s > 0; --s) trail[(size_t)s] = trail[(size_t)s - 1];
-        trail[0] = p;
-        for (int s = kSlots - 1; s >= 0; s -= 3) {          // every third slot (loc_274EE)
-            const FxPoint& q = trail[(size_t)s];
-            const int f = std::min(nframes - 1, (int)((kSlots - 1 - s) / 3) % nframes);
-            battle_fx_blit(f, q.x + magic_frames_[(size_t)f].xo, q.y + magic_frames_[(size_t)f].yo);
+        for (int s = 0; s < kSlots; s += 3) {               // slots 0,3,...,21 (loc_274EE)
+            const TrailPoint& q = trail[(size_t)s];
+            const MagicFxFrame& fr = magic_frames_[(size_t)q.frame];
+            battle_fx_blit_clipped(q.frame, q.x + fr.xo, q.y + fr.yo);  // sub_5EFB9
         }
         battle_fx_present();                                // sub_454B3 + sub_5E9E8
-        wait_game_tick();
-        descend -= 2;                                       // counter -= 2
+        wait_game_tick();                                   // sub_499E4
+        radius -= 2;                                        // `sub ecx,2`
     }
-    // loc_27552: draw frames from top to bottom 30 times (cx = esi-1Eh .. esi)
-    const int top = ay - 0x1E;
-    for (int yy = top; yy <= ay && !should_exit_; yy += 2) {
-        const int f = std::min(nframes - 1, 0);             // the original fixes frame 0 ([var_8+2])
-        battle_fx_blit(f, ax + magic_frames_[(size_t)f].xo, yy + magic_frames_[(size_t)f].yo);
-        battle_fx_present();
-        wait_game_tick();
+    // loc_27546: 31 rows (last_y ... last_y-30) of frame 0 through 1FFFE.
+    if (!should_exit_) {
+        const MagicFxFrame& fr0 = magic_frames_[0];
+        for (int yy = last_y; yy >= last_y - 0x1E && !should_exit_; --yy) {
+            battle_fx_blit(0, last_x + fr0.xo, yy + fr0.yo);
+            battle_fx_present();
+            wait_game_tick();
+        }
     }
     battle_nsp_release();                                   // sub_1FFCD
     if (battle_trace_) fprintf(stderr, "COMBAT: 272AD soulreca tile=(%d,%d)\n", tx, ty);

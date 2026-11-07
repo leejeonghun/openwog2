@@ -2121,7 +2121,10 @@ private:
     //   expand_only = true forces the 5F570 upscale even when the destination is smaller than the
     //   source; 276B9/2799A/27C5A rely on that.
     //   unclipped = true selects sub_5F29D (same tint LUT as 5F305, but no 13Fh/C7h clip).
-    struct MagicFxDraw { int frame; int x, y; int tint_pct; int dst_w, dst_h; bool expand_only = false; bool unclipped = false; bool clip319 = false; };
+    //   shrink_only = true forces the 5F611 downscale even when the destination is larger than
+    //   the source (5A267/2690B call 5F611 explicitly).
+    //   silhouette >= 0 selects sub_5F093: every non-0FFh source pixel becomes that colour.
+    struct MagicFxDraw { int frame; int x, y; int tint_pct; int dst_w, dst_h; bool expand_only = false; bool unclipped = false; bool clip319 = false; bool shrink_only = false; int silhouette = -1; };
     std::vector<MagicFxDraw> magic_fx_draws_;
     // dword_F9F08 + word ptr dword_FA8B6+2: units that sub_44DCC redraws inside 454D5.
     // The original stores raw unit pointers and does not deduplicate (at most 59h entries).
@@ -2149,6 +2152,7 @@ private:
     void battle_fx_blit_clipped(int frame, int x, int y);
     void battle_fx_blit_tinted(int frame, int x, int y, int tint_pct);
     void battle_fx_blit_tinted_unclipped(int frame, int x, int y, int tint_pct);
+    void battle_fx_blit_silhouette(int frame, int x, int y, int color); // sub_5F093
     // sub_13669: fill the live unit's pose-0 frame with `color` (5F517). When [77h] exists and
     // [5Ch] <= 6, the stored record's sprite is filled at the live unit's anchor too.
     void battle_fx_silhouette_13669(int unit_index, int color);
@@ -2161,8 +2165,10 @@ private:
     // ----
     //      x/y and handler k) ----
     // ---- Field and wave family (sub_29514/29722) ----
-    int battle_fx_field_particles(int unit_index, int tx, int ty, int count,
-                                  const uint8_t* life_table, bool energy);
+    int battle_fx_field_engine(int unit_index, int tx, int ty, int count,
+                               const int8_t* xo, const int8_t* yo, const uint8_t* life,
+                               bool energy, bool facing_layout, int camera_dy,
+                               bool respawn_on_new_zero, int death_rand, int respawn_mode);
     int battle_fx_20620(int unit_index, int tx, int ty, int energy);   // f_field.nsp, 25 particles
     int battle_fx_2095a(int unit_index, int tx, int ty, int energy);   // f_field.nsp, 27 particles
     int battle_fx_20ddf(int unit_index, int tx, int ty, int energy);   // f_field.nsp, 61 particles
@@ -2244,7 +2250,7 @@ private:
     void battle_fx_468BC(int unit_index);                          // sub_468BC horizontal shrink wipe
     void battle_fx_46a11(int unit_index);                          // sub_46A11 large-unit dissolve
     void battle_fx_blit_scaled(int frame, int x, int y, int dst_w, int dst_h,
-                               bool expand_only = false);                            // 5F570/5F611 draw request
+                               bool expand_only = false, bool shrink_only = false);                            // 5F570/5F611 draw request
     void pal_snapshot_range(int start, int end, uint8_t* out);         // sub_5F945 (DAC -> buffer)
     void pal_load_range(int start, int end, const uint8_t* src);       // sub_5F9E9 (buffer -> DAC)
     void pal_scale_range(int start, int end, const uint8_t* src, int mul_pct); // sub_5FA2C

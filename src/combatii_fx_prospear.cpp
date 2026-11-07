@@ -18,11 +18,10 @@
 // ---- Approximations ----
 //  - sub_56217(x, y, entry) blits at (x + entry[4], y + entry[6]); fx_blit_f does the same by
 //    adding the frame's xo/yo.
-//  - sub_5F093 (solid silhouette blit) has no MagicFxFrame equivalent, so the sub_2DA5E trails
-//    use the normal blit. The trail colour table (3 bytes copied from loc_2CA21+1) is code used
-//    as data; the listing reads it as 0x11/0x13/0x15 but the port does not use it.
+//  - sub_5F093 (solid silhouette blit) is battle_fx_blit_silhouette; the trail colours are the
+//    three bytes at loc_2CA21+1 (0x11/0x13/0x15), indexed by trail slot.
 //  - sub_2D4EB (480-stride canvas offset) has no equivalent because the port renders straight
-//    into the backbuffer.
+//    into the backbuffer; its two pose frames are kept.
 //  - sub_44D6E / sub_44D67 / sub_44D75 (effect-unit highlight toggles) are handled by the port's
 //    render pass.
 //  - sub_21944: IDA overlaps var_20/var_24/var_2E as dwords, so the table-entry offset
@@ -162,17 +161,20 @@ int CombatII::battle_fx_21944(int unit_index, int tx, int ty, int k) {
 // (0 slight / 1 spearfly / otherwise fistlv3).
 //   (1) sub_4F460("f-fall.ssp") starts the fall sound, sub_1FEA4 loads the table, sub_135EB
 //       takes the unit centre.
-//   (2) game_timer_set(5), [unit+0x64] = 9 (pose locked), frame count = 2*edx+1.
-//   (3) For variant 1 the start position shifts by +-(8, 0x0C) according to facing [0x63]
+//   (2) sub_2D4EB: 1033B(19h), then poses 7 and 8, each presented once.
+//   (3) game_timer_set(5), [unit+0x64] = 9 (pose locked), frame count = 2*edx+1.
+//   (4) For variant 1 the start position shifts by +-(8, 0x0C) according to facing [0x63]
 //       (off_2DA3E).
-//   (4) sfx(0x32), then the frame loop: sub_454B3 -> four-entry trail (frame = facing slot * 4 +
-//       (remaining / 4)) -> main frame -> sub_5E9E8 -> sub_499E4 -> shift the trail array ->
-//       advance by facing (off_2DA4E).
-//   (5) While a trail remains (var_C > 0) keep presenting sub_454B3 plus the trail, then restore
+//   (5) sfx(0x32), then the frame loop: sub_454B3 -> draw the existing trail through sub_5F093
+//       (solid silhouette, colours 0x11/0x13/0x15 at loc_2CA21+1; frame = facing*4 +
+//       (counter+3-slot)/4) -> shift the four dword entries -> main frame through sub_1FFFE
+//       (frame = facing*4 + counter/4) -> sub_5E9E8 -> sub_499E4 -> count up to 3, store the
+//       current point at slot 0, counter++, advance by facing (off_2DA4E).
+//   (6) While a trail remains (var_C > 0) keep presenting sub_454B3 plus the trail, then restore
 //       the pose with sub_12124 and release the table with sub_1FFCD.
 // The port takes the variant as k (0 slight / 1 spearfly / 2 fistlv3) and derives the frame count
-// from the start-to-target distance: the edx passed by 2EB61 comes from an outer context the port
-// cannot reproduce, so this is an approximation.
+// from the start-to-target distance: the edx passed by 2EB61 is produced by sub_2CBA1's overlay
+// bookkeeping and cannot be recovered statically, so the duration remains an approximation.
 int CombatII::battle_fx_2da5e(int unit_index, int tx, int ty, int k) {
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return 0;
     auto& u = units_[(size_t)unit_index];
@@ -185,9 +187,19 @@ int CombatII::battle_fx_2da5e(int unit_index, int tx, int ty, int k) {
     int cx = 0, cy = 0;
     unit_screen_center(u, cx, cy);                   // sub_135EB
     const bool variant1 = (k == 1);
+    const int facing = (int)u.facing & 3;
+
+    // (2) sub_2D4EB: two pose frames (7, 8) on the 19h timer.
+    game_timer_set(0x19);                            // sub_1033B(19h)
+    for (int i = 0; i < 2 && !should_exit_; ++i) {
+        u.anim_frame = 7 + i;                        // `add al,7`
+        battle_fx_present();                         // sub_454B3 + sub_5E9E8
+        wait_game_tick();                            // sub_499E4
+    }
+    if (should_exit_) { reset_unit_pose(u); battle_nsp_release(); return 1; }
 
     // Frame count = 2*edx+1 in the original; the port substitutes the Manhattan distance to the
-    // target tile.
+    // target tile (see the note above).
     const int dist = (tx >= 0 && ty >= 0) ? (std::abs(tx - (int)u.x) + std::abs(ty - (int)u.y)) : 0;
     int frames = (dist > 0) ? (2 * dist + 1) : 7;
     if (frames > 0x40) frames = 0x40;                // clamp so the effect cannot run too long
@@ -197,7 +209,7 @@ int CombatII::battle_fx_2da5e(int unit_index, int tx, int ty, int k) {
     // Variant 1 start offset per facing (off_2DA3E: +8 / -0x0C / -8 / +0x0C).
     int wx = cx, wy = cy;
     if (variant1) {
-        switch ((int)u.facing & 3) {
+        switch (facing) {
             case 0: wx += 8; break;                  // loc_2DB0A
             case 1: wy -= 0x0C; break;               // loc_2DB12
             case 2: wx -= 8; break;                  // loc_2DB1A
@@ -206,23 +218,23 @@ int CombatII::battle_fx_2da5e(int unit_index, int tx, int ty, int k) {
     }
 
     sfx(0x32);                                       // sub_4F4CD(32h)
-    // Four trail entries (original var_30/var_2E arrays hold four x and four y values).
-    int trail_x[4] = {wx, wx, wx, wx};
-    int trail_y[4] = {wy, wy, wy, wy};
+    // Four dword trail entries (x + (y << 16) in the original stack array).
+    struct TrailPoint { int x = 0; int y = 0; };
+    TrailPoint trail[4] = {{wx, wy}, {wx, wy}, {wx, wy}, {wx, wy}};
     int trail_n = 0;                                 // var_C (0..3)
-    int counter = 0;                                 // var_8+2 (frame counter)
+    int counter = 0;                                 // var_4 (frame counter)
+    static const uint8_t kTrailColor[3] = {0x11, 0x13, 0x15};   // loc_2CA21+1
     auto draw_trail = [&](int n) {                   // loc_2DB3E / loc_2DCB3
         for (int s = n - 1; s >= 0; --s) {
-            // Frame = ((counter + 3 - trail index) / 4) + facing slot * 4
-            const int f = ((counter + 3 - s) / 4 + ((int)u.facing & 3) * 4);
-            if (f >= 0 && f < nframes) {
-                const MagicFxFrame& fr = magic_frames_[(size_t)f];
-                battle_fx_blit(f, trail_x[s] + fr.xo, trail_y[s] + fr.yo); // approximates sub_5F093
-            }
+            const int f = ((counter + 3 - s) / 4) + facing * 4;
+            if (f < 0 || f >= nframes) continue;
+            const MagicFxFrame& fr = magic_frames_[(size_t)f];
+            battle_fx_blit_silhouette(f, trail[s].x + fr.xo, trail[s].y + fr.yo,
+                                      kTrailColor[s < 3 ? s : 2]); // sub_5F093
         }
     };
     auto step_offsets = [&]() {                      // off_2DA4E
-        switch ((int)u.facing & 3) {
+        switch (facing) {
             case 0: wx += 8; break;
             case 1: wy -= 0x0C; break;
             case 2: wx -= 8; break;
@@ -230,24 +242,19 @@ int CombatII::battle_fx_2da5e(int unit_index, int tx, int ty, int k) {
         }
     };
     for (int t = 0; t < frames && !should_exit_; ++t) {      // loc_2DC69
-        draw_trail(trail_n);                                  // trail after sub_454B3
-        // Main frame: ((counter + 3) / 4 + facing slot * 4)
-        const int f = ((counter + 3) / 4 + ((int)u.facing & 3) * 4);
+        draw_trail(trail_n);                                  // twice: 454B3 then the trail
+        for (int s = trail_n; s > 0; --s) trail[s] = trail[s - 1];  // loc_2DBAF
+        // Main frame: facing*4 + counter/4 through 1FFFE.
+        const int f = (counter / 4) + facing * 4;
         if (f >= 0 && f < nframes) {
             const MagicFxFrame& fr = magic_frames_[(size_t)f];
             battle_fx_blit(f, wx + fr.xo, wy + fr.yo);        // sub_1FFFE
         }
-        battle_fx_present();                                  // 5E9E8
-        wait_game_tick();                                     // 499E4
+        battle_fx_present();                                  // sub_5E9E8
+        wait_game_tick();                                     // sub_499E4
         if (trail_n < 3) ++trail_n;                           // `cmp bx,3; jge`
-        // Shift the trail array (loc_2DBAF).
-        for (int s = trail_n; s > 0; --s) {
-            trail_x[s] = trail_x[s - 1];
-            trail_y[s] = trail_y[s - 1];
-        }
-        trail_x[0] = wx;
-        trail_y[0] = wy;
-        ++counter;                                            // var_8+2
+        trail[0] = TrailPoint{wx, wy};                        // loc_2DC21
+        ++counter;                                            // var_4
         step_offsets();                                       // off_2DA4E
     }
     // Tail: only the trail remains (loc_2DC98).
