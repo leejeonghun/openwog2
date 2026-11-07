@@ -2121,7 +2121,7 @@ private:
     //   expand_only = true forces the 5F570 upscale even when the destination is smaller than the
     //   source; 276B9/2799A/27C5A rely on that.
     //   unclipped = true selects sub_5F29D (same tint LUT as 5F305, but no 13Fh/C7h clip).
-    struct MagicFxDraw { int frame; int x, y; int tint_pct; int dst_w, dst_h; bool expand_only = false; bool unclipped = false; };
+    struct MagicFxDraw { int frame; int x, y; int tint_pct; int dst_w, dst_h; bool expand_only = false; bool unclipped = false; bool clip319 = false; };
     std::vector<MagicFxDraw> magic_fx_draws_;
     // dword_F9F08 + word ptr dword_FA8B6+2: units that sub_44DCC redraws inside 454D5.
     // The original stores raw unit pointers and does not deduplicate (at most 59h entries).
@@ -2140,11 +2140,13 @@ private:
     bool battle_fx_blast_203cc(int unit_index, int tx, int ty);                     // sub_203CC (f_blast + shake)
     // ---- Shared effect blitters and present (used by every driver) ----
     // battle_fx_blit: sub_5EE51, one flat [w][h]+px frame (0FFh transparent).
+    // battle_fx_blit_clipped: sub_5EFB9, the same flat frame but clipped at 13Fh/C7h.
     // battle_fx_blit_tinted: sub_5F305 (scale the palette entry to tint_pct%% brightness, then
     // alpha-blend it over the background; clips at 13Fh/C7h).
     // battle_fx_blit_tinted_unclipped: sub_5F29D (same LUT, but walks the framebuffer stride
     // without the 13Fh/C7h clip, like the original).
     void battle_fx_blit(int frame, int x, int y);
+    void battle_fx_blit_clipped(int frame, int x, int y);
     void battle_fx_blit_tinted(int frame, int x, int y, int tint_pct);
     void battle_fx_blit_tinted_unclipped(int frame, int x, int y, int tint_pct);
     // sub_13669: fill the live unit's pose-0 frame with `color` (5F517). When [77h] exists and

@@ -8914,6 +8914,11 @@ void CombatII::battle_fx_blit(int frame, int x, int y) {
     magic_fx_draws_.push_back(MagicFxDraw{frame, x, y, -1, 0, 0});       // sub_5EE51
 }
 
+void CombatII::battle_fx_blit_clipped(int frame, int x, int y) {
+    if (frame < 0 || (size_t)frame >= magic_frames_.size()) return;
+    magic_fx_draws_.push_back(MagicFxDraw{frame, x, y, -1, 0, 0, false, false, true}); // sub_5EFB9
+}
+
 void CombatII::battle_fx_blit_tinted(int frame, int x, int y, int tint_pct) {
     if (frame < 0 || (size_t)frame >= magic_frames_.size()) return;
     magic_fx_draws_.push_back(MagicFxDraw{frame, x, y, tint_pct, 0, 0}); // sub_5F305
@@ -9032,6 +9037,8 @@ void CombatII::render_magic_effect_layer() {
                 blit_scale_expand(d.x, d.y, dbuf.data(), d.dst_w, d.dst_h);
             else
                 blit_scale_shrink(d.x, d.y, dbuf.data(), d.dst_w, d.dst_h);
+        } else if (d.clip319) {
+            blit_flat_clip319(d.x, d.y, dbuf.data());                       // sub_5EFB9
         } else if (d.tint_pct < 0) {
             blit_flat_transparent(d.x, d.y, dbuf.data());                   // sub_5EE51
         } else {
