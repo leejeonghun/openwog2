@@ -410,18 +410,32 @@ struct TerrainOverlayFrame {
     std::vector<uint8_t> rle;
 };
 
-// One Y-sorted draw entry built by render_battle_map (one original call to
+// One draw entry built by render_battle_map (one original call to
 // sub_12F2A/5F3FD/5F517/5F4AF). Declared here so sub_44DCC (highlight list) can redraw the
 // same unit after the frame.
 struct DrawEntry {
     int x,y,foot;
     int type; // 0=top tile, 1=CITIZEN SPR frame (idx), 2=NC2 frame (nc2), 3=solid silhouette (nc2+idx=colour)
-              // 4=NC2 clipped (sub_5F4AF, clip_h), 5=terrain foot overlay RLE (ov)
+              // 4=NC2 clipped (sub_5F4AF, clip_h), 5=terrain foot overlay RLE (ov),
+              // 7=CHR_EFFC status overlay (ov), 8=sub_18605 item/field RLE (rle)
     int idx;
     const NC2Frame* nc2 = nullptr;
     int clip_h = 0;                 // type 4: scanlines kept from the top
     int foot_x = 0;                 // type 2: foot-overlay start x (sub_12F2A var_C)
-    const TerrainOverlayFrame* ov = nullptr; // type 5
+    const TerrainOverlayFrame* ov = nullptr; // type 5/6/7
+    const uint8_t* rle = nullptr;   // type 8: 480-stride RLE (sub_18605 item/field sprites)
+    // sub_12BEE's insertion order, not just a global Y sort:
+    //   0 = top tile, 1 = unit shadow, 2 = sub_18605 item sprite (A list),
+    //   3 = normal unit, 4 = attacking unit, 5 = sub_18605 field effect (C list),
+    //   6 = water unit (the E4960 list, drawn after every row).
+    // order_row is the row pass (top tile ty or unit y; INT_MAX for water),
+    // order_x is the original screen-x scan order, and order_seq preserves the
+    // shadow -> sprite -> status/decal insertion order inside one unit.
+    int order_row = 0;
+    int order_list = 0;
+    int order_x = 0;
+    int order_owner = -1;
+    int order_seq = 0;
 };
 
 class CombatII {
@@ -864,6 +878,12 @@ private:
 
     // ---- Map rendering and scrolling ----
     void render_battle_map();
+    // sub_18555: rebuild the 10-slot per-frame marker table from battle_tile_events_.
+    void battle_map_effect_register_18555();
+    // sub_18605: consume the markers of the current row and append item/field sprites into
+    // the same draw list as sub_12BEE. The original is called once per row pass (17 total);
+    // this helper replays the whole row loop in one call.
+    void battle_map_effect_layer_18605(std::vector<DrawEntry>& out, int& draw_seq);
     void render_sprites();
     void render_battle_viewer(); // one battle-viewer frame (map -> weather -> dim -> markers -> HUD -> sprites)
     void update_scroll();
@@ -2435,10 +2455,23 @@ private:
     // sub_12065 advances it together with byte_E518E (`(phase+1) % 3`, dasm 3237..3253).
     uint8_t effc_phase_ = 0;
     // ITEM.SPR (sub_18115: sub_4F25F -> unk_EFDB0 table, 124 frames). Frame = item number - 1;
-    // the sub_1E460 shield icon uses it.
+    // the sub_1E460 shield icon uses it, and sub_18605 type-0 map effects draw the same frames.
     SPRParser item_spr_;
     bool item_spr_loaded_ = false;
     bool item_spr_tried_ = false;
+    // FLD_MISC.SYB (sub_18115: unk_EFD80, 4 frames). sub_18605 types 1/2 use frame 0/1
+    // (unconsumed/consumed) and frame 2/3 for type 2. Both are 480-stride after sub_10031.
+    SPRParser fld_misc_spr_;
+    bool fld_misc_loaded_ = false;
+    bool fld_misc_tried_ = false;
+    bool load_fld_misc_spr();
+    struct BattleMapEffectMarker {
+        uint8_t row = 0xFF;   // byte_F03F8[slot*2]
+        uint8_t event = 0;    // byte_F03F9[slot*2]
+    };
+    BattleMapEffectMarker battle_map_effect_markers_[10];
+    uint8_t battle_map_effect_count_ = 0; // byte_F040C
+    uint8_t battle_map_effect_row_ = 0;   // byte_F040D
     // AI_CTRL.ICO #13 in DOS is the unit-command ring entry that toggles [+0x83].
     uint8_t  scenario_flags_[256] = {}; // word_FDF85 (byte array indexed by the condition block)
     uint8_t  script_fired_[100] = {};

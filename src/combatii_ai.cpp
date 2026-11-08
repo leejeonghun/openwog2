@@ -4600,6 +4600,30 @@ bool CombatII::load_item_spr() {
     return true;
 }
 
+// Load FLD_MISC.SYB (sub_18115: unk_EFD80, 4 frames). sub_18605's type-1/2 event sprites
+// use frames 0/1 (unconsumed/consumed) and 2/3 (type 2).
+bool CombatII::load_fld_misc_spr() {
+    fld_misc_tried_ = true;
+    fld_misc_loaded_ = false;
+    std::string cand = game_path("FLD_MISC.SYB");
+    if (!file_exists(cand.c_str())) cand = game_path("fld_misc.syb");
+    if (!file_exists(cand.c_str())) cand = file_find_case_insensitive(GAME_DATA_DIR, "FLD_MISC.SYB");
+    if (cand.empty() || !file_exists(cand.c_str())) {
+        fprintf(stderr, "COMBAT: warning: FLD_MISC.SYB not found (tile-event field sprites skipped)\n");
+        return false;
+    }
+    if (!fld_misc_spr_.load(cand) || fld_misc_spr_.count() < 1) {
+        fprintf(stderr, "COMBAT: warning: FLD_MISC.SYB load failed: %s\n", fld_misc_spr_.error().c_str());
+        return false;
+    }
+    // sub_18115 loc_1818A applies sub_10031 to all four frames (sub_5F3FD uses the 480 stride).
+    fld_misc_spr_.convert_stride_480();
+    fld_misc_loaded_ = true;
+    fprintf(stderr, "COMBAT: FLD_MISC.SYB loaded %d frames (sub_10031 320->480 stride patch)\n",
+            fld_misc_spr_.count());
+    return true;
+}
+
 // sub_1E460: shield icon for a successful defence (word_F0430 == 1) or the "Defense!" presentation.
 void CombatII::battle_draw_shield_icon(int unit_index) {
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return;

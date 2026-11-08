@@ -848,6 +848,9 @@ bool CombatII::load_battle_map(const std::string& map_filename, bool use_sce_uni
     // The port loads lazily, so preload here: otherwise chr_effc stays empty until the first effect
     // and the sub_123C1 status overlay is never drawn.
     load_effect_sprites();
+    // sub_18115 also loads ITEM.SPR and FLD_MISC.SYB for the sub_18605 tile-event layer.
+    if (!item_spr_tried_) load_item_spr();
+    if (!fld_misc_tried_) load_fld_misc_spr();
     // Recentre on the protagonist (first unit of group 0); the original does the same.
     if (!units_.empty()) {
         int lead_x = units_[0].x;
@@ -1885,6 +1888,7 @@ void CombatII::render_battle_map(){
     // frames must live at function scope; inside the unit block they would be destroyed first.
     std::vector<NC2Frame> dissolve_frames;
     dissolve_frames.reserve(units_.size() + 1);
+    int draw_seq = 0;   // insertion order inside one sub_12BEE row/list
     int top_start_tx = cam_tile_x_ -4;
     int top_start_ty = cam_tile_y_ -6;
     int top_end_tx = cam_tile_x_ + (SCREEN_W/TOWN_TILE_W)+6;
@@ -1906,10 +1910,18 @@ void CombatII::render_battle_map(){
             int bottom = sy + sp.h;
             if(right <=1 || sx >= 318 || bottom <=1 || sy >= 197 || sp.h >=100) continue;
             int foot_y = ty*TOWN_TILE_H + sp.foot;
-            draw_list.push_back({sx,sy,foot_y,0,rt_idx});
+            DrawEntry e;
+            e.x = sx; e.y = sy; e.foot = foot_y; e.type = 0; e.idx = rt_idx;
+            e.order_row = ty;
+            e.order_list = 0;       // sub_10CBD queues top tiles into dword_8B2E4 first
+            e.order_x = sx;
+            e.order_owner = -1;
+            e.order_seq = draw_seq++;
+            draw_list.push_back(e);
         }
     }
-    // Append units to same list; foot_y is tile bottom + sprite offset for stable interleaving
+    // Append units to the same draw_list, but tag each entry with the sub_12BEE row/list so
+    // the final sort can keep shadows and top tiles ahead of every unit in the same row.
     if (!units_.empty()) {
         // The original selects the sprite from three record bytes:
         //   [unit+0x60] type code, [unit+0x63] facing, [unit+0x64] pose
@@ -1958,9 +1970,40 @@ void CombatII::render_battle_map(){
             // highlight pass replay the same pixels at the same coordinates.
             const bool hl = std::find(battle_highlight_units_.begin(), battle_highlight_units_.end(),
                                       (int)i) != battle_highlight_units_.end();
+            // sub_12567 keeps three queues per row: E4C8C (normal units), E4854 (attacking
+            // units, followed by sub_18605's field effects) and E4960/E4962 (water units, drawn
+            // only after the whole 17-row loop).  sub_18605 also appends item sprites to the
+            // A list (dword_8B2E4) after the shadows.  The old global foot sort mixed them.
+            int unit_list = u.attacking ? 4 : 3;
+            if (!tile_attr_.empty() && u.x >= 0 && u.y >= 0 &&
+                u.x < (int)map_w_ && u.y < (int)map_h_) {
+                const int attr = tile_attr_[(size_t)u.y * map_w_ + (size_t)u.x];
+                if (attr <= 0x63 && (attr & 0xF) == 8)   // loc_1264C: dl < 64h, low nibble 8
+                    unit_list = 6;
+            }
             auto unit_push = [&](DrawEntry e) {
+                // Shadows go to the same per-row list as the top tiles (dword_8B2E4), but
+                // after them; the sprite/overlay goes to the normal/attacking/water list.
+                e.order_row = (e.type == 6) ? u.y : (unit_list == 6 ? 0x7FFFFFFF : u.y);
+                e.order_list = (e.type == 6) ? 1 : unit_list;
+                e.order_x = sx;
+                e.order_owner = (int)i;
+                e.order_seq = draw_seq++;
                 if (hl) highlight_draws_.push_back(e);
                 draw_list.push_back(e);
+            };
+            auto status_overlay = [&]() {
+                const size_t before = draw_list.size();
+                unit_status_overlay_123c1(u, draw_list, sx - u.walk_off_x,
+                                          sy - u.walk_off_y, foot_y);
+                for (size_t k = before; k < draw_list.size(); ++k) {
+                    DrawEntry& e = draw_list[k];
+                    e.order_row = (unit_list == 6) ? 0x7FFFFFFF : u.y;
+                    e.order_list = unit_list;
+                    e.order_x = sx;
+                    e.order_owner = (int)i;
+                    e.order_seq = draw_seq++;
+                }
             };
             // ---- mode-1 spawn drop (sub_508E6 -> sub_50216) ----
             //   dx = 7 - unk_E5A50 (counter). sub_50216 in full:
@@ -1985,7 +2028,7 @@ void CombatII::render_battle_map(){
                     const NC2Frame& ds = syb[u.drop_step];
                     unit_push({sx, sy, foot_y, 2, 0, &ds});   // xo/yo are applied by the type-2 draw
                 }
-                unit_status_overlay_123c1(u, draw_list, sx - u.walk_off_x, sy - u.walk_off_y, foot_y);
+                status_overlay();
                 continue;                                 // skip the normal NC2/CITIZEN path
             }
             // ---- sub_12567 (dasm 3751..3796): map_kind 6 flips facing from the unit tile
@@ -2028,8 +2071,18 @@ void CombatII::render_battle_map(){
                     dissolve_frames.push_back(std::move(copy));
                     // sub_5EE51 draws at sub_10971+0Ch+entry[4] / sub_10988-2+entry[5]; the walk
                     // sub-pixel offsets ([65h]/[66h]) are not added here.
-                    draw_list.push_back({sx - u.walk_off_x, sy - u.walk_off_y, foot_y, 2, 0,
-                                         &dissolve_frames.back(), 0, 0, nullptr});
+                    DrawEntry de;
+                    de.x = sx - u.walk_off_x;
+                    de.y = sy - u.walk_off_y;
+                    de.foot = foot_y;
+                    de.type = 2;
+                    de.nc2 = &dissolve_frames.back();
+                    de.order_row = (unit_list == 6) ? 0x7FFFFFFF : u.y;
+                    de.order_list = unit_list;
+                    de.order_x = sx;
+                    de.order_owner = (int)i;
+                    de.order_seq = draw_seq++;
+                    draw_list.push_back(de);
                 }
                 continue;
             }
@@ -2102,7 +2155,7 @@ void CombatII::render_battle_map(){
                     // sub_123C1: the status overlay follows the unit frame immediately (same
                     // foot_y);
                     // the original calls it right after sub_12567 pushes the unit entry.
-                    unit_status_overlay_123c1(u, draw_list, sx - u.walk_off_x, sy - u.walk_off_y, foot_y);
+                    status_overlay();
                 } else {
                     // Sink path: the clip height is class-specific - class 0: sil_y-y_off+22-depth,
                     // class 1/2: 14-y_off-depth (loc_1302F).
@@ -2136,7 +2189,7 @@ void CombatII::render_battle_map(){
                                        sy + ncf->sil_y + 14 + depth,
                                        foot_y, 5, 0, nullptr, 0, 0, &ov});
                     }
-                    unit_status_overlay_123c1(u, draw_list, sx - u.walk_off_x, sy - u.walk_off_y, foot_y);
+                    status_overlay();
                 }
                 continue;
             }
@@ -2155,12 +2208,115 @@ void CombatII::render_battle_map(){
             }
             // Use idx=frame; type=1 distinguishes from top tiles during draw. Store frame in idx.
             unit_push({sx,sy,foot_y,1,frame});
-            unit_status_overlay_123c1(u, draw_list, sx - u.walk_off_x, sy - u.walk_off_y, foot_y);
+            status_overlay();
         }
     }
-    // Single Y-sort (stable), matching PACK's stable_sort on foot_y
-    std::stable_sort(draw_list.begin(), draw_list.end(), [](auto& a, auto& b){return a.foot < b.foot;});
+    // sub_12BEE draws 17 row passes.  Each pass is, in order: top tiles + shadows
+    // (dword_8B2E4), normal units (E4C8C), attacking units + sub_18605 effects (E4854);
+    // sub_18605's type-0 item sprites join the A list, so they follow the shadows; its
+    // type-1/2 field sprites join the C list, after the attacking units.  The water list
+    // (E4960) is drawn after the row loop.  Keep that insertion order instead of a single
+    // foot_y sort: a shadow must never overtake its sprite, and a water unit must not be
+    // interleaved with the land rows.
+    battle_map_effect_register_18555();
+    battle_map_effect_layer_18605(draw_list, draw_seq);
+    std::stable_sort(draw_list.begin(), draw_list.end(), [](const DrawEntry& a, const DrawEntry& b) {
+        if (a.order_row != b.order_row) return a.order_row < b.order_row;
+        if (a.order_list != b.order_list) return a.order_list < b.order_list;
+        if (a.order_x != b.order_x) return a.order_x < b.order_x;
+        if (a.order_owner != b.order_owner) return a.order_owner < b.order_owner;
+        return a.order_seq < b.order_seq;
+    });
     for(auto &e: draw_list) blit_draw_entry(e);
+}
+
+// sub_18555: rebuild the per-frame event marker table.  Only events whose sub_10971/sub_10988
+// screen position is inside the original's window (-8..0x130, -0xF..0xC7) get a slot.  The
+// table is capped at 10 entries; F040D starts at the camera's tile row.
+void CombatII::battle_map_effect_register_18555() {
+    if (!item_spr_tried_) load_item_spr();
+    if (!fld_misc_tried_) load_fld_misc_spr();
+    battle_map_effect_count_ = 0;
+    for (auto& m : battle_map_effect_markers_) m = BattleMapEffectMarker{};
+    battle_map_effect_row_ = (uint8_t)cam_tile_y_;
+    for (int i = 0; i < 10; ++i) {
+        uint8_t state = 0, ex = 0, ey = 0;
+        if ((size_t)i < battle_tile_events_.size()) {
+            const BattleTileEvent& e = battle_tile_events_[(size_t)i];
+            state = e.state; ex = e.x; ey = e.y;
+        }
+        if (state == 0) continue;
+        const int sx = (ex - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X;
+        const int sy = (ey - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y;
+        if (sx < -8 || sx > 0x130 || sy < -0xF || sy > 0xC7) continue;
+        BattleMapEffectMarker& m = battle_map_effect_markers_[battle_map_effect_count_];
+        m.row = ey;
+        m.event = (uint8_t)i;
+        ++battle_map_effect_count_;
+        if (battle_map_effect_count_ >= 10) break;
+    }
+}
+
+// sub_18605: consume the markers whose stored row matches F040D.  The original handles exactly
+// one row per call and increments F040D; sub_12BEE/sub_12D65 call it once per row pass, so this
+// helper replays the 17 rows in order.
+// Type 0 (item) goes to the A list after the shadows; type 1/2 (FLD_MISC field effect) goes to
+// the C list after the attacking units; type 3 draws nothing.  The original clears each marker
+// after it is handled, except the hidden 0xFE state which is left for the next frame.
+void CombatII::battle_map_effect_layer_18605(std::vector<DrawEntry>& out, int& draw_seq) {
+    for (int pass = 0; pass < 17; ++pass, ++battle_map_effect_row_) {
+        const uint8_t row = battle_map_effect_row_;
+        for (int slot = 0; slot < battle_map_effect_count_; ++slot) {
+            BattleMapEffectMarker& m = battle_map_effect_markers_[(size_t)slot];
+            if (m.row != row) continue;
+            if ((size_t)m.event >= battle_tile_events_.size()) {
+                m.row = 0xFF;
+                continue;
+            }
+            const BattleTileEvent& e = battle_tile_events_[(size_t)m.event];
+            const uint8_t state = e.state;
+            if (state == 0xFE) continue;                 // hidden: no draw and no marker clear
+            const int sx = (e.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X;
+            const int sy = (e.y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y;
+            const bool consumed = (state == 0xFF);
+            DrawEntry de{};
+            bool draw = false;
+            if (e.type == 0) {
+                if (!consumed && item_spr_loaded_ && state >= 1) {
+                    const SpriteEntry* sp = item_spr_.get((int)state - 1);
+                    if (sp && sp->pixel_data) {
+                        de.x = sx + 0x0C + sp->x_offset;
+                        de.y = sy + 0x10 - (int)sp->word2;   // word_EFDB2 is the sprite height
+                        de.rle = sp->pixel_data;
+                        de.order_list = 2;                   // A list, after top tiles/shadows
+                        draw = true;
+                    }
+                }
+            } else if (e.type != 3) {
+                int frame = consumed ? 1 : 0;
+                if (e.type == 2) frame += 2;
+                if (fld_misc_loaded_) {
+                    const SpriteEntry* sp = fld_misc_spr_.get(frame);
+                    if (sp && sp->pixel_data) {
+                        de.x = sx;
+                        de.y = sy + sp->y_offset + 6;
+                        de.rle = sp->pixel_data;
+                        de.order_list = 5;                   // C list, after attacking units
+                        draw = true;
+                    }
+                }
+            }
+            if (draw) {
+                de.type = 8;
+                de.order_row = row;
+                de.order_x = 0;      // sub_18605 appends in event-slot order, not screen-x order
+                de.order_owner = -1;
+                de.order_seq = draw_seq++;
+                out.push_back(de);
+            }
+            m.row = 0xFF;                                  // byte_F03F8[slot*2] = 0FFh
+        }
+    }
 }
 
 // Draw one entry (the original's sub_5F3FD / sub_5F4AF / sub_5F517 call).
@@ -2206,6 +2362,10 @@ void CombatII::blit_draw_entry(const DrawEntry& e) {
         if (e.ov && !e.ov->rle.empty()) {
             blit_sprite_480(e.x, e.y, e.ov->rle.data());
         }
+    } else if (e.type==8) {
+        // sub_18605's item/field sprites: sub_5F3FD, 480-stride (ITEM.SPR/FLD_MISC.SYB have
+        // already been converted by sub_10031 in sub_18115).
+        if (e.rle) blit_sprite_480(e.x, e.y, e.rle);
     } else if (e.type==6) {
         // sub_12F2A normal path: unit foot shadow (SHADOW.SYB, dword_D6658).
         if (e.ov && !e.ov->rle.empty())
