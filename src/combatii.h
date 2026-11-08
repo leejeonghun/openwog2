@@ -606,7 +606,10 @@ private:
     void render_battle_frame();
     void present_cutscene_frame();
     // ---- Original frame chain (the order the spell drivers call every frame) ----
-    void battle_fx_world();      // sub_10AEB (map/FPM) + sub_12D65 (units) + sub_4512E (weather)
+    void battle_fx_world();      // sub_454B3: sub_10AEB + sub_12BEE + sub_4512E (map/units/weather)
+    void battle_fx_world_12d65();        // sub_10AEB + sub_12D65 (no unit pass, no weather)
+    void battle_fx_world_454b3_12d65();  // sub_454B3 then sub_12D65 over it (276B9 step 2)
+    void battle_fx_present_12d65();      // 10AEB+12D65 -> 12E01 -> 454D5 -> 5E9E8
     void battle_fx_world_keep(); // sub_454B3 without clearing the backbuffer (equip screens sub_48BC1/48863)
     void battle_fx_flush();      // sub_12E01: send queued spell sprites (5F570/5EE51/5F305)
     void battle_fx_overlay();    // sub_454D5: dim -> sub_12161 -> sub_44DCC -> sub_13546 -> sub_45431
@@ -877,7 +880,10 @@ private:
     void render_dialog_frame(int x, int y, int w, int h);
 
     // ---- Map rendering and scrolling ----
-    void render_battle_map();
+    // magic_pass: sub_12D65 instead of sub_12BEE - top tiles and sub_18605 map effects only,
+    //   with no sub_1547F shading and no unit sprites/shadows/water list.
+    // overlay_only: draw only that sub_12D65 part over an already-rendered sub_454B3 frame.
+    void render_battle_map(bool magic_pass = false, bool overlay_only = false);
     // sub_18555: rebuild the 10-slot per-frame marker table from battle_tile_events_.
     void battle_map_effect_register_18555();
     // sub_18605: consume the markers of the current row and append item/field sprites into

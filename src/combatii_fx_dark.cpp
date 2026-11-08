@@ -5,13 +5,14 @@
 // combatii_battle.cpp):
 //   1. sub_1FEA4 loads MAGICSPR\<spell>.nsp into the unk_F0DAA table.
 //   2. 1033B sets the timer period, then every frame repeats this sequence in the original order:
-//        sub_10AEB (map/FPM) -> sub_12D65 (units)        = battle_fx_world()
+//        sub_10AEB (map/FPM) -> sub_12D65 (top tiles + 18605 effects) = battle_fx_world_12d65()
 //        -> sub_5F570/5F611 (effect frame)               = battle_fx_blit_scaled()
 //        -> sub_12E01 (sprite transfer)                  = battle_fx_flush()
 //        -> sub_454D5 (dim, markers, highlights, HP, HUD) = battle_fx_overlay()
 //        -> sub_5E9E8 (transfer) -> sub_499E4 (tick)     = battle_fx_commit() / wait_game_tick()
-//      (Only step 2 of 276B9 uses 454B3 = 10AEB+12BEE+4512E instead of 10AEB; battle_fx_world
-//      covers both.)
+//      sub_12D65 has no 122C4/12567 unit pass, so these frames draw no normal/attacking/water
+//      units and no weather. Only step 2 of 276B9 uses 454B3 first and then 12D65 again
+//      (battle_fx_world_454b3_12d65); 26E1F uses battle_fx_present_12d65() for the whole frame.
 //   3. The screen shake alternates the low word of dword_BA838 (camera fine offset) between 0 and
 //      0FFFCh (-4); the port keeps it in cam_fine_y_, the same field the other drivers use.
 //
@@ -144,7 +145,7 @@ int CombatII::battle_fx_26e1f(int unit_index, int tx, int ty, int k) {
     for (int guard = 0; guard < 0x40 && radius > 1 && !should_exit_; ++guard) {
         draw_blob((0x3C - radius) / 4, radius);          // 5F611 (ecx = radius)
         draw_particles(0);
-        battle_fx_present();
+        battle_fx_present_12d65();
         radius -= 4;
         wait_game_tick();
     }
@@ -154,14 +155,14 @@ int CombatII::battle_fx_26e1f(int unit_index, int tx, int ty, int k) {
         for (int e = 2; e < 0x28 * k && !should_exit_; e += k * 4) {
             draw_blob(std::min(nframes - 1, 0x10), e);              // 5F570(ecx=e)
             draw_particles(0);
-            battle_fx_present();
+            battle_fx_present_12d65();
             wait_game_tick();
         }
         // (3) 30 frames alternating frames 0x11/0x12, with a sound every third frame.
         for (int i = 0; i < 0x1E && !should_exit_; ++i) {
             draw_blob(0x11 + (i & 1), k * 0x28);                    // 5F570 (fixed size)
             draw_particles(0);
-            battle_fx_present();
+            battle_fx_present_12d65();
             if (combat_rand(3) == 0) sfx(0x33);                     // sub_499BD(3) == 0 -> 4F4CD(33h)
             wait_game_tick();
         }
@@ -170,7 +171,7 @@ int CombatII::battle_fx_26e1f(int unit_index, int tx, int ty, int k) {
         for (int i = 0; i < 0x1E && !should_exit_; ++i) {
             draw_blob(blob_frame, 0x82);                            // 5F611 (centre 0x82)
             draw_particles(0);
-            battle_fx_present();
+            battle_fx_present_12d65();
             wait_game_tick();
         }
     }
@@ -226,7 +227,7 @@ int CombatII::battle_fx_276b9(int unit_index, int tx, int ty, int k) {
     //   -> sub_5E9E8 -> sub_499E4.
     for (int i = 0; i < 0x1C && !should_exit_; ++i) {
         cam_fine_y_ = ((i >> 1) & 1) ? 0 : -4;                     // low word of dword_BA838
-        battle_fx_world();                                         // sub_10AEB + sub_12D65
+        battle_fx_world_12d65();                                   // sub_10AEB + sub_12D65
         blit(i >> 2, w, h, true);                                  // sub_5F570
         battle_fx_flush();                                         // sub_12E01
         battle_fx_overlay();                                       // sub_454D5
@@ -242,7 +243,7 @@ int CombatII::battle_fx_276b9(int unit_index, int tx, int ty, int k) {
     for (int i = 0, di = 0; i < 0x64 && !should_exit_; i += 2, ++di) {
         cam_fine_y_ = (int16_t)(((di >> 1) & 1) ? 0 : -4);
         pal_shift_fade(i);                                         // sub_5FD1C (si)
-        battle_fx_world();                                         // sub_454B3 + sub_12D65
+        battle_fx_world_454b3_12d65();                             // sub_454B3 + sub_12D65
         w += 3; h += 3;                                            // the original adds 3 before the blit
         blit(di % 3 + 4, w, h, false);                             // sub_5F570
         battle_fx_flush();                                         // sub_12E01
@@ -308,7 +309,7 @@ int CombatII::battle_fx_2799a(int unit_index, int tx, int ty, int k) {
     //   sub_5E9E8 -> sub_499E4.
     for (int i = 0; i < 0x18 && !should_exit_; ++i) {
         cam_fine_y_ = (int16_t)(((i >> 1) & 1) ? 0 : -4);
-        battle_fx_world();                                         // sub_10AEB + sub_12D65
+        battle_fx_world_12d65();                                   // sub_10AEB + sub_12D65
         blit(i >> 2, s, true);                                     // sub_5F570
         battle_fx_flush();                                         // sub_12E01
         battle_fx_overlay();                                       // sub_454D5
@@ -320,7 +321,7 @@ int CombatII::battle_fx_2799a(int unit_index, int tx, int ty, int k) {
     //   (37,40,...,106), centring size/2 rounded down. The palette R channel rotates afterwards.
     for (int i = 0; i < 0x18 && !should_exit_; ++i) {
         cam_fine_y_ = (int16_t)(((i >> 1) & 1) ? 0 : -4);
-        battle_fx_world();                                         // sub_10AEB + sub_12D65
+        battle_fx_world_12d65();                                   // sub_10AEB + sub_12D65
         s += 3;
         blit(i % 2 + 4, s, false);                                 // sub_5F570
         battle_fx_flush();                                         // sub_12E01
@@ -393,7 +394,7 @@ int CombatII::battle_fx_27c5a(int unit_index, int tx, int ty, int k) {
     //   sub_5E9E8 -> sub_499E4.
     for (int i = 0; i < 3 && !should_exit_; ++i) {
         cam_fine_y_ = (int16_t)(((i >> 1) & 1) ? 0 : -4);
-        battle_fx_world();                                         // sub_10AEB + sub_12D65
+        battle_fx_world_12d65();                                   // sub_10AEB + sub_12D65
         place_all(0, size);                                        // sub_5F570 x5
         battle_fx_flush();                                         // sub_12E01
         battle_fx_overlay();                                       // sub_454D5
@@ -409,7 +410,7 @@ int CombatII::battle_fx_27c5a(int unit_index, int tx, int ty, int k) {
     for (int di = 3; di < 0x64 && !should_exit_; di += 3) {
         cam_fine_y_ = (int16_t)(((fc >> 1) & 1) ? 0 : -4);
         pal_shift_fade(di);                                        // sub_5FD1C
-        battle_fx_world();                                         // sub_10AEB + sub_12D65
+        battle_fx_world_12d65();                                   // sub_10AEB + sub_12D65
         place_all((fc % 3) + 4, size);                             // sub_5F570 x5
         battle_fx_flush();                                         // sub_12E01
         battle_fx_overlay();                                       // sub_454D5

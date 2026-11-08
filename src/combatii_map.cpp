@@ -1839,48 +1839,54 @@ const uint8_t* CombatII::battle_move_shade_lut() {
     return move_shade_lut_;
 }
 
-void CombatII::render_battle_map(){
-    highlight_draws_.clear();               // the sub_44DCC replay list is rebuilt on every sub_454B3 pass
-    // Always draw FPM behind tiles when available (sub_10AEB order: sub_5EAE3 FPM first, then tiles
-    // via sub_10010).
-    // The FPM layer is drawn first so gaps between tiles show the background, as in sub_10AEB.
-    bool has_fpm = !fpm_decoded_.empty() || !fpm_data_.empty();
-    if(!layer_base_tiles_ || base_tiles_data_.empty()){
-        if(has_fpm){ render_fpm(); return; }
-        video_.clear(); return;
-    }
-    // Fill background first
-    if (has_fpm) render_fpm_as_background();
-    else if (!battle_keep_backbuffer_) video_.clear();  // sub_10AEB never clears (battle_fx_world_keep)
-    // sub_10AEB (loc_10BE7/loc_10BEE): outer loop dx = 0..0Ch, inner loop si = 0..0Ch, so exactly
-    // 13 columns x 13 rows with cam_tile as the first column/row; columns/rows before cam_tile-1
-    // are not drawn (at rest with fine=(12,0) the leftmost 16px and top 4px show FPM/background).
-    // Tile ids are resolved to the current animation frame by sub_109EE (base) / sub_10A0F (top).
-    int start_tx = cam_tile_x_;
-    int start_ty = cam_tile_y_;
-    int end_tx = cam_tile_x_ + 13;
-    int end_ty = cam_tile_y_ + 13;
-    for(int ty=start_ty; ty<end_ty; ty++){
-        for(int tx=start_tx; tx<end_tx; tx++){
-            if(tx<0||tx>=(int)map_w_||ty<0||ty>=(int)map_h_) continue;
-            int idx=ty*(int)map_w_+tx;
-            uint16_t b_raw=layer_base_tiles_[idx];
-            if(b_raw==0xFFFF) continue;             // file id 0 = empty cell (sub_10AEB: test ax,ax; jle)
-            // sub_10AEB computes canvas_x = fineX + 4 + (tx-camX)*24, so the sub-tile offset is
-            // added (camera world position = cam_tile*24 - cam_fine). The first column/row
-            // (cam_x, cam_y) is drawn by sub_5EB00(fineX+4, fineY+4).
-            int sx=(tx - cam_tile_x_)*TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X;
-            int sy=(ty - cam_tile_y_)*TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y;
-            const int b_idx=battle_base_tile_frame((int)b_raw + 1);
-            if(b_idx >= 0 && (size_t)b_idx < base_tiles_data_.size()){
-                blit_tile_24x16(sx,sy,base_tiles_data_[(size_t)b_idx].data());
+// sub_12BEE is the full unit pass; sub_12D65 is the reduced magic-effect pass used by the
+// full-screen dark spells. magic_pass skips the sub_1547F shading and the whole sub_12BEE unit
+// queue; overlay_only skips the sub_10AEB FPM/base-tile part and redraws only the sub_12D65
+// top tiles/effects over an existing 454B3 frame.
+void CombatII::render_battle_map(bool magic_pass, bool overlay_only){
+    if (!overlay_only) {
+        highlight_draws_.clear();           // the sub_44DCC replay list is rebuilt on every sub_454B3 pass
+        // Always draw FPM behind tiles when available (sub_10AEB order: sub_5EAE3 FPM first, then tiles
+        // via sub_10010).
+        // The FPM layer is drawn first so gaps between tiles show the background, as in sub_10AEB.
+        bool has_fpm = !fpm_decoded_.empty() || !fpm_data_.empty();
+        if(!layer_base_tiles_ || base_tiles_data_.empty()){
+            if(has_fpm){ render_fpm(); return; }
+            video_.clear(); return;
+        }
+        // Fill background first
+        if (has_fpm) render_fpm_as_background();
+        else if (!battle_keep_backbuffer_) video_.clear();  // sub_10AEB never clears (battle_fx_world_keep)
+        // sub_10AEB (loc_10BE7/loc_10BEE): outer loop dx = 0..0Ch, inner loop si = 0..0Ch, so exactly
+        // 13 columns x 13 rows with cam_tile as the first column/row; columns/rows before cam_tile-1
+        // are not drawn (at rest with fine=(12,0) the leftmost 16px and top 4px show FPM/background).
+        // Tile ids are resolved to the current animation frame by sub_109EE (base) / sub_10A0F (top).
+        int start_tx = cam_tile_x_;
+        int start_ty = cam_tile_y_;
+        int end_tx = cam_tile_x_ + 13;
+        int end_ty = cam_tile_y_ + 13;
+        for(int ty=start_ty; ty<end_ty; ty++){
+            for(int tx=start_tx; tx<end_tx; tx++){
+                if(tx<0||tx>=(int)map_w_||ty<0||ty>=(int)map_h_) continue;
+                int idx=ty*(int)map_w_+tx;
+                uint16_t b_raw=layer_base_tiles_[idx];
+                if(b_raw==0xFFFF) continue;         // file id 0 = empty cell (sub_10AEB: test ax,ax; jle)
+                // sub_10AEB computes canvas_x = fineX + 4 + (tx-camX)*24, so the sub-tile offset is
+                // added (camera world position = cam_tile*24 - cam_fine). The first column/row
+                // (cam_x, cam_y) is drawn by sub_5EB00(fineX+4, fineY+4).
+                int sx=(tx - cam_tile_x_)*TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X;
+                int sy=(ty - cam_tile_y_)*TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y;
+                const int b_idx=battle_base_tile_frame((int)b_raw + 1);
+                if(b_idx >= 0 && (size_t)b_idx < base_tiles_data_.size()){
+                    blit_tile_24x16(sx,sy,base_tiles_data_[(size_t)b_idx].data());
+                }
             }
         }
     }
     // sub_454B3: sub_10AEB (base) -> [sub_1547F when word_FA8BC != 0] -> sub_12BEE (tops + units).
     // The move-range shading must sit between the base tiles and the tops/units so unit sprites
-    // are never dimmed.
-    render_player_move_range();
+    // are never dimmed. sub_12D65 has neither, so magic_pass skips it.
+    if (!magic_pass) render_player_move_range();
     // Build one merged Y-sorted draw list (top tiles + units); the original uses a stable foot_y
     // sort so units and roofs occlude each other correctly.
     std::vector<DrawEntry> draw_list;
@@ -1922,7 +1928,8 @@ void CombatII::render_battle_map(){
     }
     // Append units to the same draw_list, but tag each entry with the sub_12BEE row/list so
     // the final sort can keep shadows and top tiles ahead of every unit in the same row.
-    if (!units_.empty()) {
+    // sub_12D65 never calls sub_12567, so the magic pass has no unit entries at all.
+    if (!magic_pass && !units_.empty()) {
         // The original selects the sprite from three record bytes:
         //   [unit+0x60] type code, [unit+0x63] facing, [unit+0x64] pose
         //   entry = unk_D66A8 + 572*slot + 13*(11*facing + pose), entry[9..12] = sprite pointer

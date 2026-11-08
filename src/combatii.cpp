@@ -124,7 +124,7 @@ bool CombatII::battle_ring_dim_active() const {
     return ring_open_ || ring_sub_open_;
 }
 
-// ---- sub_10AEB + sub_12D65 + sub_4512E: map/FPM -> units -> weather ----
+// ---- sub_454B3: map/FPM -> units -> weather ----
 // 454B3 = sub_10AEB (map) -> [sub_1547F] -> sub_12BEE (units) -> sub_4512E (weather).
 // render_battle_map finishes sub_10AEB + sub_12BEE (towers and units sorted by Y), so the
 // weather layer is drawn on top afterwards.
@@ -132,6 +132,32 @@ void CombatII::battle_fx_world() {
     video_.clear();
     render_battle_map();                                            // sub_10AEB + sub_12BEE
     render_weather_layer();                                         // sub_4512E
+}
+
+// sub_10AEB + sub_12D65: the reduced frame the full-screen dark spells use. sub_12D65 has no
+// sub_122C4/sub_12567 pass, so it draws no normal/attacking/water units and no weather - only
+// the map, its top tiles and the sub_18605 item/field markers.
+void CombatII::battle_fx_world_12d65() {
+    video_.clear();
+    render_battle_map(false);                                       // sub_10AEB + sub_12D65
+}
+
+// sub_276B9 step 2 calls sub_454B3 and then sub_12D65 again, so the top tiles and map effects
+// are redrawn over the full unit/weather frame.
+void CombatII::battle_fx_world_454b3_12d65() {
+    battle_fx_world();                                              // sub_454B3
+    render_battle_map(false, true);                                 // sub_12D65 over it
+}
+
+// One sub_12D65 frame plus the effect transfer/present steps (12E01 -> 454D5 -> 5E9E8).
+void CombatII::battle_fx_present_12d65() {
+    battle_hud_time_ = battle_time_;                                // present_cutscene_frame
+    battle_fx_world_12d65();
+    battle_fx_flush();                                              // sub_12E01
+    battle_fx_overlay();                                            // sub_454D5
+    render_sprites();                                               // 15D0A family (outside 454D5)
+    battle_fx_commit();                                             // sub_5E9E8
+    magic_fx_draws_.clear();
 }
 
 // As in the original sub_454B3: sub_10AEB does not clear the backbuffer, it only overwrites
