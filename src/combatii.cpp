@@ -139,14 +139,14 @@ void CombatII::battle_fx_world() {
 // the map, its top tiles and the sub_18605 item/field markers.
 void CombatII::battle_fx_world_12d65() {
     video_.clear();
-    render_battle_map(false);                                       // sub_10AEB + sub_12D65
+    render_battle_map(true);                                        // sub_10AEB + sub_12D65
 }
 
 // sub_276B9 step 2 calls sub_454B3 and then sub_12D65 again, so the top tiles and map effects
 // are redrawn over the full unit/weather frame.
 void CombatII::battle_fx_world_454b3_12d65() {
     battle_fx_world();                                              // sub_454B3
-    render_battle_map(false, true);                                 // sub_12D65 over it
+    render_battle_map(true, true);                                  // sub_12D65 over it
 }
 
 // One sub_12D65 frame plus the effect transfer/present steps (12E01 -> 454D5 -> 5E9E8).
