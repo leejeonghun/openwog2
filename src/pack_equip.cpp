@@ -307,9 +307,11 @@ void Pack::equip_drag(int sel, int item0, int src, int top) {
             if (k <= 2) {                             // weapon/shield/armor: only from accessory 4 or 5
                 if ((src == 4 || src == 5) && rec[kEquipOff[k]] == 0 && f[k] == 1) {
                     status_equip_apply(rec, item0, k + 1);
-                    // loc_36E8A/loc_36F3F/loc_36FED: the source slot is rewritten with
-                    // cl = item0+1 instead of being cleared, so the accessory keeps its item.
-                    rec[kEquipOff[src - 1]] = (uint8_t)cl;
+                    // loc_36E8A/loc_36F3F/loc_36FED: the source accessory slot is cleared.
+                    // src == 4 stores cl (reloaded from the target slot just tested as 0),
+                    // src == 5 stores an explicit xor'd zero; sub_37DB2 preserves ecx, so
+                    // every path writes 0 rather than item0+1.
+                    rec[kEquipOff[src - 1]] = 0;
                 }
             } else {                                  // accessory slot: only when empty
                 if (rec[kEquipOff[k]] == 0) {
