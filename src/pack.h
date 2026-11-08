@@ -108,7 +108,11 @@ struct PackCursorFrame {
 // site. The dimming rect (250x76 plus mask, unk_59ABD) is reproduced as-is.
 struct DialogPlacement {
     bool npc_upper_half = true;  // NPC screen Y < 0x64 (100)
-    bool npc_right_half = false; // NPC screen centre X >= 0xA0 (160)
+    bool npc_right_half = false; // tail side: NPC screen centre X >= 0xA0 (160), sub_24DA5
+    // The portrait side is a separate test at every sub_24BA4 call site (sub_25F21,
+    // sub_2708B, sub_24FD5, sub_26E32): unk_82938 -- the anchor X, not the sprite box
+    // centre -- compared with a strict > 0xA0.
+    bool portrait_left = false;  // unk_82938 > 0xA0 -> portrait blitted at x = 8
     int frame_x = 0x1E;          // dialogue frame blit X (always 30)
     int frame_y = 0;             // dialogue frame blit Y (105 or 1)
     int dimming_x = 0x24;        // dimming start X (always 36)
@@ -598,11 +602,12 @@ private:
     // PORTRAIT.SYF loading live in talktbl.h/portrait.h; Pack only draws, using
     // its Video/Font and the dialogue sprites loaded above.
     bool compute_dialog_placement(int npc_idx, DialogPlacement& out) const;
-    // sub_24DA5 core: placement from the screen box (nx, ny, nw, nh) and the raw
-    // tile Y. Shared by the NPC and EVE actor wrappers (both reach the same
-    // routine through unk_82938/8293A).
+    // sub_24DA5 core: placement from the screen box (nx, ny, nw, nh), the raw
+    // tile Y and the anchor X (unk_82938, used only for the portrait side test).
+    // Shared by the NPC, player and EVE actor wrappers.
     bool compute_dialog_placement_for_box(int nx, int ny, int nw, int nh,
-                                          int tile_y, DialogPlacement& out, int extra_raw_y = 0) const;
+                                          int tile_y, int anchor_x,
+                                          DialogPlacement& out, int extra_raw_y = 0) const;
     bool compute_dialog_placement_for_eve(int actor, DialogPlacement& out) const;
     bool compute_dialog_placement_for_player(DialogPlacement& out) const;   // sub_26E32(eax=1): player-relative
     // sub_186DC: dims the background behind the dialogue window. The mask is

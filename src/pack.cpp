@@ -1934,7 +1934,8 @@ uint16_t Pack::interact_with_npc(int npc_idx) {
 // Placement formula obtained from loc_263CD and loc_264AF in sub_25F21 plus sub_24DA5.
 // See the DialogPlacement note in pack.h for the underlying addresses.
 bool Pack::compute_dialog_placement_for_box(int nx, int ny, int nw, int nh,
-                                          int tile_y, DialogPlacement& out, int extra_raw_y) const {
+                                          int tile_y, int anchor_x,
+                                          DialogPlacement& out, int extra_raw_y) const {
     // sub_25F21: unk_8293A = (tile_y - cam_tile_y)*16 - cam_fine_y - 16. Below 100 takes the
     // upper branch (loc_263CD), otherwise the lower one (loc_264AF). This is the sub_24DA5
     // core shared by NPCs and EVE actors, both routed through unk_82938/8293A.
@@ -1943,7 +1944,10 @@ bool Pack::compute_dialog_placement_for_box(int nx, int ny, int nw, int nh,
     // Int center_y = ny + nh / 2; // sub_24DA5 ecx, unused here
 
     out.npc_upper_half = raw_ny < 0x64;    // sub_25F21: unk_8293A[...] < 100
-    out.npc_right_half = center_x >= 0xA0;  // sub_24DA5: esi >= 160
+    out.npc_right_half = center_x >= 0xA0;  // sub_24DA5: esi >= 160 (tail side only)
+    // sub_25F21/sub_2708B/sub_24FD5/sub_26E32 test unk_82938 (the anchor X) instead,
+    // with a strict >: "cmp word ptr unk_82938[i], 0A0h / jle -> 0x138 - width".
+    out.portrait_left = anchor_x > 0xA0;
 
     int variant = rand() % 2; // sub_2B81D(0, 2) -> 0 or 1
 
@@ -1983,7 +1987,7 @@ bool Pack::compute_dialog_placement_for_box(int nx, int ny, int nw, int nh,
         }
     }
 
-    out.portrait_x = out.npc_right_half ? 8 : 0x138; // 312 - width
+    out.portrait_x = out.portrait_left ? 8 : 0x138; // 312 - width
     out.text_x = 0x37; // shared by sub_25F21: fixed at 55
     out.text_base_y = out.frame_y + 0x3F; // 63
     return true;
@@ -1992,7 +1996,8 @@ bool Pack::compute_dialog_placement_for_box(int nx, int ny, int nw, int nh,
 bool Pack::compute_dialog_placement(int npc_idx, DialogPlacement& out) const {
     int nx, ny, nw, nh;
     if (!get_npc_screen_box(npc_idx, nx, ny, nw, nh)) return false;
-    return compute_dialog_placement_for_box(nx, ny, nw, nh, npcs_[npc_idx].tile_y, out);
+    // nx is unk_82938 for this NPC (the anchor before the sprite x_offset).
+    return compute_dialog_placement_for_box(nx, ny, nw, nh, npcs_[npc_idx].tile_y, nx, out);
 }
 
 // sub_26E32 (eax = 1): speech bubble anchored on the player. The screen box matches block 2
@@ -2009,17 +2014,22 @@ bool Pack::compute_dialog_placement_for_player(DialogPlacement& out) const {
     const int frame = (player_base_frame_ + dir_offset + (player_anim_frame_ % 4)) % (int)citizen_sprites_.size();
     const PackSprite& sp = citizen_sprites_[frame];
     if (sp.data.empty()) return false;
+    // unk_82938[2] is px itself (the anchor, before the sprite x_offset).
     return compute_dialog_placement_for_box(px + sp.x_offset, py + sp.y_offset, sp.width, sp.height,
-                                            player_tile_y_, out, player_fine_y_);
+                                            player_tile_y_, px, out, player_fine_y_);
 }
 
 bool Pack::compute_dialog_placement_for_eve(int actor, DialogPlacement& out) const {
     int nx, ny, nw, nh;
     if (!get_eve_actor_screen_box(actor, nx, ny, nw, nh)) return false;
+    const EveActorState& st = eve_actors_[actor];
+    // loc_12BE2: unk_82938 = (tile - cam)*24 + fine, with no x_offset and no +5, unlike
+    // the sprite box nx returned above.
+    const int anchor_x = (st.tile_x - cam_tile_x_) * TOWN_TILE_W - cam_fine_x_ + st.fine_x;
     // EVE computes unk_8293A as (tile - cam)*16 + fine with no -16 (loc_12BE2), and its
     // tile_y is already decremented (p2 - 1). The shared helper subtracts the NPC's -16, so
     // adding 1 makes (p2-cam)*16 - 16 equal the original EVE value.
-    return compute_dialog_placement_for_box(nx, ny, nw, nh, eve_actors_[actor].tile_y + 1, out);
+    return compute_dialog_placement_for_box(nx, ny, nw, nh, st.tile_y + 1, anchor_x, out);
 }
 
 // sub_186DC: dim the unk_59ABD mask (250x76) at (x, y). A mask byte of 0xFF is skipped;
@@ -2060,6 +2070,9 @@ void Pack::render_dialog_dimming(int x, int y) {
 // "call sub_2B240", not sub_2B2A1. blit_sprite_rle therefore takes the RLE stream that
 // portrait_load returns.
 void Pack::render_dialog_portrait(const DialogPlacement& dp, int portrait_id) {
+    // sub_24BA4 stores/uses only AL ("mov [esp+8+var_4], al" then "mov al, [var_4]"),
+    // so the high byte of the portrait word never reaches the PORTRAIT.SYF table index.
+    portrait_id &= 0xFF;
     uint16_t w = 0, h = 0;
     std::vector<uint8_t> rle_data;
     std::string path = game_path("portrait.syf");
@@ -2071,12 +2084,12 @@ void Pack::render_dialog_portrait(const DialogPlacement& dp, int portrait_id) {
     }
     if (rle_data.empty()) return;
 
-    int x = dp.npc_right_half ? 8 : (0x138 - (int)w);
+    int x = dp.portrait_left ? 8 : (0x138 - (int)w);
     int y = dp.portrait_y - (int)h;
     if (dbg_env("G2_PACK_SHOT"))
         fprintf(stderr, "PACK: portrait id=%d blit wh=(%u,%u) at=(%d,%d) bytes=%zu right=%d py=%d\n",
                 portrait_id, (unsigned)w, (unsigned)h, x, y, rle_data.size(),
-                (int)dp.npc_right_half, dp.portrait_y);
+                (int)dp.portrait_left, dp.portrait_y);
 
     blit_sprite_rle(x, y, rle_data.data());
 }
@@ -2084,15 +2097,17 @@ void Pack::render_dialog_portrait(const DialogPlacement& dp, int portrait_id) {
 // Draws the dialogue frame (off_58CF4) and the speech tail (off_5E4F9, fixed
 // SPEECH_TAIL_STRIDE entries). Both are sub_2B240 RLE streams, so blit_sprite_rle is reused.
 void Pack::render_dialog_frame_and_tail(const DialogPlacement& dp) {
-    if (!dialog_frame_data_.empty()) {
-        blit_sprite_rle(dp.frame_x, dp.frame_y, dialog_frame_data_.data());
-    }
+    // sub_2708B draws the tail (sub_24DA5) first, then sub_186DC dimming, then the frame
+    // (sub_2B240 off_58CF4), so the tail sits underneath the frame at the shared edge.
     if (!speech_tail_data_.empty() &&
         dp.speech_tail_index >= 0 && dp.speech_tail_index < SPEECH_TAIL_COUNT) {
         const uint8_t* tail = speech_tail_data_.data() + (size_t)SPEECH_TAIL_STRIDE * dp.speech_tail_index;
         // sub_24DA5 blits the tail straight at the NPC edge coordinate (sub_2B240).
         // tail_x/tail_y come from compute_dialog_placement:
         blit_sprite_rle(dp.tail_x, dp.tail_y, tail);
+    }
+    if (!dialog_frame_data_.empty()) {
+        blit_sprite_rle(dp.frame_x, dp.frame_y, dialog_frame_data_.data());
     }
 }
 
