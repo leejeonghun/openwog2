@@ -9934,7 +9934,11 @@ int CombatII::battle_weapon_f1474(int unit_index, int idx, int dx) {
 // The original screen sweep covers 12x12 tiles from dword_BA83C/BA838 with 1A1F8
 // (11DB2 + 1201D + dedup); the port sweeps the same 12x12 from cam_tile_. The F14D8 == 1
 // automatic and 4A483 cursor branches are both handled by automatic collection here.
-int CombatII::battle_weapon_collect_screen(int unit_index, int cap) {
+// The X start is caller-specific: sub_341C7 (edi 4) increments esi before the 1A1F8 call,
+// so its columns are camX+1..camX+12 (sub_341C7+0x6F/0x78), while sub_31283 increments after
+// the call and starts at camX. Y always starts at camY (the outer loop's first check is before
+// the first loc_3420F row). x_shift reproduces that difference without changing other callers.
+int CombatII::battle_weapon_collect_screen(int unit_index, int cap, int x_shift) {
     battle_target_list_.clear();
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return 0;
     const auto& A = units_[(size_t)unit_index];
@@ -9942,7 +9946,7 @@ int CombatII::battle_weapon_collect_screen(int unit_index, int cap) {
     const int ax_eff = battle_effective_army(A);
     for (int dy = 0; dy < 12; ++dy) {
         for (int dx = 0; dx < 12; ++dx) {
-            const int tx = cam_tile_x_ + dx, ty = cam_tile_y_ + dy;
+            const int tx = cam_tile_x_ + x_shift + dx, ty = cam_tile_y_ + dy;
             const int oi = battle_unit_index_at(tx, ty);
             if (oi < 0 || oi == unit_index) continue;
             if ((size_t)oi >= units_.size()) continue;
@@ -10948,7 +10952,8 @@ int CombatII::battle_weapon_32bcb(int unit_index) {
 // presentation + 2CAF7(2,20000).
 int CombatII::battle_weapon_341c7(int unit_index) {
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return -1;
-    const int n = battle_weapon_collect_screen(unit_index, 0);
+    // sub_341C7's inner loop increments esi before sub_1A1F8, so it tests camX+1..camX+12.
+    const int n = battle_weapon_collect_screen(unit_index, 0, 1);
     if (n <= 0) {
         if (battle_trace_) fprintf(stderr, "COMBAT: 341c7 unit=%d empty -> -1\n", units_[(size_t)unit_index].id);
         return -1;

@@ -2331,7 +2331,7 @@ private:
     // battle_weapon_302e6 plays the SSP (4F460) according to the sub_302E6 dispatch table.
     // Screen sweep, diamond, front and nearest collection approximate 1A1F8/1A452/1AC08/49ABC;
     // the 4A483 cursor selection is approximated automatically.
-    int battle_weapon_collect_screen(int unit_index, int cap); // 1A1F8 screen 12x12 sweep (F0648 approximation)
+    int battle_weapon_collect_screen(int unit_index, int cap, int x_shift = 0); // 1A1F8 screen 12x12 sweep (F0648 approximation)
     int battle_weapon_collect_diamond(int unit_index, int radius); // 1AC08/1AC59 diamond (manhattan)
     // F1474 idx 13..24 (2F80B..30049): Range-module collectors (1A452/1AC08/1A1F8), the 2E896
     // knockback, 2ED9A centre selection and the 2EF4A body.
