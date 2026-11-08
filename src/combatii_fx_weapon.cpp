@@ -51,13 +51,14 @@
 void CombatII::battle_highlight_add_depth(int caster_index) {
     if (caster_index < 0 || (size_t)caster_index >= units_.size()) return;
     const int caster_y = (int)units_[(size_t)caster_index].y;
-    for (int i = 0; i < (int)units_.size(); ++i) {
-        if (!units_[(size_t)i].active) continue;
+    // sub_2CBA1 walks dword_F0648 (the collected target list), not every unit on the map.
+    for (int i : battle_target_list_) {
+        if (i < 0 || (size_t)i >= units_.size() || !units_[(size_t)i].active) continue;
         if ((int)units_[(size_t)i].y <= caster_y) battle_highlight_add(i);
     }
     battle_highlight_add(caster_index);
-    for (int i = 0; i < (int)units_.size(); ++i) {
-        if (!units_[(size_t)i].active) continue;
+    for (int i : battle_target_list_) {
+        if (i < 0 || (size_t)i >= units_.size() || !units_[(size_t)i].active) continue;
         if ((int)units_[(size_t)i].y > caster_y) battle_highlight_add(i);
     }
     if (battle_trace_)
@@ -638,9 +639,9 @@ void CombatII::battle_fx_341c7_anim(int unit_index) {
     //       call 5F9AE(0, 100h, buffer): the whole DAC becomes colour 10h for one flash frame.
     //   (2) 5ECC7(0) (5EDDE back to fill mode), dword_BA838 = 0, 44D75 (clear the list), then
     //       45559 = 454B3 + 5E9E8 redraws and presents the map with the solid palette.
-    //   (3) 49A3E(0, 100h, buffer, 0Ah) copies the 300h bytes at ecx (= unk_12824C) into
-    //       unk_FABE0, builds (copy - solid) with sub_5FC21, then walks si = 0..64h by 0Ah
-    //       and writes DAC[i] = copy[i]*pct/100 + solid through 5FD1C: 11 steps from the
+    //   (3) 49A3E(0, 100h, solid, unk_12824C, 0Ah) copies unk_12824C (ecx) into unk_FABE0,
+    //       builds (copy - solid) with sub_5FC21, then walks si = 0..64h by 0Ah and writes
+    //       DAC[i] = solid[i] + (master[i]-solid[i])*pct/100 through 5FD1C: 11 steps from the
     //       solid colour back to the master palette.
     //       5FD1C waits for vertical retrace (5E943) each step, so the port also ticks per
     //       step (same rule as the 276B9/2799A fades). The reference palette is the
@@ -649,23 +650,18 @@ void CombatII::battle_fx_341c7_anim(int unit_index) {
     battle_highlight_clear();                                         // 44D75
     if (!dlg_shade_pal_set_) snapshot_dialog_shade_palette();         // copy of unk_12824C
     const uint8_t (*master)[3] = dlg_shade_pal_;
-    const uint8_t sr = master[0x10][0], sg = master[0x10][1], sb = master[0x10][2];
-    for (int i = 0; i < 256; ++i) palette_set_entry((uint8_t)i, sr, sg, sb);   // 5F9AE (solid 10h)
+    uint8_t solid[256 * 3];
+    for (int i = 0; i < 256; ++i) {                                   // unk_12827C = colour 10h
+        solid[i * 3 + 0] = master[0x10][0];
+        solid[i * 3 + 1] = master[0x10][1];
+        solid[i * 3 + 2] = master[0x10][2];
+    }
+    pal_load_range(0, 0x100, solid);                                  // 5F9AE (solid 10h)
     video_.present();
     wait_game_tick();                                                 // equivalent of 5E943 (retrace) in 5F9AE
     battle_fx_world();                                                // 45559 = 454B3
     battle_fx_commit();                                               //          + 5E9E8
-    for (int p = 0; p <= 100; p += 0x0A) {                            // 49A3E: si += [esp+18h](0Ah)
-        for (int i = 0; i < 256; ++i) {                               // 5FD1C: A*pct/100 + B (A = master, B = solid)
-            palette_set_entry((uint8_t)i,
-                              (uint8_t)(master[i][0] * p / 100 + sr),
-                              (uint8_t)(master[i][1] * p / 100 + sg),
-                              (uint8_t)(master[i][2] * p / 100 + sb));
-        }
-        video_.present();
-        if (should_exit_) break;
-        wait_game_tick();                                             // replaces 5E943
-    }
+    pal_crossfade(0, 0x100, solid, &master[0][0], 0x0A);              // 49A3E: 11 steps back to master
     A.facing = saved_facing;                                          // restore [63h] after the fade
     game_timer_set(6);                                                // tail 1033B(6)
     battle_nsp_release();                                             // sub_1FFCD

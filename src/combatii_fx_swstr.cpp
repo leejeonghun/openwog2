@@ -116,9 +116,11 @@ int CombatII::battle_fx_2d7d2(int unit_index, int k) {
             grey[i * 3 + 2] = 0x3F;
         }
         pal_load_range(0, 0x100, grey);                              // sub_5F9AE(grey buffer)
+        video_.present();                                            // DAC write is visible on the current frame
         game_timer_set(0x23);                                        // sub_1033B(al)
         wait_game_tick();                                            // sub_499E4
         pal_load_range(0, 0x100, &battle_palette_[0][0]);            // sub_5F9AE(unk_12824C)
+        video_.present();
     }
 
     // (4) var_4 = facing*2, var_8 = k*8+0Ch, [64h]=9, 1033B(8)

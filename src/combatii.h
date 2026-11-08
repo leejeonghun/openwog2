@@ -1068,8 +1068,14 @@ private:
     void blit_sprite_480(int x, int y, const uint8_t* rle_data);
     bool load_terrain_overlays(const std::string& map_filename); // sub_10420 (MAP_EFFC.SYB -> unk_789AC)
     void load_effect_sprites();                                  // sub_11BB8 + sub_44AB6 effect frames
-    void play_weapon_class5_projectile(const CombatUnitPlacement& attacker,
+    void play_weapon_class5_projectile(CombatUnitPlacement& attacker,
                                        const CombatUnitPlacement& target, bool reaches_target); // sub_46E27
+    // sub_46E27 with dword_FA8B0+2 / word_FA8B4 as the target tile: sub_11DB2 picks the
+    // occupant for sub_135EB, otherwise the sub_10971/10988 tile anchor is used. Classes
+    // 0x15..0x18 reset the attacker pose (sub_12124) before the flight.
+    void play_weapon_class5_projectile_at(CombatUnitPlacement& attacker,
+                                          int tx, int ty, bool reaches_target,
+                                          int stack_var8);
     // ---- loc_1E8E5 per-class hit effects (BATTLE.SYB 480-stride frames) ----
     //   bank 0 = unk_FA070 (first 0x4C), bank 1 = unk_FA400 (last 0x39, battle_effects_[0x4C+i]).
     void fx_blit_battle_spr(int bank, int idx, int x, int y);        // sub_5F3FD
@@ -2257,6 +2263,11 @@ private:
                                bool expand_only = false, bool shrink_only = false);                            // 5F570/5F611 draw request
     void pal_snapshot_range(int start, int end, uint8_t* out);         // sub_5F945 (DAC -> buffer)
     void pal_load_range(int start, int end, const uint8_t* src);       // sub_5F9E9 (buffer -> DAC)
+    void pal_crossfade(int start, int end, const uint8_t* from, const uint8_t* to, int step_pct); // sub_49A3E
+    void battle_fx_1e565(int mode);                                    // sub_1E565 red screen flash
+    void battle_fx_white_flash_up(int up_step);                        // 49A3E(master -> white)
+    void battle_fx_white_flash_down(int down_step);                    // 49A3E(white -> master) + 5F9AE
+    void battle_fx_white_flash(int up_step, int down_step);            // sub_284A3 (45559 + both halves)
     void pal_scale_range(int start, int end, const uint8_t* src, int mul_pct); // sub_5FA2C
     void pal_sub_range(int start, int end, const uint8_t* src, uint8_t* delta); // sub_5FC21
     void pal_ramp_set_width(int color_index);                          // sub_5623E (word_11233C)

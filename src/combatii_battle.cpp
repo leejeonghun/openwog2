@@ -297,19 +297,47 @@ void CombatII::battle_fx_47fdc(int unit_index) {
     }
 }
 
-// sub_46E27: interpolates a small BATTLE.SYB projectile from attacker towards target.
-// Black Assassin (class 0x35) uses var_8=4 and var_20=facing, so frame = 4*4 + facing = 16..19.
-void CombatII::play_weapon_class5_projectile(const CombatUnitPlacement& attacker,
-                                              const CombatUnitPlacement& target,
-                                              bool reaches_target) {
+// x86emu probe_46e27_var8.py (run_2ef4a_call_capture): at the 42854 call the
+// uninitialized word at [esp+28Ch-8] is 0. The original's cmp var_8,8 therefore
+// takes loc_47059 and selects group 9 for 0x91/0x94..0x98. The event path uses the
+// same zeroed caller slot.
+constexpr int kSub46E27StackVar8 = 0;
+
+// sub_46E27: interpolates a small BATTLE.SYB projectile from attacker towards the tile in
+// dword_FA8B0+2 / word_FA8B4. The 12-byte frame table at unk_FA070 is four direction
+// records (BATTLE.SYB frames 0..3); var_8 (the class group) only selects the pose reset,
+// the direction override, and the 1/6-tick pacing.
+void CombatII::play_weapon_class5_projectile_at(CombatUnitPlacement& attacker,
+                                                int tx, int ty, bool reaches_target,
+                                                int stack_var8) {
     const bool linked = attacker.code_b >= 1 && attacker.code_b <= 4 && attacker.linked_class >= 0;
     const int effect_class = linked ? attacker.linked_class : attacker.combat_class;
-    if (effect_class < 0x35 || effect_class > 0x38) return; // sub_46E27 var_8=4 (Assassin family)
-    const int direction = attacker.facing & 3; // [unit+63h] -> var_20 for class 0x35..0x38
-    const size_t frame_index = 16u + (size_t)direction; // var_8*4 + var_20; 12-byte records
-    if (frame_index >= battle_effects_.size()) return;
-    const TerrainOverlayFrame& projectile = battle_effects_[frame_index];
-    if (projectile.rle.empty()) return;
+    // sub_46F15..46FE5: frame_group (var_8) selects pose/timer and, for 8/9, the
+    // direction override. The 12-byte frame table at unk_FA070 is only the four
+    // direction records (BATTLE.SYB frames 0..3) for every class; var_C's high word
+    // is the low word of edx (0/1) and therefore never offsets the table base.
+    int frame_group = -1;
+    bool override_direction = false;
+    if (effect_class >= 0x15 && effect_class <= 0x18) {
+        frame_group = effect_class - 0x15;
+    } else if (effect_class >= 0x35 && effect_class <= 0x38) {
+        frame_group = 4;
+    } else if (effect_class == 0x8C || effect_class == 0x8D ||
+               effect_class == 0x92 || effect_class == 0x93) {
+        frame_group = 8;
+        override_direction = true;
+    } else if (effect_class == 0x90) {
+        frame_group = 9;
+    } else if (effect_class == 0x91 ||
+               (effect_class >= 0x94 && effect_class <= 0x98)) {
+        // 0x91/0x94..0x98 enter at loc_46FE5 without a group store; the original
+        // tests the inherited var_8 slot against 8. The x86emu probe pins the
+        // sub_2EF4A caller slot to 0, so loc_47059 selects group 9.
+        frame_group = (stack_var8 == 8) ? 8 : 9;
+        override_direction = true;
+    } else {
+        return;
+    }
 
     // sub_46E27 starts at sub_10971(A.x)+0x0C and uses sub_10988(A.y)-2.
     const int source_x = (attacker.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ +
@@ -317,7 +345,15 @@ void CombatII::play_weapon_class5_projectile(const CombatUnitPlacement& attacker
     const int source_y = (attacker.y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ +
                          TILE_ANCHOR_Y - 2;
     int target_x = 0, target_y = 0;
-    unit_screen_center(target, target_x, target_y); // sub_135EB: centre of the target's pose 0 frame
+    const int target_oi = battle_unit_index_at(tx, ty); // sub_11DB2
+    if (target_oi >= 0 && (size_t)target_oi < units_.size()) {
+        unit_screen_center(units_[(size_t)target_oi], target_x, target_y); // sub_135EB: target centre
+    } else {
+        target_x = (tx - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ +
+                   TILE_ANCHOR_X + CENTER_ADD_X;                         // 10971 + 0Ch
+        target_y = (ty - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ +
+                   TILE_ANCHOR_Y - 2;                                    // 10988 - 2
+    }
 
     // loc_46EC5 bounds test: [x-16, x-16+0x120) / [y-4, y-4+0xC0).
     if ((uint16_t)(target_x - 0x10) >= 0x120 ||
@@ -328,8 +364,25 @@ void CombatII::play_weapon_class5_projectile(const CombatUnitPlacement& attacker
     target_y = (int16_t)target_y;
     if (source_x16 == target_x && source_y16 == target_y) return;
 
+    // loc_46FE5..4704E: classes 0x8C/0x8D/0x91..0x98 replace the facing byte with
+    // the larger absolute tile delta (equal |dx|/|dy| falls through to the y axis;
+    // an equal coordinate selects north). 0x90 keeps the facing byte.
+    int direction = attacker.facing & 3;
+    if (override_direction) {
+        const int dx = tx - attacker.x;
+        const int dy = ty - attacker.y;
+        if (std::abs(dx) > std::abs(dy))
+            direction = (attacker.x < tx) ? 3 : 1;
+        else
+            direction = (attacker.y < ty) ? 0 : 2;
+    }
+    const size_t frame_index = (size_t)direction; // unk_FA070 + direction*12
+    if (frame_index >= battle_effects_.size()) return;
+    const TerrainOverlayFrame& projectile = battle_effects_[frame_index];
+    if (projectile.rle.empty()) return;
+
     // loc_47085-47157: direction bit 0 selects the matching tile axis; var_18 = 4 * |delta|.
-    const int tile_delta = (direction & 1) ? target.x - attacker.x : target.y - attacker.y;
+    const int tile_delta = (direction & 1) ? tx - attacker.x : ty - attacker.y;
     const int steps = std::abs(tile_delta) * 4;
     if (steps <= 0 && reaches_target) return;
     // var_1C/var_4 hold signed 16-bit screen coordinates scaled by 100. The ASM's
@@ -343,7 +396,8 @@ void CombatII::play_weapon_class5_projectile(const CombatUnitPlacement& attacker
 
     const bool old_weather_tick = weather_tick_enabled_;
     weather_tick_enabled_ = false; // sub_103A8/sub_103A0: freeze the weather phase during flight
-    game_timer_set(1);              // loc_47170/loc_47187: Assassin (var_8=4) advances 1 tick per frame
+    if (frame_group < 4) reset_unit_pose(attacker); // 4715E: sub_12124 for classes 15h..18h
+    game_timer_set(frame_group == 8 ? 6 : 1);       // 47170..47187: var_8==8 -> 6, else 1
     auto blit_battle_projectile = [&](int x, int y) {
         uint8_t* dest = video_.get_backbuffer();
         if (!dest || projectile.rle.size() < 2) return;
@@ -396,6 +450,15 @@ void CombatII::play_weapon_class5_projectile(const CombatUnitPlacement& attacker
     }
     weather_tick_enabled_ = old_weather_tick;
     // sub_1E61D loc_1E989 immediately resets the outer attack timer to 0x10 ticks.
+}
+
+// Compatibility wrapper for callers that already hold the target unit. sub_46E27 itself
+// works from the selected tile (FA8B0/FA8B4), so the unit form only supplies that tile.
+void CombatII::play_weapon_class5_projectile(CombatUnitPlacement& attacker,
+                                              const CombatUnitPlacement& target,
+                                              bool reaches_target) {
+    play_weapon_class5_projectile_at(attacker, target.x, target.y, reaches_target,
+                                     kSub46E27StackVar8);
 }
 
 // sub_499BD(n): random value in 0..n-1. The original uses the C runtime rand, whose sequence
@@ -1319,8 +1382,10 @@ void CombatII::play_attack_sequence(const VmEvent& ev) {
             }
         } else if (p == 2) {                // moment of impact
             if (snd) sfx(snd);
-            // loc_1E8E5 (ASM 21251-21327): wc 5/0Fh/11h/12h all call sub_46E27
-            // (only classes 0x35..0x38 have real frames; the others return immediately).
+            // loc_1E8E5 (ASM 21251-21327): wc 5/0Fh/11h/12h all call sub_46E27.
+            // Classes 0x15..0x18, 0x35..0x38, 0x8C/0x8D and 0x90..0x98 are handled;
+            // they share the four direction frames and differ only in pose/timer and
+            // the direction override (see play_weapon_class5_projectile_at).
             // The remaining branches (class 0A1 -> 47712, wc 0Bh -> 47372, 0Ch -> 47A96,
             // 10h -> 47E79, 13h -> 47F3C, class 5Ch -> 47FDC, 7Fh/80h -> 4798A(1),
             // wc 0Eh -> 4798A(0)) draw BATTLE.SYB frames in the else-if chain below.
@@ -9637,7 +9702,7 @@ int CombatII::battle_weapon_f1474(int unit_index, int idx, int dx) {
         const int fin = battle_weapon_2caca(unit_index, tmp);
         if (battle_trace_) fprintf(stderr, "COMBAT: f1474[%d]=2EB61 unit=%d dx=%d -> target=%d base=%d tmp=%d final=%d (2DA5E)\n",
                                     idx, u.id, dx, units_[(size_t)ti].id, base, tmp, fin);
-        camera_center_on(A.x, A.y);
+        battle_highlight_add_depth(unit_index);                 // sub_2CBA1 (2EB61 loc_2ECB5)
         A.anim_frame = 5;
         // 2EB61 loc_2ECB5: 49ADF/2CBA1 -> 44D6E(1) -> sub_2DA5E(slight/spearfly/fistlv3) ->
         //   44D6E(0) -> 44D75 -> 1D770/2CACA damage.
@@ -9671,11 +9736,8 @@ int CombatII::battle_weapon_f1474(int unit_index, int idx, int dx) {
         battle_target_list_.clear();
         return 1;
     }
-    if (idx == 5 || idx == 10) { // sub_2F5D7/2F706 -> sub_2E25B (multi-target 2CAF7, add 5000/3000)
+    if (idx == 5 || idx == 10) { // sub_2F5D7/2F706 -> sub_2E25B (hon.nsp slash + 2CAF7)
         // Entry state: idx5 ecx=7449C>>16 edx=0, idx10 ecx=744A4>>16 edx=1, ebx=dx.
-        // The original uses 2E0F0 automatic (front ray R = 2CBFB(base+5/6)) when F14D8 == 1 and
-        // the 4A483 manual cursor otherwise. The port matches it with the automatic ray
-        // (far to near, every tile, E8 gate skipped).
         // R = base+5 (idx5) / base+6 (idx10) with base = 184A4(5Bh, 0x38).
         if (dx < 1 || dx > 3) {
             if (battle_trace_) fprintf(stderr, "COMBAT: warning: f1474[%d]=2E25B unit=%d dx=%d invalid -> -1\n",
@@ -9686,18 +9748,152 @@ int CombatII::battle_weapon_f1474(int unit_index, int idx, int dx) {
         const int base_r = (int8_t)battle_lookup_184a4(u.combat_type_5b, 0x38); // sub_2CBFB
         const int radius = base_r + (idx == 5 ? 5 : 6);
         const int n = battle_weapon_collect_2e0f0(unit_index, radius);
-        // Put the player's manual target (4A483) at the head of F0648 (2CAF7 handles
-        // the whole list).
         const bool picked = battle_weapon_apply_pick(unit_index);
         if (n <= 0 && !picked) {
             if (battle_trace_) fprintf(stderr, "COMBAT: f1474[%d]=2E25B unit=%d dx=%d R=%d empty -> -1\n",
                                         idx, u.id, dx, radius);
             return -1;
         }
-        const int r = battle_weapon_2caf7_loop(unit_index, dx, add);
+        const std::vector<int> targets = battle_target_list_;
+
+        // loc_2E40F: 44D6E(1) -> 2CBA1 -> hon.nsp + death/bomb -> 200DE(unit,3).
+        battle_dim_row0_ = true;                                  // sub_44D6E(1)
+        battle_highlight_add_depth(unit_index);                   // sub_2CBA1 (41768)
+        const bool hon_ok = battle_nsp_load("hon.nsp");           // sub_1FEA4
+        battle_ssp_play("death.ssp");                             // sub_4F460
+        battle_ssp_play("bomb.ssp");                              // sub_4F460
+        {
+            int ccx = (int)(int8_t)u.x, ccy = (int)(int8_t)u.y;
+            switch (u.facing & 3) {
+                case 0: ccy += 3; break;                          // 200DE facing 0: +y
+                case 1: ccx -= 3; break;                          // 200DE facing 1: -x
+                case 2: ccy -= 3; break;                          // 200DE facing 2: -y
+                default: ccx += 3; break;                         // 200DE facing 3: +x
+            }
+            camera_center_on(ccx, ccy);                           // sub_200DE(unit,3)
+        }
+
+        // loc_2E49A: pose 6, 1033B(1Eh), then 3 present/wait frames (6 -> 7 -> 8 -> 9).
+        u.anim_frame = 6;
+        game_timer_set(0x1E);
+        for (int i = 0; i < 3 && !should_exit_; ++i) {
+            battle_fx_present();                                  // 454B3 + 5E9E8
+            ++u.anim_frame;
+            wait_game_tick();                                     // sub_499E4
+        }
+        battle_highlight_clear();                                 // sub_44D75
+        for (int ti : targets) battle_highlight_add(ti);          // sub_44D89 per target
+
+        // loc_2E54D..loc_2E69D: 12-frame caster NC2 trail (poses 5..9). Each step moves
+        // var_20/var_18 (the caster) by (target - caster)/5, so index 11 is the first
+        // afterimage and index 0 is the final position near the target. The draw loop
+        // then stamps pose 9 silhouettes plus the pose 9/pose 6 main frame at the target.
+        const NC2Frame* poses[5] = {};
+        for (int i = 0; i < 5; ++i)
+            poses[i] = nc2_frame_for(u.sprite_type, u.facing & 3, 5 + i);
+        const int ax = ((int)u.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X + 0x0C;
+        const int ay = ((int)u.y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y - 2;
+        int ex = ax, ey = ay;
+        if (!targets.empty()) {
+            const auto& T = units_[(size_t)targets[0]];           // far end of the 2E0F0 ray
+            ex = ((int)T.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X + 0x0C;
+            ey = ((int)T.y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y - 2;
+        }
+        int trail_x[12], trail_y[12];
+        int tx = ax, ty = ay;                                     // var_20/var_18 start at the caster
+        for (int i = 11; i >= 0; --i) {
+            tx += (ex - tx) / 5;                                  // var_20 += (var_1C-var_20)/5
+            ty += (ey - ty) / 5;                                  // var_18 += (var_8-var_18)/5
+            trail_x[i] = tx; trail_y[i] = ty;
+        }
+        // sub_5F517 reads the 5-dword table copied from loc_2CA23+2. The dword load is
+        // [var_4C-2 + 4*(si/3)], so `sar 10h` yields the first word of entry si/3:
+        // 3D3Dh, 3C3Ch, 3A3Ah, 3939h (the 5th entry 3838h is past si=11).
+        static const uint8_t kHonTrailColor[4] = {0x3D, 0x3C, 0x3A, 0x39};
+        sfx(0x32);                                                // sub_4F4CD(32h)
+        for (int f = 11; f >= 0 && !should_exit_; --f) {
+            game_timer_set((0x0F - f) >> 1);                      // sub_1033B((0Fh-f)>>1)
+            battle_fx_world();                                    // sub_454B3
+            for (int s = 0; s < f; ++s) {
+                if (!poses[4]) break;
+                blit_nc2_frame_solid(trail_x[s] + poses[4]->x_off,
+                                     trail_y[s] + poses[4]->y_off,
+                                     *poses[4], kHonTrailColor[s / 3]); // sub_5F517
+            }
+            const NC2Frame* mainf = (f == 11) ? poses[4] : poses[1]; // var_38[4] then var_38[1]
+            if (mainf)
+                blit_nc2_frame(ex + mainf->x_off, ey + mainf->y_off, *mainf); // sub_5F3FD
+            battle_fx_overlay();                                  // sub_454D5
+            if (f == 11) {
+                // sub_2D48A(14h): full-palette 3Fh flash, restored 14h ticks later.
+                uint8_t flash[0x100 * 3];
+                for (int p = 0; p < 0x100 * 3; ++p) flash[p] = 0x3F;
+                pal_load_range(0, 0x100, flash);
+                video_.present();
+                game_timer_set(0x14);
+                wait_game_tick();
+                pal_load_range(0, 0x100, &battle_palette_[0][0]);
+                video_.present();
+                game_timer_set(3);                                // 2D48A -> 1033B(3)
+            }
+            battle_fx_commit();                                   // sub_5E9E8 after 2D48A
+            wait_game_tick();                                     // sub_499E4
+        }
+
+        // loc_2E6B5: after the last trail frame the caster lands on the tile of its final
+        // interpolated position: sub_109A3(var_20), sub_109CE(var_8+4), then sub_11E04
+        // occupies the new tile (the port's units_ position is the occupancy).
+        // trail_x[0]/trail_y[0] are that final var_20/var_18 (the 12th step).
+        // 109A3 subtracts only the 4px base (the trail's +0C centre offset stays inside
+        // the idiv), while 109CE(var_8+4) cancels its own -4 before the sar 4.
+        if (!targets.empty() && (size_t)unit_index < units_.size()) {
+            auto& M = units_[(size_t)unit_index];
+            const int nx = (trail_x[0] - cam_fine_x_ - TILE_ANCHOR_X) / TOWN_TILE_W + cam_tile_x_;
+            const int ny = ((trail_y[0] - cam_fine_y_) >> 4) + cam_tile_y_;
+            M.x = nx;
+            M.y = ny;
+            M.anim_frame = 6;                                     // [ebp+64h] = 6
+        }
+
+        // loc_2E6FD/loc_2E726: 44D75 -> 2CBA1 -> 1214F targets, then 1033B(9), sfx(33)
+        // and the 5-frame hon.nsp impact loop (1FFFE stamped at the trail points).
+        battle_highlight_clear();                                 // sub_44D75
+        battle_highlight_add_depth(unit_index);                   // sub_2CBA1 (41979)
+        for (int ti : targets) {
+            if (ti < 0 || (size_t)ti >= units_.size()) continue;
+            auto& T = units_[(size_t)ti];
+            T.anim_frame = (T.sprite_type < 0x12C) ? (uint8_t)0x0A : (uint8_t)0x00; // sub_1214F
+        }
+        game_timer_set(9);                                        // sub_1033B(9)
+        sfx(0x33);                                                // sub_4F4CD(33h)
+        if (hon_ok) {
+            const int stamps = std::min<int>(12, (int)targets.size());
+            // 2E74A reads [var_8+2]>>16, which aliases the low word of var_4: the same
+            // 0..4 frame counter loaded into the magic frame index, so f is exact.
+            for (int f = 0; f < 5 && !should_exit_; ++f) {
+                battle_fx_world();                                // sub_454B3
+                for (int s = 0; s < stamps; ++s) {
+                    if (f >= (int)magic_frames_.size()) break;
+                    const MagicFxFrame& fr = magic_frames_[(size_t)f];
+                    battle_fx_blit(f, trail_x[s] + fr.xo, trail_y[s] + fr.yo); // sub_1FFFE
+                }
+                battle_fx_overlay();                              // sub_454D5
+                battle_fx_commit();                               // sub_5E9E8
+                wait_game_tick();                                 // sub_499E4
+            }
+        }
+        battle_highlight_clear();                                 // sub_44D75
+        battle_dim_row0_ = false;                                 // sub_44D6E(0)
+        if (should_exit_) { battle_nsp_release(); return 1; }
+        const int r = battle_weapon_2caf7_loop(unit_index, dx, add); // sub_2CAF7
+        if ((size_t)unit_index < units_.size()) reset_unit_pose(units_[(size_t)unit_index]); // 12124
+        if (!should_exit_) battle_fx_present();                   // 454B3 + 5E9E8 (before 1FFCD)
+        battle_nsp_release();                                     // sub_1FFCD
         if (battle_trace_) fprintf(stderr, "COMBAT: f1474[%d]=2E25B unit=%d dx=%d R=%d -> 2CAF7(%d,%d) -> %d\n",
                                     idx, u.id, dx, radius, dx, add, r);
-        return r;
+        if (!should_exit_ && (size_t)unit_index < units_.size() && units_[(size_t)unit_index].active)
+            battle_after_move(unit_index);                        // sub_5401B
+        return 1;
     }
     if (idx == 6) { // sub_2F5EF (r5 diamond + 2CBA1 + 2D7D2 + 2CAF7 add 4000)
         // The original fills F0648 with a 1AC08 r5 diamond through 1A1F8, goes through
@@ -9716,7 +9912,7 @@ int CombatII::battle_weapon_f1474(int unit_index, int idx, int dx) {
             fprintf(stderr, "COMBAT: f1474[6]=2F5EF unit=%d dx=%d empty list (still returns 1)\n",
                     u.id, dx);
         // 2CBA1 -> 44D6E(1) -> 2D7D2(swstr.nsp, dl=dx) -> 44D6E(0) -> 44D75 -> 2CAF7.
-        camera_center_on(u.x, u.y);
+        battle_highlight_add_depth(unit_index);                  // sub_2CBA1
         battle_dim_row0_ = true;                                 // sub_44D6E(1)
         battle_fx_2d7d2(unit_index, dx);                         // sub_2D7D2
         battle_dim_row0_ = false;                                // sub_44D6E(0)
@@ -10253,34 +10449,130 @@ bool CombatII::battle_weapon_2ed9a_pick(int unit_index, int radius, int& out_x, 
 //   Every listed unit takes the same damage. Always 1 (or -1 when there is no centre).
 int CombatII::battle_weapon_2ef4a(int unit_index, int di, int type, int add) {
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return -1;
-    const int saved_pose = units_[(size_t)unit_index].anim_frame;
+    auto& A = units_[(size_t)unit_index];
+    const int saved_pose = A.anim_frame;
     const int radius = battle_weapon_2cbfb(unit_index,
-        battle_ai_wc5_aef3(units_[(size_t)unit_index].combat_class)); // 2CBFB(unit, 1AEF3)
+        battle_ai_wc5_aef3(A.combat_class)); // 2CBFB(unit, 1AEF3)
     int cx = 0, cy = 0;
-    if (!battle_weapon_2ed9a_pick(unit_index, radius, cx, cy)) {
-        if (battle_trace_) fprintf(stderr, "COMBAT: 2ef4a unit=%d no center (radius=%d) -> -1\n",
-                                    units_[(size_t)unit_index].id, radius);
-        return -1;
+    if (battle_f14d8_ == 1 || battle_pick_tx_ < 0) {
+        if (!battle_weapon_2ed9a_pick(unit_index, radius, cx, cy)) {
+            if (battle_trace_) fprintf(stderr, "COMBAT: 2ef4a unit=%d no center (radius=%d) -> -1\n",
+                                        A.id, radius);
+            return -1;
+        }
+    } else {
+        cx = battle_pick_tx_; cy = battle_pick_ty_;          // 1F19C player centre
     }
+    battle_atk_tx_ = cx;                                     // sub_2ED9A/1F19C -> dword_FA8B0+2
+    battle_atk_ty_ = cy;                                     // word_FA8B4
     const int r = (type == 3 && di != 0) ? 1 : 0;
     const int n = battle_weapon_collect_dia_at(unit_index, cx, cy, r);
     const std::vector<int> targets = battle_target_list_;
-    auto& A = units_[(size_t)unit_index];
-    A.anim_frame = 5; // presentation stub
-    if (n > 0) {
-        const int t0 = targets[0];
-        int tmp;
-        if (di == 0) {
+    if (battle_trace_) fprintf(stderr, "COMBAT: 2ef4a unit=%d di=%d type=%d center=(%d,%d) r=%d targets=%d\n",
+                                A.id, di, type, cx, cy, r, n);
+
+    // ASM 2EF4A loc_2EFC0: automatic path only, 1F179 == 0 (class 15h..18h) runs
+    // 1033B(20h), pose 5, 45559, 499E4, pose 6, 45559 before the collection effect.
+    if (battle_f14d8_ == 1 && A.combat_class >= 0x15 && A.combat_class <= 0x18) {
+        game_timer_set(0x20);
+        A.anim_frame = 5;
+        present_cutscene_frame();                            // sub_45559
+        wait_game_tick();                                    // sub_499E4
+        A.anim_frame = 6;
+        present_cutscene_frame();
+    }
+
+    // loc_2F0BC: per-target 1214F -> 2CBA1 -> 44D6E(1) -> 46DF1 -> 4F4CD(3) -> 46E27.
+    for (int ti : targets) {
+        if (ti < 0 || (size_t)ti >= units_.size()) continue;
+        auto& T = units_[(size_t)ti];
+        T.anim_frame = (T.sprite_type < 0x12C) ? (uint8_t)0x0A : (uint8_t)0x00; // sub_1214F
+    }
+    battle_highlight_add_depth(unit_index);                   // sub_2CBA1 (42840)
+    battle_dim_row0_ = true;                                  // sub_44D6E(1)
+    camera_center_on((int)A.x + ((cx - (int)A.x) >> 1),
+                     (int)A.y + ((cy - (int)A.y) >> 1));      // sub_46DF1 midpoint
+    sfx(3);                                                    // sub_4F4CD(3)
+    play_weapon_class5_projectile_at(A, cx, cy, true, kSub46E27StackVar8); // sub_46E27 (42854, edx=1)
+
+    int tmp = 0;
+    int flash_mode = 0;                                       // sub_1E565(var_10 - 1)
+    if (di == 0) {
+        if (n > 0) {
+            const int t0 = targets[0];
             int ty = type;
-            if (ty == 3 && units_[(size_t)t0].combat_level_2b >= A.combat_level_2b) ty = 2; // jb: keep when target < attacker
-            tmp = battle_damage(unit_index, t0, ty - 1, 0, 0) + add;
-        } else {
-            const int base = battle_damage(unit_index, t0, 0, 0, 0);
-            tmp = add + (type == 1 ? base : 2 * base);
-            tmp = battle_weapon_2caca(unit_index, tmp);
+            if (ty == 3 && units_[(size_t)t0].combat_level_2b >= A.combat_level_2b) ty = 2;
+            tmp = battle_damage(unit_index, t0, ty - 1, 0, 0) + add; // 1D770(hit_kind = ty-1)
+            if (ty > 1) flash_mode = ty - 1;
         }
-        if (battle_trace_) fprintf(stderr, "COMBAT: 2ef4a unit=%d di=%d type=%d center=(%d,%d) r=%d targets=%d dmg=%d\n",
-                                    A.id, di, type, cx, cy, r, n, tmp);
+        // loc_2F2C1: 44D75 -> 44D6E(0) -> 1E565(type-1) when type > 1.
+        battle_highlight_clear();                             // sub_44D75
+        battle_dim_row0_ = false;                             // sub_44D6E(0)
+        if (flash_mode) battle_fx_1e565(flash_mode);          // sub_1E565
+    } else {
+        if (n > 0) {
+            const int t0 = targets[0];
+            const int base = battle_damage(unit_index, t0, 0, 0, 0); // 1D770(0,0)
+            tmp = add + (type == 1 ? base : 2 * base);
+            tmp = battle_weapon_2caca(unit_index, tmp);       // sub_2CACA
+        }
+        // loc_2F199: type 2 -> 4 frames, type 3 -> 0Fh frames, type 1 -> 1 frame.
+        const int count = (type == 2) ? 4 : (type == 3 ? 0x0F : 1);
+        game_timer_set(2);                                    // sub_1033B(2)
+        for (int i = 0; i < count && !should_exit_; ++i) {
+            A.anim_frame = 5;                                 // pose 5
+            present_cutscene_frame();                         // sub_45559
+            A.anim_frame = 6;                                 // pose 6
+            present_cutscene_frame();
+            // loc_2F261: 4F4CD(3) -> 46E27(unit, edi != 0) -> facing nudge on [65h]/[66h].
+            // loc_2F1D6: on the 0Fh-frame type-3 finisher each frame rerolls the
+            // centre target tile: 499BD(2) selects the axis and 499BD(3)-1 the -1..1
+            // offset. 11DB2/1201D keep the occupant only when it is hostile, and
+            // 46E19 records the jittered tile even when it is empty.
+            int nudge_ti = targets.empty() ? -1 : targets[0];
+            if (type == 3 && !targets.empty()) {
+                const auto& T0 = units_[(size_t)targets[0]];
+                int jx = (int)(int8_t)T0.x, jy = (int)(int8_t)T0.y;
+                if (combat_rand(2) != 0) jx += combat_rand(3) - 1;
+                else jy += combat_rand(3) - 1;
+                battle_atk_tx_ = jx;                         // sub_46E19
+                battle_atk_ty_ = jy;
+                nudge_ti = battle_unit_index_at(jx, jy);      // sub_11DB2
+                if (nudge_ti >= 0 && (size_t)nudge_ti < units_.size()) {
+                    const auto& O = units_[(size_t)nudge_ti];
+                    if (!O.active || O.hp <= 0 ||
+                        !battle_armies_hostile(battle_effective_army(A),
+                                               battle_effective_army(O),
+                                               battle_hostility_inverted_))
+                        nudge_ti = -1;                       // sub_1201D != 1 -> edi = 0
+                } else {
+                    nudge_ti = -1;
+                }
+            }
+            sfx(3);                                           // sub_4F4CD(ebx=3)
+            // loc_2F261: 46E27 re-runs on every frame. Type 3 uses the jittered
+            // FA8B0/FA8B4 tile; types 1/2 keep the selected centre. edx is 1 only
+            // when edi (the first target or the jittered hostile) is present.
+            const int ptx = (type == 3) ? battle_atk_tx_ : cx;
+            const int pty = (type == 3) ? battle_atk_ty_ : cy;
+            play_weapon_class5_projectile_at(A, ptx, pty, nudge_ti >= 0,
+                                             kSub46E27StackVar8); // sub_46E27
+            if (nudge_ti >= 0 && (size_t)nudge_ti < units_.size()) {
+                auto& T = units_[(size_t)nudge_ti];
+                switch (A.facing & 3) {                       // off_2EF3A
+                    case 0: T.walk_off_y -= 1; break;
+                    case 1: T.walk_off_y += 1; break;
+                    case 2: T.walk_off_x -= 1; break;
+                    default: T.walk_off_x += 1; break;
+                }
+            }
+            wait_game_tick();                                 // sub_499E4
+        }
+        battle_highlight_clear();                             // sub_44D75
+        battle_dim_row0_ = false;                             // sub_44D6E(0)
+    }
+
+    if (n > 0) {
         for (int ti : targets) {
             if (!battle_weapon_hit_target(unit_index, ti, tmp)) return 1;
         }
@@ -10289,7 +10581,7 @@ int CombatII::battle_weapon_2ef4a(int unit_index, int di, int type, int add) {
         if (ti >= 0 && (size_t)ti < units_.size()) reset_unit_pose(units_[(size_t)ti]); // 12124
     }
     if ((size_t)unit_index < units_.size() && units_[(size_t)unit_index].active) {
-        run_unit_hp_trigger(unit_index, -1, 1);                  // sub_1ED45
+        run_unit_hp_trigger(unit_index, -1, 1);               // sub_1ED45
         units_[(size_t)unit_index].anim_frame = (uint8_t)saved_pose;
     }
     game_timer_set(6);
@@ -10313,7 +10605,7 @@ int CombatII::battle_weapon_f1474_ext(int unit_index, int idx, int dx) {
             if (battle_trace_) fprintf(stderr, "COMBAT: f1474[13]=2F80B unit=%d dx=%d R=%d targets=%d\n", u.id, dx, R, n);
             // 2F80B: 2CBA1 -> 44D6E(1) -> 2DD7A(axefly.nsp, edx = dx>1 ? 1 : 0) -> 44D6E(0) ->
             // 44D75.
-            camera_center_on(u.x, u.y);
+            battle_highlight_add_depth(unit_index);                  // sub_2CBA1
             battle_dim_row0_ = true;                                 // sub_44D6E(1)
             battle_fx_2dd7a(unit_index, 0, 0, dx > 1 ? 1 : 0);       // sub_2DD7A
             battle_dim_row0_ = false;                                // sub_44D6E(0)
@@ -10333,7 +10625,7 @@ int CombatII::battle_weapon_f1474_ext(int unit_index, int idx, int dx) {
                    //   2DFC1(unit, dx-1) -> 44D6E(0) -> 44D75 -> 2CAF7(mul dx+2, add 6000). Always 1.
             const int n = battle_weapon_collect_dia_at(unit_index, (int)(int8_t)u.x, (int)(int8_t)u.y, 1);
             if (battle_trace_) fprintf(stderr, "COMBAT: f1474[14]=2F98A unit=%d dx=%d targets=%d\n", u.id, dx, n);
-            camera_center_on(u.x, u.y);
+            battle_highlight_add_depth(unit_index);                  // sub_2CBA1
             battle_dim_row0_ = true;                                 // sub_44D6E(1)
             battle_fx_2dfc1(unit_index, dx - 1);                     // sub_2DFC1(madaxe.nsp)
             battle_dim_row0_ = false;                                // sub_44D6E(0)
@@ -10352,20 +10644,91 @@ int CombatII::battle_weapon_f1474_ext(int unit_index, int idx, int dx) {
             return battle_weapon_2ef4a(unit_index, 0, dx, 1000);
         }
         case 16: return battle_weapon_2ef4a(unit_index, 1, dx, 2000); // sub_2FA41 (2EF4A di=1)
-        case 17: { // sub_2FA6E: t_arrow line of R=2CBFB(9); automatic returns -1 with no
-                   //   target, otherwise 2CAF7(mul dx, add 3000)
+        case 17: { // sub_2FA6E: t_arrow line of R=2CBFB(9); automatic returns -1 with no target.
+                   //   Presentation: 2CBA1 depth highlight -> 44D6E(1) -> t_arrow.nsp +
+                   //   bolt2.ssp -> poses 7..9 -> flight loop -> 2CAF7(mul dx, add 3000) -> 12124.
+                   //   The ASM's final 29437 call passes eax=4. sub_29437 forwards eax to
+                   //   sub_28947, which reads [eax+2Bh], so eax is a BattleUnit*, not an
+                   //   effect id or unit index. 4 is a low DGROUP offset; 2CAF7/287AF/1ED45
+                   //   do not clear F0648, so the original performs a garbage-pointer status
+                   //   roll rather than a no-op. The port does not reproduce that UB.
             const int R = battle_weapon_2cbfb(unit_index, 9);
-            int fx = 0, fy = 0;
+            // sub_200DE(unit, 5, &var_14): centre the camera five tiles ahead.
+            {
+                int ccx = (int)(int8_t)u.x, ccy = (int)(int8_t)u.y;
+                switch (u.facing & 3) {
+                    case 0: ccy += 5; break;
+                    case 1: ccx -= 5; break;
+                    case 2: ccy -= 5; break;
+                    default: ccx += 5; break;
+                }
+                camera_center_on(ccx, ccy);                     // sub_200DE(unit, 5)
+            }
+            int fx = 0, fy = 0, last_x = 0, last_y = 0;
             battle_weapon_front_tile(unit_index, fx, fy);
-            const int n = battle_weapon_collect_rect(unit_index, fx, fy, 1, R, nullptr, nullptr);
-            if (battle_trace_) fprintf(stderr, "COMBAT: f1474[17]=2FA6E unit=%d dx=%d R=%d targets=%d\n", u.id, dx, R, n);
+            const int n = battle_weapon_collect_rect(unit_index, fx, fy, 1, R, &last_x, &last_y);
+            if (battle_trace_) fprintf(stderr, "COMBAT: f1474[17]=2FA6E unit=%d dx=%d R=%d targets=%d last=(%d,%d)\n",
+                                       u.id, dx, R, n, last_x, last_y);
             // sub_2FA6E: only `word_F14D8 == 1 && count == 0` returns -1. On the player path
             // (F14D8 != 1) the presentation/journal runs even with an empty target list and the
             // routine still returns 1.
             if (battle_f14d8_ == 1 && n <= 0) return -1;
-            units_[(size_t)unit_index].anim_frame = 9;
-            battle_weapon_2caf7_loop(unit_index, dx, 3000);
+
+            battle_highlight_add_depth(unit_index);          // sub_2CBA1
+            battle_dim_row0_ = true;                         // sub_44D6E(1)
+            const bool nsp_ok = battle_nsp_load("t_arrow.nsp"); // sub_1FEA4
+            battle_ssp_play("bolt2.ssp");                    // sub_4F460
+            // off_2FA5E: 0 -> +4x, 1 -> -4y, 2 -> -4x, 3 -> +4y.
+            int step_x = 0, step_y = 0;
+            switch (u.facing & 3) {
+                case 0: step_x = 4; break;
+                case 1: step_y = -4; break;
+                case 2: step_x = -4; break;
+                default: step_y = 4; break;
+            }
+            // sub_49ADF(caster, last ray tile) - 1, scaled by 6 for E/W and 4 for N/S facing.
+            // At 4 px/frame this is 24 px per E/W tile and 16 px per N/S tile.
+            int frames = (std::abs((int)u.x - last_x) + std::abs((int)u.y - last_y) - 1) *
+                         ((u.facing & 1) ? 6 : 4);
+            if (frames < 0) frames = 0;
+
+            // ASM 43738..43780: 1033B(20h), then poses 7,8,9 each presented once.
+            u.anim_frame = 7;                                // [64h]=7
+            game_timer_set(0x20);                            // sub_1033B(20h)
+            for (int i = 0; i < 3 && !should_exit_; ++i) {
+                battle_fx_present();                         // sub_45559
+                ++u.anim_frame;                              // 7 -> 8 -> 9 -> 10
+                wait_game_tick();                            // sub_499E4
+            }
+            // ASM 43780..43795: 1033B(10h), [64h]=9, 1F179 decides whether to reset.
+            game_timer_set(0x10);                            // sub_1033B(10h)
+            u.anim_frame = 9;
+            if (u.combat_class >= 0x15 && u.combat_class <= 0x18)
+                reset_unit_pose(u);                          // sub_12124 (1F179 == 0)
+
+            // ASM 437FA..43815: anchor = 10971(caster x)+0Ch, 10988(caster y)-2.
+            int px = ((int)u.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X + 0x0C;
+            int py = ((int)u.y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y - 2;
+            game_timer_set(3);                               // sub_1033B(3)
+            sfx(0x32);                                       // sub_4F4CD(32h)
+            const int facing_base = (u.facing & 3) * 5;      // [unit+60h]>>24 == [63h] facing
+            for (int i = 0; i < frames && !should_exit_; ++i) {
+                const int frame = facing_base + (i % 5);
+                if (nsp_ok && frame < (int)magic_frames_.size()) {
+                    const MagicFxFrame& fr = magic_frames_[(size_t)frame];
+                    battle_fx_blit(frame, px + fr.xo, py + fr.yo); // sub_1FFFE
+                }
+                battle_fx_present();                         // 454B3 + 5E9E8
+                wait_game_tick();                            // sub_499E4
+                px += step_x;                                // var_C / var_10
+                py += step_y;
+            }
+            battle_highlight_clear();                        // sub_44D75
+            battle_dim_row0_ = false;                        // sub_44D6E(0)
+            if (should_exit_) { battle_nsp_release(); return 1; }
+            battle_weapon_2caf7_loop(unit_index, dx, 3000);  // sub_2CAF7
             if ((size_t)unit_index < units_.size()) reset_unit_pose(units_[(size_t)unit_index]); // 12124
+            battle_nsp_release();                            // sub_1FFCD
             return 1;
         }
         case 18: { // sub_2FD03: with F14D8 == 1 (AI/script) there is no target (-1). The player
@@ -10384,8 +10747,38 @@ int CombatII::battle_weapon_f1474_ext(int unit_index, int idx, int dx) {
                 fprintf(stderr, "COMBAT: f1474[18]=2FD03 unit=%d dx=%d player cursor tile=(%d,%d) targets=%d\n",
                         u.id, dx, battle_pick_tx_, battle_pick_ty_, n);
             if (battle_target_list_.empty()) return -1;
-            units_[(size_t)unit_index].anim_frame = 0;
-            // ASM 44009~44016: ebx=[esp+2FEh]>>16 = dx(mul), edx=unk_744B4>>16 = [744B6]=4000(add).
+            // ASM 43922..43944: 1124A(caster tile) -> 1033B(18h) -> 1F179 branch.
+            camera_center_on((int)u.x, (int)u.y);            // sub_1124A
+            game_timer_set(0x18);                            // sub_1033B(18h)
+            // sub_1F179 returns 0 for [unit+11h] in 15h..18h: two waits, pose 0, one present.
+            if (u.combat_class >= 0x15 && u.combat_class <= 0x18) {
+                wait_game_tick();                            // sub_499E4 x2
+                wait_game_tick();
+                u.anim_frame = 0;
+                battle_fx_present();                         // sub_45559
+            } else {
+                for (int f = 7; f < 0x0A && !should_exit_; ++f) { // poses 7,8,9
+                    u.anim_frame = (uint8_t)f;
+                    battle_fx_present();                     // sub_45559
+                    wait_game_tick();                        // sub_499E4
+                }
+            }
+            if (should_exit_) return 1;
+            sfx(3);                                          // sub_4F4CD(3)
+            // ASM 43948~44016: 49A3E master -> white (step 0Ah), camera clamp, 49A3E white ->
+            // master (step 14h), 5F9AE(master).
+            battle_fx_white_flash_up(0x0A);
+            int cam_x = battle_atk_tx_ - 6;                   // 43965..43983
+            if (cam_x < 0) cam_x = 0;
+            else if (cam_x > (int)map_w_ - 12) cam_x = (int)map_w_ - 12;
+            int cam_y = battle_atk_ty_ - 6;                   // 43986..44004
+            if (cam_y < 0) cam_y = 0;
+            else if (cam_y > (int)map_h_ - 12) cam_y = (int)map_h_ - 12;
+            cam_tile_x_ = cam_x;
+            cam_tile_y_ = cam_y;
+            battle_fx_white_flash_down(0x14);
+            if (should_exit_ || (size_t)unit_index >= units_.size()) return 1;
+            // ASM 44017~44022: ebx=[esp+2FEh]>>16 = dx(mul), edx=unk_744B4>>16 = [744B6]=4000(add).
             battle_weapon_2caf7_loop(unit_index, dx, 4000);
             if (should_exit_ || (size_t)unit_index >= units_.size()) return 1;
             reset_unit_pose(units_[(size_t)unit_index]);         // sub_12124

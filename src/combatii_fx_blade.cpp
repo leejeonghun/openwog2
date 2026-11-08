@@ -456,7 +456,7 @@ int CombatII::battle_fx_275a4(int unit_index, int tx, int ty, int k) {
 //   5EFB9 (clipped 1:1) -> 5E9E8 -> 499E4. While the radius is negative the insert is skipped
 //   but the trail still shifts and draws (20 more frames).
 //   Tail (loc_27546): 31 rows at x = last inserted x, y = last y down to y-30, frame 0 through
-//   1FFFE -> 284A3 (not ported) -> 1FFCD.
+//   1FFFE -> 284A3 (white palette flash) -> 1FFCD.
 int CombatII::battle_fx_272ad(int unit_index, int tx, int ty, int k) {
     (void)unit_index; (void)k;
     if (!battle_nsp_load("soulreca.nsp") || magic_frames_.empty()) return 0;
@@ -502,6 +502,7 @@ int CombatII::battle_fx_272ad(int unit_index, int tx, int ty, int k) {
             wait_game_tick();
         }
     }
+    if (!should_exit_) battle_fx_white_flash(2, 0x100);     // sub_284A3
     battle_nsp_release();                                   // sub_1FFCD
     if (battle_trace_) fprintf(stderr, "COMBAT: 272AD soulreca tile=(%d,%d)\n", tx, ty);
     return 1;

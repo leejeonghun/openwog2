@@ -168,6 +168,103 @@ void CombatII::pal_load_range(int start, int end, const uint8_t* src) {
     }
 }
 
+// sub_49A3E(eax = start, edx = end, ebx = from, ecx = to, [esp+8] = step): crossfade the DAC
+//   from `from` to `to`. The routine copies `to` into unk_FABE0, turns that copy into
+//   delta = to - from through sub_5FC21 (`sub [eax], cl`, one byte per channel), then calls
+//   sub_5FD1C for pct = 0, step, 2*step, ... <= 100. 5FD1C waits for the vertical retrace, so
+//   every step is one visible frame and writes
+//     DAC[i] = from[i] + (int8_t)(uint8_t)(to[i] - from[i]) * pct / 100
+//   (pct clamped to 100, idiv truncating toward zero, result truncated to a byte).
+//   The port presents the backbuffer with the new DAC values because the original programs
+//   3C8h/3C9h directly, so the palette change is visible without a new frame.
+void CombatII::pal_crossfade(int start, int end, const uint8_t* from, const uint8_t* to, int step_pct) {
+    if (!from || !to) return;
+    if (start < 0) start = 0;
+    if (end > 256) end = 256;
+    if (step_pct <= 0) step_pct = 1;
+    for (int p = 0; p <= 100; p += step_pct) {
+        for (int i = start; i < end; ++i) {
+            uint8_t rgb[3];
+            for (int c = 0; c < 3; ++c) {
+                const uint8_t delta = (uint8_t)(to[i * 3 + c] - from[i * 3 + c]);
+                rgb[c] = (uint8_t)(from[i * 3 + c] + (int)(int8_t)delta * p / 100);
+            }
+            palette_set_entry((uint8_t)i, rgb[0], rgb[1], rgb[2]);
+        }
+        video_.present();
+        if (should_exit_) return;
+        wait_game_tick();
+    }
+}
+
+// sub_1E565(eax = mode): full-screen red flash. One (3Fh,0,0) triple is replicated over all 256
+//   palette entries and crossfaded with sub_49A3E against the master palette (unk_12824C):
+//     mode == 2: master -> red (step 32h), red -> master (step 19h)
+//     every mode: master -> red (step 14h), red -> master (step 0Ah)
+//   so mode 1 shows 17 steps (6 rising + 11 falling) and mode 2 adds 8 more.
+//   Call sites: sub_2EF4A after the damage roll when type > 1 (attack level 2/3), and sub_1E61D
+//   with the high word of its var_20 (always 0, so that one never flashes).
+void CombatII::battle_fx_1e565(int mode) {
+    if ((int16_t)mode == 0) return;
+    // unk_12824C is the live master palette (weather included); dlg_shade_pal_ is its snapshot
+    // in the port (same reference as the 341C7 tail).
+    if (!dlg_shade_pal_set_) snapshot_dialog_shade_palette();
+    const uint8_t* master = &dlg_shade_pal_[0][0];
+    uint8_t red[256 * 3];
+    for (int i = 0; i < 256; ++i) {
+        red[i * 3 + 0] = 0x3F;
+        red[i * 3 + 1] = 0x00;
+        red[i * 3 + 2] = 0x00;
+    }
+    if (battle_trace_) fprintf(stderr, "COMBAT: 1E565 red flash mode=%d\n", mode);
+    if (mode == 2) {
+        pal_crossfade(0, 0x100, master, red, 0x32);
+        pal_crossfade(0, 0x100, red, master, 0x19);
+    }
+    pal_crossfade(0, 0x100, master, red, 0x14);
+    pal_crossfade(0, 0x100, red, master, 0x0A);
+}
+
+// sub_284A3 (21944/272AD tail) and sub_2FD03 (F1474 idx 18) build the same temporary palette:
+//   256 copies of the three bytes at unk_12824F (= unk_12824C + 3, master palette entry 1,
+//   white 3Fh/3Fh/3Fh in GENESIS.PAL), then run 49A3E from master to that solid white and back.
+//   sub_284A3 uses step 2 on the way in and the finished loop counter 100h on the way out,
+//   which 49A3E executes as a single white hold frame before the 5F9AE(master) commit;
+//   sub_2FD03 uses 0Ah and 14h with its camera clamp between the two halves.
+static void white_palette_284a3(const uint8_t* master, uint8_t* white) {
+    for (int i = 0; i < 256; ++i) {
+        white[i * 3 + 0] = master[3 + 0];
+        white[i * 3 + 1] = master[3 + 1];
+        white[i * 3 + 2] = master[3 + 2];
+    }
+}
+
+void CombatII::battle_fx_white_flash_up(int up_step) {
+    if (!dlg_shade_pal_set_) snapshot_dialog_shade_palette();
+    const uint8_t* master = &dlg_shade_pal_[0][0];
+    uint8_t white[256 * 3];
+    white_palette_284a3(master, white);
+    if (battle_trace_) fprintf(stderr, "COMBAT: white flash up=%d\n", up_step);
+    pal_crossfade(0, 0x100, master, white, up_step);   // 49A3E(master -> white)
+}
+
+void CombatII::battle_fx_white_flash_down(int down_step) {
+    if (!dlg_shade_pal_set_) snapshot_dialog_shade_palette();
+    const uint8_t* master = &dlg_shade_pal_[0][0];
+    uint8_t white[256 * 3];
+    white_palette_284a3(master, white);
+    if (battle_trace_) fprintf(stderr, "COMBAT: white flash down=%d\n", down_step);
+    pal_crossfade(0, 0x100, white, master, down_step); // 49A3E(white -> master)
+    pal_load_range(0, 0x100, master);                  // 5F9AE(0,100h,unk_12824C)
+    video_.present();
+}
+
+void CombatII::battle_fx_white_flash(int up_step, int down_step) {
+    battle_fx_present();                               // sub_45559 (sub_284A3 only)
+    battle_fx_white_flash_up(up_step);
+    battle_fx_white_flash_down(down_step);
+}
+
 // sub_5FA2C(eax = start, edx = mul<<16, ebx = buffer, ecx = end): DAC[i] = buffer[i] * mul / 100.
 //   Leaves the end index in byte_755E8 (the ramp position marker) -> pal_ramp_mark_.
 void CombatII::pal_scale_range(int start, int end, const uint8_t* src, int mul_pct) {

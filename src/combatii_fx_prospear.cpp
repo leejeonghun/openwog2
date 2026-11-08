@@ -90,7 +90,8 @@ void pro_kill(int idx) {
 //       (x + (tile_w > 1 ? 0x0C : 0), y)
 //   (2) sfx(0x32), then an h-row loop: per row present (sub_454B3) and blit the main frame, the
 //       secondary frame and the 8-fold plume through the unclipped tinted path (sub_5F29D)
-//   (3) game_timer_set(0x1E), one wait, sfx(0x33). The caller releases the table.
+//   (3) game_timer_set(0x1E), one wait, sfx(0x33), sub_284A3 (white palette flash: 49A3E
+//       step 2 in, 100h back = one hold frame), then 44D6E(0). The caller releases the table.
 // The port reads battle_d66a8_raw with the unit's sprite_type instead of a slot and derives
 // x/y from unit_screen_center + 0x0C.
 int CombatII::battle_fx_21944(int unit_index, int tx, int ty, int k) {
@@ -152,6 +153,7 @@ int CombatII::battle_fx_21944(int unit_index, int tx, int ty, int k) {
     game_timer_set(0x1E);                            // sub_1033B(1Eh)
     wait_game_tick();                                // 499E4
     sfx(0x33);                                       // sub_4F4CD(33h)
+    if (!should_exit_) battle_fx_white_flash(2, 0x100);// sub_284A3
     // The caller releases the table (sub_1FFCD): 4426D does `call sub_21944; call sub_1FFCD`.
     return 1;
 }
