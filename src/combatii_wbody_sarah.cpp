@@ -4,8 +4,9 @@
 //
 // Original flow:
 //   1. Target
-//      - word_F14D8 == 1 (auto): sub_2EA0C(unit, 7) takes the nearest unit on the
-//        straight ray, and dword_F0648[0] [0]/[1] becomes the target tile.
+//      - word_F14D8 == 1 (auto): sub_2EA0C(unit, 7) scores the hostiles on the
+//        straight ray and takes the best, and dword_F0648[0] [0]/[1] becomes the target
+//        tile (battle_weapon_collect_2ea0c).
 //      - Otherwise (player): sub_13F8A -> 1A452 (width 1, length 7) / 1A552 sweep the
 //        ray, keep cells whose 1093D (tile attribute) != 0, mark candidates through
 //        13D02 and pick one with the 4A483 cursor; it enters F0648 only if it passes
@@ -84,7 +85,7 @@ int CombatII::battle_fx_356db_anim(int unit_index) {
     // ---- 1. target selection (battle_weapon_356db gameplay kept as is) ----
     int n = 0;
     if (battle_f14d8_ == 1) {
-        n = battle_weapon_collect_nearest(unit_index);            // sub_2EA0C(unit, 7)
+        n = battle_weapon_collect_2ea0c(unit_index, 7);           // sub_2EA0C(unit, 7)
     } else {
         battle_target_list_.clear();                              // sub_13F8A
         const int oi = battle_weapon_pick_target(unit_index, true); // 1A452/1A552/4A483

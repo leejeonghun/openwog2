@@ -10962,11 +10962,13 @@ int CombatII::battle_weapon_341c7(int unit_index) {
     return battle_weapon_2caf7_loop(unit_index, 2, 0x4E20);
 }
 
-// sub_34C48 (edi 5, ju+shak2.nsp): 1A452/1A552 multi-target collection approximated by the
-// screen sweep + shak2 presentation (106 frames) + per target base*4+6000 through 2CACA.
+// sub_34C48 (edi 5, ju+shak2.nsp): 1A1DE front tile -> 1A452(1 wide, 3 deep) -> 1A552/1A1F8
+// (ASM 496B4..496CF), shak2 presentation (106 frames) + per target base*4+6000 through 2CACA.
 int CombatII::battle_weapon_34c48(int unit_index) {
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return -1;
-    const int n = battle_weapon_collect_screen(unit_index, 0);
+    int fx = 0, fy = 0;
+    battle_weapon_front_tile(unit_index, fx, fy);                        // sub_1A1DE
+    const int n = battle_weapon_collect_rect(unit_index, fx, fy, 1, 3);  // sub_1A452/1A552/1A1F8
     if (n <= 0) {
         if (battle_trace_) fprintf(stderr, "COMBAT: 34c48 unit=%d empty -> -1\n", units_[(size_t)unit_index].id);
         return -1;

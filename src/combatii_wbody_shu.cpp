@@ -43,9 +43,10 @@
 //
 // The two coordinate systems in 6/7 (loc_37C98..loc_37EF4): before sliding, snapshots
 //   var_10 = var_1C and var_20 = var_8 are taken, and each slide frame draws twice - once
-//   at the snapshot position (var_10/var_20) and once at the moving var_1C/var_8, using the
-//   same frame (cx+0Ah). Only var_1C/var_8 move at the end of the frame. The final frame
-//   (cx+0Bh) is drawn once at the snapshot position.
+//   at the snapshot position (var_10/var_20, frame cx+0Ah) and once at the moving
+//   var_1C/var_8 (frame cx+var_14, var_14 = 0Ch..0Fh). The moving anchor advances by
+//   10h/0Ch every frame, not once per three-frame group. The final frame (cx+0Bh) is
+//   drawn once at the snapshot position.
 #include "combatii.h"
 #include "combatii_internal.h"
 
@@ -175,21 +176,22 @@ int CombatII::battle_fx_377a6_anim(int unit_index) {
     //   var_10/var_20 = pre-slide snapshot (ax/ay), var_1C/var_8 = moving position (sx/sy).
     game_timer_set(5);                                                   // 1033B(5)
     sfx(0x32);                                                           // 4F4CD(32h)
-    int sx = ax, sy = ay;
-    for (int rep = 0; rep < 4 && !should_exit_; ++rep) {
+    int sx = ax, sy = ay;                                                // var_1C / var_8
+    for (int rep = 0; rep < 4 && !should_exit_; ++rep) {                 // var_14 = 0Ch..0Fh
         for (int i = 0; i < 3 && !should_exit_; ++i) {
             battle_fx_world();                                           // sub_454B3
             battle_fx_overlay();
             blit(block + 0x0A, ax, ay);                                  // snapshot (var_10/var_20)
-            blit(block + 0x0A, sx, sy);                                  // moving (var_1C/var_8)
+            blit(block + 0x0C + rep, sx, sy);                            // moving (var_14 + cx)
             battle_fx_commit();                                          // sub_5E9E8
             wait_game_tick();                                            // sub_499E4
-        }
-        switch (facing) {
-            case 1: sx -= 0x10; break;                                   // sub [var_1C],10h
-            case 3: sx += 0x10; break;                                   // add [var_1C],10h
-            case 0: sy += 0x0C; break;                                   // add [var_8],0Ch
-            default: sy -= 0x0C; break;                                  // sub [var_8],0Ch
+            // loc_37DE9: the moving anchor advances every frame.
+            switch (facing) {
+                case 1: sx -= 0x10; break;                               // sub [var_1C],10h
+                case 3: sx += 0x10; break;                               // add [var_1C],10h
+                case 0: sy += 0x0C; break;                               // add [var_8],0Ch
+                default: sy -= 0x0C; break;                              // sub [var_8],0Ch
+            }
         }
     }
 
