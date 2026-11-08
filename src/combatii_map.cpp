@@ -2198,6 +2198,14 @@ void CombatII::blit_draw_entry(const DrawEntry& e) {
         if (e.ov && !e.ov->rle.empty()) {
             blit_sprite_rle(e.x, e.y, e.ov->rle.data());
         }
+    } else if (e.type==7) {
+        // sub_12BEE loc_12C68: the sub_123C1 overlay list (CHR_EFFC.SYB, unk_BB880 records) is
+        // drawn with sub_5F3FD (or sub_5F4AF when clipped), i.e. against the 480px scratch
+        // canvas. chr_effc_ is stride-converted by sub_11BB8/sub_10031, so drawing it with the
+        // 320-stride blit_sprite_rle shears the sprite.
+        if (e.ov && !e.ov->rle.empty()) {
+            blit_sprite_480(e.x, e.y, e.ov->rle.data());
+        }
     } else if (e.type==6) {
         // sub_12F2A normal path: unit foot shadow (SHADOW.SYB, dword_D6658).
         if (e.ov && !e.ov->rle.empty())
@@ -2658,7 +2666,7 @@ void CombatII::unit_status_overlay_123c1(const CombatUnitPlacement& u, std::vect
         e.x = base_x + fr.x + u.walk_off_x;                              // + [65h]
         e.y = base_y + fr.y + u.walk_off_y + y_adj;                      // + [66h] + var_8
         e.foot = foot;
-        e.type = 5;                                                      // RLE overlay blit
+        e.type = 7;                                                      // CHR_EFFC 480-stride overlay
         e.ov = &fr;
         out.push_back(e);
     }

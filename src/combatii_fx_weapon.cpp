@@ -256,11 +256,11 @@ void CombatII::fx_bolt_strip(int x, int y, int frame) {
 //         x = 10971+0Ch + entry[4], y = 10988-2 + entry[5]         (39795~39946)
 //     (4) sub_44D6E(1) dim + sub_1033B(0Ch)                        (39948~39954)
 //     (5) variant (5/7/0Ch) frames:                                (loc_2CEF9)
-//         sub_454B3 -> trail silhouettes (5F517, colour (frame+1)%5) -> current pose (5F3FD)
-//         -> switch on frame%5 -> shake all units when frame%5==2 -> 5E9E8 -> 499E4;
-//         trail length min(6, frame+1)
+//         sub_454B3 -> trail silhouettes (5F517, colour ramp loc_2CA0E, see below) ->
+//         current pose (5F3FD) -> switch on frame%5 -> shake all units when frame%5==2 ->
+//         5E9E8 -> 499E4; trail length min(6, frame+1)
 //     (6) repeat the same drawing until the trail reaches 0            (loc_2D2A1)
-//     (7) sub_499DA(40h) -> sub_44D75(clear list) -> sub_44D6E(0) -> [+64h] = frame+5
+//     (7) sub_499DA(40h) -> sub_44D75(clear list) -> sub_44D6E(0) -> [+64h] = frame%5+5
 //   Returns the [+64h] value set in (7), the pose the caller's damage loop starts from.
 int CombatII::battle_fx_2cc3a_anim(int unit_index, int variant, int sfx_id) {
     auto& A = units_[(size_t)unit_index];
@@ -271,6 +271,9 @@ int CombatII::battle_fx_2cc3a_anim(int unit_index, int variant, int sfx_id) {
     // (3) Coordinates of the five swing poses.
     const int sx = (A.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + UNIT_ANCHOR_X;
     const int sy = (A.y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + UNIT_ANCHOR_Y;
+    // loc_2CA0E: five dword copies of the silhouette colours (3Dh,3Ch,3Ah,39h,38h). The trail
+    // picks them by position (ramp[5 - trail + si]), it does not cycle the frame counter.
+    static constexpr uint8_t kSwingTrailColor[5] = {0x3D, 0x3C, 0x3A, 0x39, 0x38};
     const NC2Frame* swing[5] = {nullptr, nullptr, nullptr, nullptr, nullptr};
     for (int i = 0; i < 5; ++i) swing[i] = nc2_frame_for(A.sprite_type, A.facing & 3, 5 + i);
     // (4) Dim and tick period.
@@ -281,13 +284,15 @@ int CombatII::battle_fx_2cc3a_anim(int unit_index, int variant, int sfx_id) {
     for (; frames < variant && !should_exit_; ++frames) {
         battle_fx_world();                                       // sub_454B3 (10AEB,12BEE,4512E)
         battle_fx_overlay();                                     // tail of 454B3 = 454D5 (dim, 44DCC, HUD)
-        const int color = (uint8_t)((frames + 1) % 5);           // var_1C
-        // Trail silhouettes: the most recent pose first, trail frames deep.
-        for (int k = 0; k < trail; ++k) {
-            const int pi = ((frames - k) % 5 + 5) % 5;
+        // Trail silhouettes (loc_2CF25): trail-1 afterimages, oldest first. var_1C starts at
+        // frame-trail (wrapped to 0..4) and steps once per afterimage, and the colour is
+        // ramp[5 - trail + si] from loc_2CA0E.
+        for (int si = 1; si < trail; ++si) {
+            const int pi = ((frames - trail + si) % 5 + 5) % 5;
             const NC2Frame* fr = swing[pi];
             if (!fr) continue;
-            blit_nc2_frame_solid(sx + fr->x_off, sy + fr->y_off, *fr, (uint8_t)color); // sub_5F517
+            blit_nc2_frame_solid(sx + fr->x_off, sy + fr->y_off, *fr,
+                                 kSwingTrailColor[5 - trail + si]); // sub_5F517
         }
         // Current pose, one frame (sub_5F3FD).
         if (const NC2Frame* cf = nc2_frame_for(A.sprite_type, A.facing & 3, 5 + frames % 5))
@@ -341,15 +346,18 @@ int CombatII::battle_fx_2cc3a_anim(int unit_index, int variant, int sfx_id) {
         battle_fx_commit();                                      // sub_5E9E8
         wait_game_tick();                                        // sub_499E4
     }
-    // (6) Drain the trail (loc_2D2A1): repeat the same drawing until it reaches 0.
+    // (6) Drain the trail (loc_2D2A1): repeat the same drawing until it reaches 0. The pose
+    // cursor (var_14) keeps walking from frame-trail across drain frames, while the colour
+    // ramp index restarts at 5 - trail + 1 on every frame.
+    int trail_pose = ((frames % 5) - trail + 5) % 5;              // var_14
     while (trail > 0 && !should_exit_) {
         battle_fx_world();                                       // sub_454B3
         battle_fx_overlay();                                     // 454D5
-        for (int k = 0; k < trail; ++k) {
-            const int pi = ((frames - k) % 5 + 5) % 5;
-            if (!swing[pi]) continue;
-            blit_nc2_frame_solid(sx + swing[pi]->x_off, sy + swing[pi]->y_off, *swing[pi],
-                                 (uint8_t)((frames + 1) % 5));
+        for (int si = 1; si < trail; ++si) {
+            trail_pose = (trail_pose + 1) % 5;
+            if (!swing[trail_pose]) continue;
+            blit_nc2_frame_solid(sx + swing[trail_pose]->x_off, sy + swing[trail_pose]->y_off,
+                                 *swing[trail_pose], kSwingTrailColor[5 - trail + si]);
         }
         if (const NC2Frame* cf = nc2_frame_for(A.sprite_type, A.facing & 3, 5 + frames % 5))
             blit_nc2_frame(sx + cf->x_off, sy + cf->y_off, *cf);
@@ -366,7 +374,7 @@ int CombatII::battle_fx_2cc3a_anim(int unit_index, int variant, int sfx_id) {
         units_[i].walk_off_x = 0;
         units_[i].walk_off_y = 0;
     }
-    const int pose = (frames + 1) % 5 + 5;                       // [64h] = var_10 + 5
+    const int pose = frames % 5 + 5;                             // [64h] = var_10 + 5 (var_10 = frames%5)
     A.anim_frame = (uint8_t)pose;
     if (battle_trace_)
         fprintf(stderr, "COMBAT: 2CC3A unit=%d variant=%d trail-frames=%d pose=%d\n",
