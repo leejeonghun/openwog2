@@ -1692,10 +1692,11 @@ void CombatII::battle_fx_3aee8_anim(int unit_index) {
     const int8_t saved_facing = A.facing;                                 // save [63h]
     A.facing = 0;
     for (int ti : battle_target_list_) battle_highlight_add(ti);          // 44D89
-    const int ax0 = (A.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + UNIT_ANCHOR_X;
-    const int ay0 = (A.y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + UNIT_ANCHOR_Y;
-    const int si = ax0 + 0x0C;                                            // 10971+0Ch
-    const int di = ay0 + 2;                                               // 10988+2
+    // sub_10971/sub_10988 use the tile anchor (4/4), not the unit sprite anchor.
+    const int ax0 = (A.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X;
+    const int ay0 = (A.y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y;
+    const int si = ax0 + 0x0C;                                            // sub_10971 + 0Ch
+    const int di = ay0 + 2;                                               // sub_10988 + 2
     battle_dim_row0_ = true;                                              // 44D6E(1, 28h)
     fx_pal_mix(0x60, 0x100, 0, 0x00);                                     // 30824(0)
     game_timer_set(0x14);                                                 // 1033B(14h)

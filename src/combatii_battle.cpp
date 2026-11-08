@@ -5229,8 +5229,8 @@ std::pair<int,int> CombatII::battle_4d582_tile(int unit_index) {
     // Tile top-left for the current cam (sub_10971/10988, TILE_ANCHOR 4/4).
     const int sx = (u.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X;
     const int sy = (u.y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y;
-    const NC2Frame* fr = nc2_frame_for(u.sprite_type, u.facing & 3, (int)u.anim_frame);
-    if (!fr) fr = nc2_frame_for(u.sprite_type, u.facing & 3, 0);
+    // sub_4D582 indexes D66A8 + 572*slot + 143*facing: the pose-0 entry, not [64h].
+    const NC2Frame* fr = nc2_frame_for(u.sprite_type, u.facing & 3, 0);
     if (!fr) return {u.x, u.y}; // no NC2: the CITIZEN convention is unknown, use the unit tile
     // D66A8 raw footprint; large sprites use the same formula (the +-3 branch is only a wc gate).
     if (battle_trace_) {
