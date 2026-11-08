@@ -280,7 +280,7 @@ int CombatII::battle_fx_2cc3a_anim(int unit_index, int variant, int sfx_id) {
     battle_dim_row0_ = true;                                     // sub_44D6E(1)
     game_timer_set(0x0C);                                        // sub_1033B(0Ch)
     int frames = 0;                                              // var_2C
-    int trail = 0;                                               // di
+    int trail = 1;                                               // di = 1 at 0x2CED6, grows to 6
     for (; frames < variant && !should_exit_; ++frames) {
         battle_fx_world();                                       // sub_454B3 (10AEB,12BEE,4512E)
         battle_fx_overlay();                                     // tail of 454B3 = 454D5 (dim, 44DCC, HUD)
