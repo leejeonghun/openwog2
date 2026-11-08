@@ -1518,8 +1518,9 @@ bool Pack::try_corner_slide(uint8_t blocked_dir, uint8_t& out_dir) const {
 
 // ---- decide_step_direction: choose a direction at the start of a tile step (loc_1DA1C) ----
 // update_player_movement calls this only when player_move_step_ == 0, i.e. on a new tile
-// boundary ("test bh,bh (byte_544CE); jbe loc_1DA1C"). No movement test happens while the
-// left button is up (dword_7CF20 != 1) or while an NPC is hovered (sub_1F6E4).
+// boundary ("test bh,bh (byte_544CE); jbe loc_1DA1C"). The arrow keys are tested even
+// with no mouse button held; the mouse arm needs the left button (sub_2E1A4 returns -1
+// otherwise). An NPC under the cursor skips the whole test (sub_1F6E4, edx = 0).
 void Pack::decide_step_direction() {
     // sub_1D12F loc_1DA1C..loc_1DFC3: at step start (byte_544CE == 0) the direction is
     // chosen by the keyboard-or-mouse OR chain in the order Left, Right, Up, Down:
@@ -1528,13 +1529,14 @@ void Pack::decide_step_direction() {
     //   up:    (dword_1A0214 != 0) || (sub_2E1A4 == 0x48)
     //   down:  (dword_1A0234 != 0) || (sub_2E1A4 == 0x50)
     // The scancode indices are (addr - 0x1A00F4)/4: 0x4B=75, 0x4D=77, 0x48=72, 0x50=80.
-    // dword_7CF20 != 1 (left button not held) and the NPC-hover case (edx = 0) skip the
-    // whole test, as before.
+    // The NPC-hover case (edx = 0) skips the whole test; a missing left button only
+    // disables the mouse arm (sub_2E1A4 returns -1 unless dword_7CF20 == 1).
+    // The 0x1D1A5 gate (dword_7CF20 == 1) only guards the tile click interaction; on a
+    // miss it jumps to loc_1D23C, which still falls into loc_1DA1C when byte_544CE == 0.
+    // There the four arrows are OR'ed with the mouse direction, so arrows move the player
+    // with no button held. sub_2E1A4 itself returns -1 unless dword_7CF20 == 1, hence the
+    // mouse arm is gated below.
     const bool left_held = input_.is_left_button() && !input_.is_right_button();
-    if (!left_held) {
-        is_player_moving_ = false;
-        return;
-    }
 
     int hover_npc = -1;
     if (is_mouse_over_npc(input_.get_mouse_x(), input_.get_mouse_y(), hover_npc)) {
@@ -1545,7 +1547,9 @@ void Pack::decide_step_direction() {
         return;
     }
 
-    const uint8_t mouse_dir = compute_mouse_move_direction(input_.get_mouse_x(), input_.get_mouse_y());
+    const uint8_t mouse_dir = left_held
+        ? compute_mouse_move_direction(input_.get_mouse_x(), input_.get_mouse_y())
+        : (uint8_t)0;
     const bool kLeft  = input_.is_key_held(SDLK_LEFT);
     const bool kRight = input_.is_key_held(SDLK_RIGHT);
     const bool kUp    = input_.is_key_held(SDLK_UP);
@@ -1788,7 +1792,7 @@ void Pack::render_dim_band(int y0, int y1) {
 
 // ---- sub_1B082 loc_1B1BE..loc_1B2C3: item acquired popup ----
 // Dim band y 0x55..0x72 (sub_18899(0, 0x73, 0x13F, 0x55)), then the item icon (item.spr
-// frame id) at (0x96 - len*6 + x_off, 0x7D + y_off) and the "<name> acquired" text at
+// frame id) at (0x96 - len*6 + x_off + 0x0C, 0x7D - (h + 0x10)) and the "<name> acquired" text at
 // (0xB4 - len*6, 0x5F), then wait for a new click or key (len = name length in bytes).
 // The icon uses the sub_18B2A-corrected frame: w/h include +0x10 on height, x_off +0x0C,
 // y_off = -new_h, foot = 0 (loc_18B41). The popup therefore draws at
@@ -4217,7 +4221,7 @@ bool Pack::run_eve_script(int event_id) {
                     case 28:
                         // loc_132EB: with byte_82731 == 1, sub_39E5E(p0, 1) changes the BGM
                         // track (CD audio; state-only here, see bgm_play_track).
-                        bgm_play_track(w[i + 2]);
+                        if (game_cfg_[1] == 1) bgm_play_track(w[i + 2]);
                         break;
                     case 29: {
                         // loc_1330F: load the 13-byte filename (low bytes of words 2..14) with
@@ -4375,10 +4379,9 @@ void Pack::town_loop() {
             // Without a click the trigger stays 0; it is cleared after the event check below.
         }
 
-        // Movement is not click-to-path: while the left button is held, the direction is
-        // re-decided from the mouse quadrant at the start of every tile step (sub_2E1A4 and
-        // sub_1D12F, see decide_step_direction), so walking is driven entirely by
-        // is_left_button() inside update_player_movement. A click only triggers an immediate
+        // Movement is not click-to-path: at the start of every tile step the direction is
+        // re-decided from the arrow keys or, while the left button is held, from the mouse
+        // quadrant (sub_1D12F loc_1DA1C; see decide_step_direction). A click only triggers an immediate
         // interaction with the current or adjacent tile; the check below covers clicking a
         // chest, building or NPC while standing still.
         // End of sub_1F6E4/sub_27BF2: release the latch (byte_15BA22) once the action

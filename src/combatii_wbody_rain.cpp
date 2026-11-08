@@ -390,7 +390,7 @@ int CombatII::battle_fx_39a49_anim(int unit_index) {
                 start = s.angle >= s.gate_target - 5 && s.angle <= s.gate_target + 5;
             if (!start) {
                 s.angle += s.step;
-                if (facing == 0 && s.angle >= 0x168) s.angle -= 0x168;
+                if ((facing == 0 || facing == 3) && s.angle >= 0x168) s.angle -= 0x168;
             }
         }
         if (start) { s.mode = 1; sfx(0x33); }

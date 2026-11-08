@@ -91,8 +91,8 @@ private:
     bool quit_ = false;
     SDL_Keycode last_key_pressed_ = SDLK_UNKNOWN;
     SDL_Keycode injected_key_ = SDLK_UNKNOWN; // set by test_inject_key only; real keys never touch it
-    // Level state for DOS-ISR style reads (dword_1A00F4). Keyed by SDL_Keycode.
+    // Level state for DOS-ISR style reads (dword_1A00F4). Keyed by SDL scancode,
+    // because SDL_Keycode for arrows/Ctrl/Alt is 0x40000000+, far outside any small array.
     // Updated on KEYDOWN/KEYUP in update(); survives across frames until released.
-    // Index by (int)key (bounded); 0 means unused.
-    bool held_keys_[1024] = {};
+    bool held_keys_[SDL_NUM_SCANCODES] = {};
 };
