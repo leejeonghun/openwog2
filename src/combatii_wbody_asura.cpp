@@ -509,6 +509,7 @@ int CombatII::battle_fx_31283_anim(int unit_index) {
         if (sil_n > 0x64) sfx(0x34);
         sil_dx -= 0x1E;                                      // var_38 -= 1Eh
     }
+    sfx(0x35);                                               // 4F4CD(35h)
 
     // ---- (10) di = 0Ch..0Fh, 3 frames each, 5F29D (loc_322CB) ----
     for (int di = 0x0C; di <= 0x0F && !should_exit_; ++di) {

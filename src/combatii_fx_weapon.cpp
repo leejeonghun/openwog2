@@ -647,7 +647,6 @@ void CombatII::battle_fx_341c7_anim(int unit_index) {
     //       step (same rule as the 276B9/2799A fades). The reference palette is the
     //       weather-applied unk_12824C, hence dlg_shade_pal_.
     cam_fine_x_ = 0;                                                  // dword_BA838 = 0
-    battle_highlight_clear();                                         // 44D75
     if (!dlg_shade_pal_set_) snapshot_dialog_shade_palette();         // copy of unk_12824C
     const uint8_t (*master)[3] = dlg_shade_pal_;
     uint8_t solid[256 * 3];
@@ -659,6 +658,7 @@ void CombatII::battle_fx_341c7_anim(int unit_index) {
     pal_load_range(0, 0x100, solid);                                  // 5F9AE (solid 10h)
     video_.present();
     wait_game_tick();                                                 // equivalent of 5E943 (retrace) in 5F9AE
+    battle_highlight_clear();                                         // 44D75
     battle_fx_world();                                                // 45559 = 454B3
     battle_fx_commit();                                               //          + 5E9E8
     pal_crossfade(0, 0x100, solid, &master[0][0], 0x0A);              // 49A3E: 11 steps back to master
@@ -902,6 +902,7 @@ void CombatII::battle_fx_34c48_anim(int unit_index) {
     for (int ti : battle_target_list_) battle_highlight_add(ti);          // 44D89 all targets
     battle_dim_row0_ = true;                                             // 44D6E(1, 28h)
     fx_pal_mix(0x60, 0x100, 0, 0x28);                                    // 30824(0, 28h)
+    pal_load_range(0, 256, &battle_palette_[0][0]);                       // 5F9AE(0, 100h)
     for (int ti : battle_target_list_) {                                 // 1214F
         if (ti < 0 || (size_t)ti >= units_.size()) continue;
         auto& T = units_[(size_t)ti];
@@ -1011,7 +1012,7 @@ void CombatII::battle_fx_34c48_anim(int unit_index) {
 //     (1) 1FEA4("arcion.nsp"), then 103A8 (weather tick off)
 //     (2) 11EE4(caster) and 11EE4(target) register tile occupation; units_ models this here
 //     (3) facing block base var_C: south 0, north 0Ah, east 14h, west 1Eh (10 frames each)
-//     (4) 44D6E(1, 0Ah) dim, 30824(0, 10h), 1033B(5), anchors 10971+0Bh / 10988-2, 4F4CD(32h)
+//     (4) 44D6E(1, 0Ah) dim, 30824(0, 0Ah), 1033B(5), anchors 10971+0Bh / 10988-2, 4F4CD(32h)
 //     (5) stage A, 27 frames: k = 0..8, three frames each, 30824(0,6) before every k.
 //         frame = var_C + k; each frame 454B3 -> (target 12F2A when facing != 0) -> 5EE51
 //         -> (target 12F2A when facing == 0) -> 5E9E8 -> 499E4
@@ -1049,7 +1050,7 @@ void CombatII::battle_fx_32589_anim(int unit_index, int target_index) {
     const int dir_base = kDirBase[A.facing & 3];
     // (4)
     battle_dim_row0_ = true;                                            // 44D6E(1, 0Ah)
-    fx_pal_mix(0x60, 0x100, 0, 0x0A);                                   // 30824(0, 10h)
+    fx_pal_mix(0x60, 0x100, 0, 0x0A);                                   // 30824(0, 0Ah)
     game_timer_set(5);                                                  // 1033B(5)
     const int ax = (A.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X + 0x0B;
     const int ay = (A.y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y - 2;
@@ -1176,7 +1177,7 @@ bool CombatII::battle_fx_32bcb_anim(int unit_index) {
     const int cnt = (int)battle_target_list_.size();                       // 0xF0B9E
     for (int ti : battle_target_list_) battle_highlight_add(ti);           // 44D89 all targets
     battle_dim_row0_ = true;                                               // 44D6E(1, 28h)
-    fx_pal_mix(0x60, 0x100, 0, 0x00);                                      // 30824(0)
+    fx_pal_mix(0x60, 0x100, 0, 0x28);                                      // 30824(0, 28h)
     A.anim_frame = 8;                                                      // [64h] = 8
     const int ax = (A.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + UNIT_ANCHOR_X;
     const int ay = (A.y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + UNIT_ANCHOR_Y;
@@ -1575,7 +1576,7 @@ void CombatII::battle_fx_367ee_anim(int unit_index) {
         frame(); gblit(); ring(cx, si, 0x14); present();
     }
     game_timer_set(4);                                                    // 1033B(4, 0Ah)
-    fx_pal_mix(0x60, 0x100, 0, 0x00);                                     // 30824(0)
+    fx_pal_mix(0x60, 0x100, 0, 0x0A);                                     // 30824(0, 0Ah)
     present();
     // (4) 3 frames: F0DAA[33h..35h]
     for (int cx = 0; cx <= 2 && !should_exit_; ++cx) {
@@ -1732,7 +1733,7 @@ void CombatII::battle_fx_3aee8_anim(int unit_index) {
     const int si = ax0 + 0x0C;                                            // sub_10971 + 0Ch
     const int di = ay0 + 2;                                               // sub_10988 + 2
     battle_dim_row0_ = true;                                              // 44D6E(1, 28h)
-    fx_pal_mix(0x60, 0x100, 0, 0x00);                                     // 30824(0)
+    fx_pal_mix(0x60, 0x100, 0, 0x28);                                     // 30824(0, 28h)
     game_timer_set(0x14);                                                 // 1033B(14h)
     auto ring = [&](int idx, int x, int y) {                              // 5EE51(F0DAA[idx])
         if (idx < 0 || idx >= nframes) return;
