@@ -1728,6 +1728,7 @@ void CombatII::battle_fx_3aee8_anim(int unit_index) {
     weather_tick_enabled_ = false;                                        // 103A8
     const int8_t saved_facing = A.facing;                                 // save [63h]
     A.facing = 0;
+    A.fx_sprite_hidden = true;                                            // 11EE4 (release the caster tile)
     for (int ti : battle_target_list_) battle_highlight_add(ti);          // 44D89
     // sub_10971/sub_10988 use the tile anchor (4/4), not the unit sprite anchor.
     const int ax0 = (A.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X;
@@ -1741,8 +1742,11 @@ void CombatII::battle_fx_3aee8_anim(int unit_index) {
         if (idx < 0 || idx >= nframes) return;
         const MagicFxFrame& e = magic_frames_[(size_t)idx];
         battle_fx_blit(idx, x + e.xo, y + e.yo);
+        battle_fx_flush();   // 5EE51 writes the pose immediately, after 454B3's 454D5
     };
-    auto frame = [&]() { battle_fx_world(); battle_fx_overlay(); };        // 454B3
+    // 454B3 ends with 12E01's queue flush before it falls into 454D5 (same split as
+    // render_battle_frame): weather/magic entries stay below the dim and HUD.
+    auto frame = [&]() { battle_fx_world(); battle_fx_flush(); battle_fx_overlay(); };   // 454B3
     auto present = [&]() { battle_fx_commit(); wait_game_tick(); };        // 5E9E8,499E4
     for (int cx = 0; cx <= 7 && !should_exit_; ++cx) {
         // (1) 8 frames
@@ -1886,6 +1890,7 @@ void CombatII::battle_fx_3aee8_anim(int unit_index) {
     pal_load_range(0, 256, &battle_palette_[0][0]);                        // 5F9AE(0)
     battle_dim_row0_ = false;                                              // 44D6E(0)
     battle_highlight_clear();                                              // 44D75
+    A.fx_sprite_hidden = false;                                            // 11E04 (re-occupy the caster tile)
     A.facing = saved_facing;                                               // restore [63h]
     for (int ti : battle_target_list_) {                                  // 12124
         if (ti >= 0 && (size_t)ti < units_.size()) reset_unit_pose(units_[(size_t)ti]);

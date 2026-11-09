@@ -175,6 +175,10 @@ struct CombatUnitPlacement {
     // range (waiting below 0, landed at 8+) it draws nothing. The port also hides the
     // regular sprite while waiting, so it counts the remaining even frames here; 0 = no wait.
     int drop_wait = 0;
+    // sub_3AEE8 removes the caster from the CC998 grid with sub_11EE4 for the whole io.nsp
+    // animation and re-occupies it with sub_11E04 in the tail. The NSP frames draw her casting
+    // pose in place of the unit sprite, so the unit pass and the grid queries skip her meanwhile.
+    bool fx_sprite_hidden = false;
     // sub_50216+82: solid colour passed to sub_5F517 (cl = 9-dx = 2+counter); 0 means no
     // silhouette (regular sprite). At dx <= 1 the unit itself is not drawn.
     int drop_sil = 0;

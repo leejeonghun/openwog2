@@ -777,7 +777,7 @@ int CombatII::battle_cc998_occupant(int x, int y, bool apply_guard) const {
     int found = -1;
     for (size_t i = 0; i < units_.size(); ++i) {
         const auto& u = units_[i];
-        if (!u.active || u.hp <= 0) continue;
+        if (!u.active || u.hp <= 0 || u.fx_sprite_hidden) continue;   // sub_11EE4 cleared the cell
         const int ux = (int)(int8_t)u.x, uy = (int)(int8_t)u.y;
         if (ux < 2 || ux >= (int)map_w_ - 2 || uy < 4 || uy >= (int)map_h_ - 4) continue;
         // sub_11E04 has no 1x1 fallback: a missing descriptor leaves width/height zero and

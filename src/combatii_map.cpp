@@ -1965,6 +1965,9 @@ void CombatII::render_battle_map(bool magic_pass, bool overlay_only){
             // sub_50216 gate: draw only while the drop counter (E5A50) is in 0..7; while it is < 0
             // (waiting) nothing is drawn, and drop_wait > 0 also hides the normal sprite.
             if (u.drop_wait > 0) continue;
+            // sub_11EE4 released this unit's CC998 footprint for an effect that draws the unit
+            // itself (3AEE8's io.nsp poses); sub_12567 queues only grid occupants.
+            if (u.fx_sprite_hidden) continue;
             // Add the [unit+0x65]/[unit+0x66] walk sub-pixel offsets directly (sub_16A6D).
             // sub_12F2A: var_18 = sub_10971+0Ch (+16), var_1C = sub_10988-2 (+2).
             // The x_off/y_off of entry[4]/[5] are added later, in the draw step.
