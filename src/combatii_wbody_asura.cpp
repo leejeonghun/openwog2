@@ -87,10 +87,10 @@
 //     units_ model and the renderer; reset_unit_pose is called from the tail.
 //   - 61147/6104A/61115 (LUT setup and restore) are covered by the port's palette path;
 //     103A8/103A0 map to weather_tick_enabled_.
-//   - 30F98 clears the visible 200x480 viewport and toggles the 1px shake. The port has no
-//     separate cleared canvas, so the shake is kept and the battle world is redrawn, which
-//     leaves the map visible behind stages (6)-(10) instead of a cleared field. The one
-//     explicit clear in (10) (di == 0Dh, colour 1) is applied to the backbuffer instead.
+//   - 30F98 clears the visible 200x480 viewport to colour 0 and toggles the 1px shake. The
+//     port clears the backbuffer and redraws only the 12F2A units and effect frames that
+//     follow, so stages (5)-(11) run over black instead of a redrawn map. The one explicit
+//     colour-1 clear in (10) (di == 0Dh) is kept as well.
 //   - 310DE was measured as 7 passes (var_4 += 8); each pass memsets the whole display
 //     (17700h) and then rebuilds each row from the snapshot via loop A ((200-y)*8/5, left,
 //     starting row var_8 = pass*5) and loop B (y*8/5, right). That scan transition is
@@ -177,10 +177,20 @@ int CombatII::battle_fx_31283_anim(int unit_index) {
     auto screen_y = [&](int8_t ty) {
         return ((int)ty - (int)cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y;
     };
-    // sub_30F61/sub_30F98: toggle dword_BA838 between 1 and -1, then redraw (454B3).
-    auto shake_world = [&]() {
+    // sub_30F61/sub_30F98: toggle dword_BA838 between 1 and -1.
+    auto toggle_shake = [&]() {
         cam_fine_y_ = (cam_fine_y_ == (int16_t)1) ? (int16_t)-1 : (int16_t)1;
+    };
+    // sub_30F61: toggle + sub_454B3 (the particle stage still shows the dimmed map).
+    auto shake_world = [&]() {
+        toggle_shake();
         battle_fx_world();
+    };
+    // sub_30F98: toggle + clear the visible canvas. The original memsets 17700h bytes to 0;
+    // the port clears its backbuffer and does not redraw the map, so all later stages are black.
+    auto clear_black = [&]() {
+        toggle_shake();
+        video_.clear();
     };
 
     // ---- (2) setup (loc_3130A) ----
@@ -202,6 +212,20 @@ int CombatII::battle_fx_31283_anim(int unit_index) {
             saved_y[(size_t)k] = T->y;
         }
     }
+    // sub_30FD1/31B31 anchor at the live F0648 target tile, not the saved pre-rise tile.
+    auto target_screen_x = [&](int k) {
+        const CombatUnitPlacement* T = target_at(k);
+        return screen_x(T ? T->x : saved_x[(size_t)k]);
+    };
+    auto target_screen_y = [&](int k) {
+        const CombatUnitPlacement* T = target_at(k);
+        return screen_y(T ? T->y : saved_y[(size_t)k]);
+    };
+    auto draw_target_units = [&]() {
+        for (int k = 0; k < count; ++k) {
+            if (target_at(k)) battle_draw_unit_now(targets[(size_t)k]);   // sub_12F2A
+        }
+    };
 
     // ---- (3)(4) main loop (loc_3144D) ----
     std::vector<uint8_t> active((size_t)kAsuraSlots, 0);   // var_D0
@@ -257,8 +281,8 @@ int CombatII::battle_fx_31283_anim(int unit_index) {
             }
             // One line per target using the same slot state, anchored on the target screen position
             for (int k = 0; k < count; ++k) {
-                const int bx = screen_x(saved_x[(size_t)k]) + phase[(size_t)i];
-                const int by = screen_y(saved_y[(size_t)k]) + 0x0C;
+                const int bx = target_screen_x(k) + phase[(size_t)i];
+                const int by = target_screen_y(k) + 0x0C;
                 if (sum > 0) {
                     asura_line(bb, bx, by, bx, by + counter[(size_t)i], color[(size_t)i]);
                 } else if (by + counter[(size_t)i] >= 4) {
@@ -282,8 +306,6 @@ int CombatII::battle_fx_31283_anim(int unit_index) {
         ++frame;
         if (!should_exit_ && (frame % 0x0A) == 0) sfx(0x34);   // 4F4CD(34h)
     }
-    cam_fine_y_ = CAM_FINE_Y_REST;
-
     // ---- (5) restore tile coordinates, palette fade down and up (loc_318A0) ----
     C.x = saved_caster_x;
     C.y = saved_caster_y;
@@ -298,10 +320,12 @@ int CombatII::battle_fx_31283_anim(int unit_index) {
         pal_scale_range(0, 0x100, &battle_palette_[0][0], pct);   // sub_5FA2C
         wait_game_tick();
     }
-    if (!should_exit_) {                                     // sub_30F98 + one frame
-        cam_fine_y_ = (cam_fine_y_ == (int16_t)1) ? (int16_t)-1 : (int16_t)1;
-        battle_fx_present();
-        wait_game_tick();
+    if (!should_exit_) {                                     // sub_30F98 + 12F2A + 5E9E8
+        clear_black();
+        draw_target_units();                                 // 12F2A targets
+        battle_draw_unit_now(unit_index);                    // 12F2A caster
+        battle_fx_commit();                                  // sub_5E9E8
+        wait_game_tick();                                    // sub_499E4
     }
     for (int pct = 0; pct <= 0x64 && !should_exit_; pct += 4) {
         pal_scale_range(0, 0x100, &battle_palette_[0][0], pct);
@@ -333,8 +357,8 @@ int CombatII::battle_fx_31283_anim(int unit_index) {
     // column of entry [f+1] at 10h spacing from by-19h down to by-C9h. There is no
     // second blit of [f+1] at the target itself.
     auto column_trail = [&](int k, int f) {
-        const int bx = screen_x(saved_x[(size_t)k]) + 0x0C;
-        const int by = screen_y(saved_y[(size_t)k]) + 0x0C;
+        const int bx = target_screen_x(k) + 0x0C;
+        const int by = target_screen_y(k) + 0x0C;
         if (f < 0 || f + 1 >= nframes) return;
         const MagicFxFrame& fr = magic_frames_[(size_t)f];
         const MagicFxFrame& fr2 = magic_frames_[(size_t)(f + 1)];
@@ -356,11 +380,11 @@ int CombatII::battle_fx_31283_anim(int unit_index) {
         for (int pass = 0; pass < 4 && !should_exit_; ++pass) {
             sub_frame = (sub_frame + 2 > 8) ? 3 : sub_frame + 2;
             for (int rep = 0; rep < 3 && !should_exit_; ++rep) {
-                shake_world();                               // sub_30F98 + 454B3
+                clear_black();                               // sub_30F98
                 for (int k = 0; k < count; ++k) {
                     height[(size_t)k] = (int16_t)std::max(0, (int)height[(size_t)k] - (int)speed[(size_t)k]);
-                    const int bx = screen_x(saved_x[(size_t)k]) + 0x0F;
-                    const int by = screen_y(saved_y[(size_t)k]) - height[(size_t)k];
+                    const int bx = target_screen_x(k) + 0x0F;
+                    const int by = target_screen_y(k) - height[(size_t)k];
                     if (height[(size_t)k] != 0) {
                         // loc_31C79: dword_F0E72 is NSP entry 16; dword_F0E6E supplies
                         // its +4 (x) / +6 (y) offsets.
@@ -397,13 +421,17 @@ int CombatII::battle_fx_31283_anim(int unit_index) {
                         }
                     }
                 }
+                battle_fx_flush();                           // target 5F305/30FD1 frames
+                draw_target_units();                         // 12F2A targets
                 // Caster frame: var_10 (= pass) == 3 uses F0DAA[0], otherwise var_10
                 const int cf = (pass == 3) ? 0 : pass;
                 if (cf < nframes) {
                     const MagicFxFrame& fr = magic_frames_[(size_t)cf];
                     battle_fx_blit(cf, anchor_x + fr.xo, anchor_y + fr.yo);  // sub_5EE51
                 }
-                battle_fx_present();
+                battle_fx_flush();                           // caster 5EE51 frame
+                battle_draw_unit_now(unit_index);            // 12F2A caster
+                battle_fx_commit();                          // sub_5E9E8
                 wait_game_tick();
             }
         }
@@ -416,16 +444,20 @@ int CombatII::battle_fx_31283_anim(int unit_index) {
             sub_frame = (sub_frame + 2 > 8) ? 3 : sub_frame + 2;
             const int f = (edi == 3) ? 0 : edi;
             for (int rep = 0; rep < 3 && !should_exit_; ++rep) {
-                shake_world();                               // sub_30F98 + 454B3
+                clear_black();                               // sub_30F98
                 for (int k = 0; k < count; ++k) {            // loc_31DD3
                     column_trail(k, sub_frame);              // 30FD1
                     wobble(k);                               // 3108E
                 }
+                battle_fx_flush();                           // target 30FD1 frames
+                draw_target_units();                         // 12F2A targets
                 if (f < nframes) {
                     const MagicFxFrame& fr = magic_frames_[(size_t)f];
                     battle_fx_blit(f, anchor_x + fr.xo, anchor_y + fr.yo);
                 }
-                battle_fx_present();
+                battle_fx_flush();                           // caster 5EE51 frame
+                battle_draw_unit_now(unit_index);            // 12F2A caster
+                battle_fx_commit();                          // sub_5E9E8
                 wait_game_tick();
             }
         }
@@ -441,16 +473,20 @@ int CombatII::battle_fx_31283_anim(int unit_index) {
         for (int esi = 9; esi <= 0x0B && !should_exit_; ++esi) {
             sub_frame = (sub_frame + 2 > 8) ? 3 : sub_frame + 2;
             for (int rep = 0; rep < 3 && !should_exit_; ++rep) {
-                shake_world();                               // sub_30F98 + 454B3
+                clear_black();                               // sub_30F98
                 for (int k = 0; k < count; ++k) {            // loc_31F26
                     column_trail(k, sub_frame);              // 30FD1
                     wobble(k);                               // 3108E
                 }
+                battle_fx_flush();                           // target 30FD1 frames
+                draw_target_units();                         // 12F2A targets
                 if (esi < nframes) {
                     const MagicFxFrame& fr = magic_frames_[(size_t)esi];
                     battle_fx_blit_tinted_unclipped(esi, base_x + fr.xo, base_y + fr.yo, 0x50); // 5F29D
                 }
-                battle_fx_present();
+                battle_fx_flush();                           // caster 5F29D frame
+                battle_draw_unit_now(unit_index);            // 12F2A caster
+                battle_fx_commit();                          // sub_5E9E8
                 wait_game_tick();
             }
         }
@@ -468,11 +504,14 @@ int CombatII::battle_fx_31283_anim(int unit_index) {
     while (!should_exit_) {
         C.y = (int8_t)(C.y - 1);                             // dec [ebp+1]
         const bool off_top = screen_y(C.y) < 0;              // sub_10988 < 0
-        shake_world();                                       // sub_30F98 + 454B3
+        clear_black();                                       // sub_30F98
         for (int k = 0; k < count; ++k) {                    // loc_3204D
             column_trail(k, sub_frame);                      // 30FD1
             wobble(k);                                       // 3108E
         }
+        battle_fx_flush();                                   // target 30FD1 frames
+        draw_target_units();                                 // 12F2A targets
+        battle_draw_unit_now(unit_index);                    // 12F2A caster
         battle_fx_commit();
         wait_game_tick();
         sfx(0x34);
@@ -482,11 +521,13 @@ int CombatII::battle_fx_31283_anim(int unit_index) {
     int sil_dy = 0;                                          // var_60
     int sil_n = 0;                                           // var_24
     while (!should_exit_ && sil_dx >= -0x64) {
-        shake_world();
+        clear_black();                                       // sub_30F98
         for (int k = 0; k < count; ++k) {                    // loc_32130
             column_trail(k, sub_frame);                      // 30FD1
             wobble(k);                                       // 3108E
         }
+        battle_fx_flush();                                   // target 30FD1 frames
+        draw_target_units();                                 // 12F2A targets
         if (sil) {
             if (sil_n > 0) {                                 // var_24 > 0
                 int rows = (sil_n < 6) ? 6 : sil_n;           // var_3C = max(var_24,6)
@@ -521,16 +562,19 @@ int CombatII::battle_fx_31283_anim(int unit_index) {
                 if (uint8_t* bb = video_.get_backbuffer())
                     std::memset(bb, 1, (size_t)SCREEN_W * SCREEN_H);
             } else {
-                shake_world();                           // 30F98 + 454B3
+                clear_black();                           // 30F98
                 for (int k = 0; k < count; ++k) {        // loc_322F1
                     column_trail(k, sub_frame);          // 30FD1
                     wobble(k);                           // 3108E
                 }
+                battle_fx_flush();                       // target 30FD1 frames
+                draw_target_units();                     // 12F2A targets
             }
             if (di < nframes) {
                 const MagicFxFrame& fr = magic_frames_[(size_t)di];
                 battle_fx_blit_tinted_unclipped(di, fr.xo, 0x61 + fr.yo, 0x50); // sub_5F29D
             }
+            battle_fx_flush();                           // 5F29D frame
             battle_fx_commit();
             wait_game_tick();
         }
@@ -542,12 +586,15 @@ int CombatII::battle_fx_31283_anim(int unit_index) {
     //   5FA2C 0..64h (+4) -> 5F9AE -> 44D6E(0) -> BA838 = 0 -> [64h] = 4 -> 11E04 for all ->
     //   restore [63h] -> 12124 for all -> 2CAF7(0Ah, 3E8h) -> 103A0 -> 61115.
     C.y = saved_caster_y;                                    // loc_32394: mov [ebp+1],al (var_18)
+    video_.clear();                                          // 32394: memset(...,0,17700h)
     for (int k = 0; k < count; ++k) {                        // loc_323E2
         column_trail(k, sub_frame);                          // 30FD1
         wobble(k);                                           // 3108E
     }
-    battle_fx_present();
-    wait_game_tick();
+    battle_fx_flush();                                       // target 30FD1 frames
+    draw_target_units();                                     // 12F2A targets
+    battle_fx_commit();                                      // sub_5E9E8
+    wait_game_tick();                                        // sub_499E4
     battle_nsp_release();                                    // sub_1FFCD (before 310DE)
     // ---- 310DE: 0xFA00 snapshot scan transition (ASM 45543..45641) ----
     //     - Snapshot: copy the 200x320 display to the 0xFA00 buffer (row stride 320).
