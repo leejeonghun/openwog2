@@ -873,8 +873,9 @@ void CombatII::battle_fx_37fa4_anim(int unit_index) {
 //       di = facing block: south 22h, west 0, north 3Ch, east 11h.
 //       varA/varB = south/north (7,8), west/east (8,7) - the two groups are opposite.
 //     (2) tail 33 frames: re-anchor to 10971+0Ch / 10988-2, 4F4CD(32h), then F0DAA
-//         12h..1Ah three frames each and 13h six frames (no unit redraw).
-//     (3) 5F9AE, 44D6E(0), 44D75, 11E04(caster), 12124(caster), damage
+//         di+1..di+9 three frames each and di+1 six frames (di = 0/9/12h/1Bh for
+//         west/east/south/north). The six frames shake the targets +5, -0Ah/+0Ah x3, -5.
+//     (3) [64h]=4, 5F9AE, 44D6E(0), 44D75, 11E04(caster), 12124(targets), damage
 //         (1D770/2CACA/45BFB/45ED2/287AF), 1FFCD, 103A0
 //   Damage happens after the effect, so the caller battle_weapon_34c48 applies it.
 void CombatII::battle_fx_34c48_anim(int unit_index) {
@@ -904,8 +905,10 @@ void CombatII::battle_fx_34c48_anim(int unit_index) {
     static const int kYA[4] = {0x10, -3, -0x10, -3};
     static const int kXB[4] = {0, 0, 0, 0x14};
     static const int kYB[4] = {0x1C, -0x12, -0x1E, 0x06};
-    static const int kShiftX[4] = {-1, 1, 0, 0};
-    static const int kShiftY[4] = {0, 0, 1, -1};
+    // loc_34F45/loc_34F67 etc: one axis per facing, not both.
+    static const int kShiftX[4] = {0, -1, 0, 1};                 // south, west, north, east
+    static const int kShiftY[4] = {1, 0, -1, 0};
+    static const int kTailBase[4] = {0x12, 0x00, 0x1B, 0x09};     // south, west, north, east
     const int dir = kBase[f];
     auto blit = [&](int frame, int xo, int yo) {                          // 5EE51
         if (frame < 0 || (size_t)frame >= magic_frames_.size()) return;
@@ -946,7 +949,8 @@ void CombatII::battle_fx_34c48_anim(int unit_index) {
         shift_targets();
         for (int k = 0; k < 3 && !should_exit_; ++k) frame(7, -1, 0, 0);
     }
-    // (2) Tail: re-anchor to 10971+0Ch / 10988-2, then 12h..1Ah three frames each, 13h six.
+    // (2) Tail: re-anchor to 10971+0Ch / 10988-2, then di+1..di+9 three frames each,
+    //     then di+1 six more frames while the targets shake +5/-0Ah/+0Ah/-5.
     const int tx = (A.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X + 0x0C;
     const int ty = (A.y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y - 2;
     auto tail = [&](int frame) {
@@ -959,11 +963,28 @@ void CombatII::battle_fx_34c48_anim(int unit_index) {
         battle_fx_commit();                                               // 5E9E8
         wait_game_tick();                                                 // 499E4
     };
+    auto shift_targets_x = [&](int dx) {
+        for (int ti : battle_target_list_) {
+            if (ti < 0 || (size_t)ti >= units_.size()) continue;
+            units_[(size_t)ti].walk_off_x += dx;
+        }
+    };
+    const int tail_base = kTailBase[f];
     sfx(0x32);                                                            // 4F4CD(32h)
-    for (int fr = 0x12; fr <= 0x1A && !should_exit_; ++fr)
-        for (int k = 0; k < 3 && !should_exit_; ++k) tail(fr);
-    for (int k = 0; k < 6 && !should_exit_; ++k) tail(0x13);
-    // (3)
+    for (int j = 0; j < 9 && !should_exit_; ++j)
+        for (int k = 0; k < 3 && !should_exit_; ++k) tail(tail_base + 1 + j);
+    // loc_35332: +5, then three pairs of -0Ah/+0Ah, then -5.
+    shift_targets_x(5);
+    for (int k = 0; k < 3 && !should_exit_; ++k) {
+        shift_targets_x(-0x0A); tail(tail_base + 1);
+        shift_targets_x(0x0A); tail(tail_base + 1);
+    }
+    shift_targets_x(-5);
+    // (3) [64h] = 4, then 12124 for every collected target.
+    A.anim_frame = 4;
+    for (int ti : battle_target_list_) {
+        if (ti >= 0 && (size_t)ti < units_.size()) reset_unit_pose(units_[(size_t)ti]);
+    }
     pal_load_range(0, 256, &battle_palette_[0][0]);                       // 5F9AE
     battle_dim_row0_ = false;                                            // 44D6E(0)
     battle_highlight_clear();                                            // 44D75
@@ -1427,6 +1448,9 @@ bool CombatII::battle_fx_32bcb_anim(int unit_index) {
     battle_dim_row0_ = false;                                              // 44D6E(0)
     A.anim_frame = 4;                                                      // [64h] = 4 (pose 0)
     A.facing = saved_facing;                                               // restore [63h]
+    for (int ti : battle_target_list_) {                                  // 12124 x CNT
+        if (ti >= 0 && (size_t)ti < units_.size()) reset_unit_pose(units_[(size_t)ti]);
+    }
     battle_weapon_2caf7_loop(unit_index, 4, 0);                            // 2CAF7(4, 0)
     battle_nsp_release();                                                  // 1FFCD
     weather_tick_enabled_ = true;                                          // 103A0
@@ -1549,7 +1573,8 @@ void CombatII::battle_fx_367ee_anim(int unit_index) {
     }
     for (int ti : battle_target_list_) {                                  // 1214F
         if (ti < 0 || (size_t)ti >= units_.size()) continue;
-        units_[(size_t)ti].anim_frame = 0;
+        auto& T = units_[(size_t)ti];
+        T.anim_frame = (T.sprite_type < 0x12C) ? (uint8_t)0x0A : (uint8_t)0x00;
     }
     // Spawn: x/y come from the caller, velocity = -(3+rand(3)) / +(3+rand(3)) x flt_77ADA
     // (0.25) or / dbl_77AEA (1.2), life = 0Fh + rand(0Fh).
@@ -1634,8 +1659,7 @@ void CombatII::battle_fx_367ee_anim(int unit_index) {
     battle_highlight_clear();                                             // 44D75
     A.facing = saved_facing;                                              // restore [63h]
     for (int ti : battle_target_list_) {                                  // 12124
-        if (ti < 0 || (size_t)ti >= units_.size()) continue;
-        units_[(size_t)ti].anim_frame = 0;
+        if (ti >= 0 && (size_t)ti < units_.size()) reset_unit_pose(units_[(size_t)ti]);
     }
     battle_weapon_2caf7_loop(unit_index, 4, 0x1770);                       // 2CAF7(4, 1770h)
     battle_nsp_release();                                                 // 1FFCD

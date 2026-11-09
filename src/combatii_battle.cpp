@@ -11008,7 +11008,6 @@ int CombatII::battle_weapon_34c48(int unit_index) {
         }
     }
     run_unit_hp_trigger(unit_index, -1, 1);
-    reset_unit_pose(units_[(size_t)unit_index]);
     game_timer_set(6);
     return 1;
 }
