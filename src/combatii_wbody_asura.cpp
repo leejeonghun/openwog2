@@ -107,7 +107,11 @@
 //     its 480-wide row padding; the port clips them to the visible 320 columns. That
 //     diagonal split is reproduced as-is.
 //     61115 (release tint LUT) is a no-op because the port caches no LUT; the two palette
-//     ramps run through 5FA2C(0..100h) and 499E4.
+//     ramps run through 5FA2C(0..100h), present each DAC step and wait for it to be shown,
+//     then consume one 499E4 tick.
+//   - 5FA2C's 5E943 retrace is approximated with Video::present + Video::wait_presented so
+//     every palette step is actually displayed. This follows the monitor (typically 60Hz)
+//     instead of the original 70Hz retrace, making the ramps slightly slower.
 //   - Frame selection in (7)(8)(9) uses unk_F0DAA entry offsets, and magic_frames_ holds
 //     the same order, so it is expressed as frame numbers (0..8, reusing 0). The 12-frame
 //     column at 10h spacing in 30FD1 follows the same rule.
@@ -333,9 +337,18 @@ int CombatII::battle_fx_31283_anim(int unit_index) {
         }
     }
     game_timer_set(1);                                       // sub_1033B(1); 32h is the esi palette start
-    for (int pct = 0x32; pct >= 0 && !should_exit_; pct -= 4) {
+    // sub_5FA2C writes one DAC step after 5E943. pal_scale_range is immediate, so present
+    // the new palette and wait for that frame to reach the screen before the 499E4 tick.
+    auto fade_palette_step = [&](int pct) {
         pal_scale_range(0, 0x100, &battle_palette_[0][0], pct);   // sub_5FA2C
-        wait_game_tick();
+        if (!auto_advance_) {
+            video_.present();
+            video_.wait_presented();                              // sub_5E943 (display frame)
+        }
+        wait_game_tick();                                         // sub_499E4
+    };
+    for (int pct = 0x32; pct >= 0 && !should_exit_; pct -= 4) {
+        fade_palette_step(pct);
     }
     if (!should_exit_) {                                     // sub_30F98 + 12F2A + 5E9E8
         clear_black();
@@ -345,8 +358,7 @@ int CombatII::battle_fx_31283_anim(int unit_index) {
         wait_game_tick();                                    // sub_499E4
     }
     for (int pct = 0; pct <= 0x64 && !should_exit_; pct += 4) {
-        pal_scale_range(0, 0x100, &battle_palette_[0][0], pct);
-        wait_game_tick();
+        fade_palette_step(pct);
     }
 
     // ---- (6)(7) falling strike (loc_3196F / loc_31A5E) ----
@@ -673,12 +685,7 @@ int CombatII::battle_fx_31283_anim(int unit_index) {
     }
     game_timer_set(1);                                       // sub_1033B(1); 64h is the esi palette start
     for (int pct = 0x64; pct >= 0 && !should_exit_; pct -= 4) {   // 5FA2C fade down
-        // 5FA2C starts with 5E943, one vertical-retrace wait. pal_scale_range is
-        // immediate, so hold one retrace per step; the following 499E4 then sees
-        // the one-tick game timer already elapsed, as it does in the original.
-        if (!auto_advance_) SDL_Delay(14);                   // sub_5E943 (~70Hz)
-        pal_scale_range(0, 0x100, &battle_palette_[0][0], pct);
-        wait_game_tick();
+        fade_palette_step(pct);
     }
     if (!should_exit_) {
         battle_fx_world();                                   // 454B3 + 12F2A for all
@@ -686,9 +693,7 @@ int CombatII::battle_fx_31283_anim(int unit_index) {
         wait_game_tick();
     }
     for (int pct = 0; pct <= 0x64 && !should_exit_; pct += 4) {   // 5FA2C fade up
-        if (!auto_advance_) SDL_Delay(14);                   // sub_5E943 (~70Hz)
-        pal_scale_range(0, 0x100, &battle_palette_[0][0], pct);
-        wait_game_tick();
+        fade_palette_step(pct);
     }
     pal_load_range(0, 0x100, &battle_palette_[0][0]);        // sub_5F9AE master palette
     battle_dim_row0_ = false;                                // sub_44D6E(0)
