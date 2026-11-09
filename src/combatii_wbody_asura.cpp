@@ -85,8 +85,11 @@
 //   - Per-unit 12F2A calls use battle_draw_unit_now at the same points as the original. On
 //     the cleared stages the port draws one target, flushes its queued effects, draws that
 //     target, and only then moves to the next target, matching the ASM's effect/12F2A order.
-//   - 11EE4/11E04 (release/re-occupy) are replaced by the units_ model and the renderer;
-//     1214F is the target anim_frame assignment in (6); reset_unit_pose is called from the tail.
+//   - 11EE4/11E04 only touch the CC998 occupancy grid. The port derives occupancy from
+//     units_, and neither the presentation nor the 2CAF7 tail performs an occupancy lookup.
+//     1214F is the target anim_frame assignment in (6). The tail's 12124 maps to
+//     reset_unit_pose; its extra port-only knock_dx/dy clear is overwritten by 2CAF7 for
+//     every damaged target.
 //   - 61147/6104A/61115 (LUT setup and restore) are covered by the port's palette path;
 //     103A8/103A0 map to weather_tick_enabled_.
 //   - 30F98 clears the visible 200x480 viewport to colour 0 and toggles the 1px shake. The
@@ -358,7 +361,7 @@ int CombatII::battle_fx_31283_anim(int unit_index) {
         color[(size_t)k] = 0;
         height[(size_t)k] = (int16_t)(k * 0x64 + 0xC8);      // imul ebx,edi,64h; add ebx,0C8h
     }
-    // sub_3108E: shake target [65h] by 0 -> -2, 1 -> +4, 2 -> -4
+    // sub_3108E: byte state 0 -> 1 (-2), 1 -> 2 (+4), 2 -> 1 (-4); other values do nothing.
     std::vector<uint8_t> wob((size_t)count, 0);              // reuses the var_104 slot
     auto wobble = [&](int k) {
         CombatUnitPlacement* T = target_at(k);
@@ -366,7 +369,7 @@ int CombatII::battle_fx_31283_anim(int unit_index) {
         const uint8_t st = wob[(size_t)k];
         if (st == 0) { T->walk_off_x = (int8_t)(T->walk_off_x - 2); wob[(size_t)k] = 1; }
         else if (st == 1) { T->walk_off_x = (int8_t)(T->walk_off_x + 4); wob[(size_t)k] = 2; }
-        else { T->walk_off_x = (int8_t)(T->walk_off_x - 4); wob[(size_t)k] = 1; }
+        else if (st == 2) { T->walk_off_x = (int8_t)(T->walk_off_x - 4); wob[(size_t)k] = 1; }
     };
     // sub_30FD1(eax=&frame, edx=&target): entry [f] at the target, then a 12-step
     // column of entry [f+1] at 10h spacing from by-19h down to by-C9h. There is no
