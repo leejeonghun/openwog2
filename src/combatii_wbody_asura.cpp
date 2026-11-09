@@ -58,8 +58,9 @@
 //   (10) 322CB: di = 0Ch..0Fh, 3 frames each, 5F29D(di) at y+61h (di == 0Dh is a buffer
 //       memset).
 //   (11) Tail (46824..46913): 5E9E8+499E4 -> 1FFCD -> 310DE (0xFA00 buffer screen
-//       transition) -> 1033B(64h) -> 5FA2C 64h..0 (-4, 499E4 each step) -> 454B3 + 12F2A
-//       for all + 5E9E8+499E4 -> 5FA2C 0..64h (+4) -> 5F9AE -> 44D6E(0) -> BA838 = 0 ->
+//       transition) -> 1033B(64h) -> 5FA2C 64h..0 (-4, 5E943 then 499E4 each step) ->
+//       454B3 + 12F2A for all + 5E9E8+499E4 -> 5FA2C 0..64h (+4, 5E943 then 499E4 each
+//       step) -> 5F9AE -> 44D6E(0) -> BA838 = 0 ->
 //       [64h] = 4 -> 11E04 for all -> restore [63h] -> 12124 for all ->
 //       2CAF7(caster, ebx=0Ah, edx=3E8h) -> 103A0/61115 -> eax = 1.
 //       The 310DE 0xFA00 scan transition and both palette ramps run in the port.
@@ -672,6 +673,10 @@ int CombatII::battle_fx_31283_anim(int unit_index) {
     }
     game_timer_set(1);                                       // sub_1033B(1); 64h is the esi palette start
     for (int pct = 0x64; pct >= 0 && !should_exit_; pct -= 4) {   // 5FA2C fade down
+        // 5FA2C starts with 5E943, one vertical-retrace wait. pal_scale_range is
+        // immediate, so hold one retrace per step; the following 499E4 then sees
+        // the one-tick game timer already elapsed, as it does in the original.
+        if (!auto_advance_) SDL_Delay(14);                   // sub_5E943 (~70Hz)
         pal_scale_range(0, 0x100, &battle_palette_[0][0], pct);
         wait_game_tick();
     }
@@ -681,6 +686,7 @@ int CombatII::battle_fx_31283_anim(int unit_index) {
         wait_game_tick();
     }
     for (int pct = 0; pct <= 0x64 && !should_exit_; pct += 4) {   // 5FA2C fade up
+        if (!auto_advance_) SDL_Delay(14);                   // sub_5E943 (~70Hz)
         pal_scale_range(0, 0x100, &battle_palette_[0][0], pct);
         wait_game_tick();
     }
