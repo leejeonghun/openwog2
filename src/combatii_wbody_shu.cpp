@@ -106,8 +106,8 @@ int CombatII::battle_fx_377a6_anim(int unit_index) {
 
     // ---- 3. anchor and facing block ----
     const int block = (facing == 1 || facing == 3) ? 0 : 0x10;           // mov ecx,0/10h
-    int ax = (A.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + UNIT_ANCHOR_X + 0x0C; // 10971+0Ch
-    int ay = (A.y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + UNIT_ANCHOR_Y - 2;    // 10988-2
+    int ax = (A.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X + 0x0C; // 10971+0Ch
+    int ay = (A.y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y - 2;    // 10988-2
     for (int ti : targets) {                                             // sub_1214F
         if (ti < 0 || (size_t)ti >= units_.size()) continue;
         auto& T = units_[(size_t)ti];

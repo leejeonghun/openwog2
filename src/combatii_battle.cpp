@@ -1265,7 +1265,7 @@ bool CombatII::apply_knockback_hit(CombatUnitPlacement& t, int tidx, int frame) 
 
 // sub_12124: pose = (class 0 && [56h] != -1 && not flying) ? 3 : 0, pixel offset 0.
 void CombatII::reset_unit_pose(CombatUnitPlacement& u) {
-    u.anim_frame = (u.sprite_type < 0x12C && !u.flying) ? 3 : 0;
+    u.anim_frame = (u.sprite_type < 0x12C && u.battle_gauge != 0xFF && !u.flying) ? 3 : 0;
     u.walk_off_x = u.walk_off_y = 0;
     u.knock_dx = u.knock_dy = 0;
 }
@@ -10873,7 +10873,7 @@ int CombatII::battle_weapon_2caf7_loop(int unit_index, int mul, int add) {
     }
     A.combat_value_44 = orig44; // restore [44h]
     run_unit_hp_trigger(unit_index, -1, 1); // sub_1ED45(ebp) + sub_287AF presentation stub
-    reset_unit_pose(units_[(size_t)unit_index]); // sub_12124
+    // sub_2CAF7 ends at sub_1ED45 and does not call sub_12124; the caller owns the pose.
     game_timer_set(6);
     return 1;
 }

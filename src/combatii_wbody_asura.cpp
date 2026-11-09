@@ -89,7 +89,8 @@
 //     103A8/103A0 map to weather_tick_enabled_.
 //   - 30F98 clears the visible 200x480 viewport and toggles the 1px shake. The port has no
 //     separate cleared canvas, so the shake is kept and the battle world is redrawn, which
-//     leaves the map visible behind stages (6)-(10) instead of a cleared field.
+//     leaves the map visible behind stages (6)-(10) instead of a cleared field. The one
+//     explicit clear in (10) (di == 0Dh, colour 1) is applied to the backbuffer instead.
 //   - 310DE was measured as 7 passes (var_4 += 8); each pass memsets the whole display
 //     (17700h) and then rebuilds each row from the snapshot via loop A ((200-y)*8/5, left,
 //     starting row var_8 = pass*5) and loop B (y*8/5, right). That scan transition is
@@ -167,12 +168,14 @@ int CombatII::battle_fx_31283_anim(int unit_index) {
         if (ti < 0 || (size_t)ti >= units_.size()) return nullptr;
         return &units_[(size_t)ti];
     };
-    // 10971/10988: tile -> screen coordinates (same UNIT_ANCHOR convention as fx_weapon.cpp)
+    // sub_10971/sub_10988: tile origin, i.e. TILE_ANCHOR (4,4), not the unit-sprite anchor.
+    // The particle lines and NSP blits are positioned from this origin; using
+    // UNIT_ANCHOR_X/Y shifts the first effect 12px right and 2px up.
     auto screen_x = [&](int8_t tx) {
-        return ((int)tx - (int)cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + UNIT_ANCHOR_X;
+        return ((int)tx - (int)cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X;
     };
     auto screen_y = [&](int8_t ty) {
-        return ((int)ty - (int)cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + UNIT_ANCHOR_Y;
+        return ((int)ty - (int)cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y;
     };
     // sub_30F61/sub_30F98: toggle dword_BA838 between 1 and -1, then redraw (454B3).
     auto shake_world = [&]() {
@@ -326,9 +329,9 @@ int CombatII::battle_fx_31283_anim(int unit_index) {
         else if (st == 1) { T->walk_off_x = (int8_t)(T->walk_off_x + 4); wob[(size_t)k] = 2; }
         else { T->walk_off_x = (int8_t)(T->walk_off_x - 4); wob[(size_t)k] = 1; }
     };
-    // sub_30FD1(eax=&frame, edx=&target): frame [f] and [f+1] at the target, then a
-    // 12-step column at 10h spacing from by-19h down to by-C9h. Both the column offsets
-    // and the column pixels come from entry [f+1].
+    // sub_30FD1(eax=&frame, edx=&target): entry [f] at the target, then a 12-step
+    // column of entry [f+1] at 10h spacing from by-19h down to by-C9h. There is no
+    // second blit of [f+1] at the target itself.
     auto column_trail = [&](int k, int f) {
         const int bx = screen_x(saved_x[(size_t)k]) + 0x0C;
         const int by = screen_y(saved_y[(size_t)k]) + 0x0C;
@@ -336,7 +339,6 @@ int CombatII::battle_fx_31283_anim(int unit_index) {
         const MagicFxFrame& fr = magic_frames_[(size_t)f];
         const MagicFxFrame& fr2 = magic_frames_[(size_t)(f + 1)];
         battle_fx_blit_tinted(f, bx + fr.xo, by + fr.yo, 0x50);
-        battle_fx_blit_tinted(f + 1, bx + fr2.xo, by + fr2.yo, 0x50);
         for (int j = 0; j < 12; ++j) {
             const int y = by - 0x19 - 0x10 * j;
             battle_fx_blit_tinted(f + 1, bx + fr2.xo, y + fr2.yo, 0x50);
@@ -511,14 +513,20 @@ int CombatII::battle_fx_31283_anim(int unit_index) {
     // ---- (10) di = 0Ch..0Fh, 3 frames each, 5F29D (loc_322CB) ----
     for (int di = 0x0C; di <= 0x0F && !should_exit_; ++di) {
         for (int rep = 0; rep < 3 && !should_exit_; ++rep) {
-            shake_world();                               // 30F98 + 454B3
-            for (int k = 0; k < count; ++k) {            // loc_322F1
-                column_trail(k, sub_frame);              // 30FD1
-                wobble(k);                               // 3108E
-            }
             if (di == 0x0D) {
-                // loc_32347: memset(loc_17700, 0, 0BB80h); skipped, the port has no such buffer.
-            } else if (di < nframes) {
+                // loc_32347: memset(dword_755CC+0BB80h, 1, 17700h) clears the visible
+                // canvas, then loc_32360 still blits entry 0Dh over it. 30F98 and the
+                // target effects are skipped for this frame.
+                if (uint8_t* bb = video_.get_backbuffer())
+                    std::memset(bb, 1, (size_t)SCREEN_W * SCREEN_H);
+            } else {
+                shake_world();                           // 30F98 + 454B3
+                for (int k = 0; k < count; ++k) {        // loc_322F1
+                    column_trail(k, sub_frame);          // 30FD1
+                    wobble(k);                           // 3108E
+                }
+            }
+            if (di < nframes) {
                 const MagicFxFrame& fr = magic_frames_[(size_t)di];
                 battle_fx_blit_tinted_unclipped(di, fr.xo, 0x61 + fr.yo, 0x50); // sub_5F29D
             }

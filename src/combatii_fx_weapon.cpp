@@ -886,8 +886,8 @@ void CombatII::battle_fx_34c48_anim(int unit_index) {
     }
     weather_tick_enabled_ = false;                                       // 103A8
     game_timer_set(5);                                                   // 1033B(5)
-    const int ax = (A.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + UNIT_ANCHOR_X + 0x0C;
-    const int ay = (A.y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + UNIT_ANCHOR_Y - 4;
+    const int ax = (A.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X + 0x0C;
+    const int ay = (A.y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y - 4;
     for (int ti : battle_target_list_) battle_highlight_add(ti);          // 44D89 all targets
     battle_dim_row0_ = true;                                             // 44D6E(1, 28h)
     fx_pal_mix(0x60, 0x100, 0, 0x28);                                    // 30824(0, 28h)
@@ -947,8 +947,8 @@ void CombatII::battle_fx_34c48_anim(int unit_index) {
         for (int k = 0; k < 3 && !should_exit_; ++k) frame(7, -1, 0, 0);
     }
     // (2) Tail: re-anchor to 10971+0Ch / 10988-2, then 12h..1Ah three frames each, 13h six.
-    const int tx = (A.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + UNIT_ANCHOR_X + 0x0C;
-    const int ty = (A.y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + UNIT_ANCHOR_Y - 2;
+    const int tx = (A.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X + 0x0C;
+    const int ty = (A.y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y - 2;
     auto tail = [&](int frame) {
         battle_fx_world();                                                // 454B3
         battle_fx_overlay();
@@ -1020,8 +1020,8 @@ void CombatII::battle_fx_32589_anim(int unit_index, int target_index) {
     battle_dim_row0_ = true;                                            // 44D6E(1, 0Ah)
     fx_pal_mix(0x60, 0x100, 0, 0x0A);                                   // 30824(0, 10h)
     game_timer_set(5);                                                  // 1033B(5)
-    const int ax = (A.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + UNIT_ANCHOR_X + 0x0B;
-    const int ay = (A.y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + UNIT_ANCHOR_Y - 2;
+    const int ax = (A.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X + 0x0B;
+    const int ay = (A.y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y - 2;
     sfx(0x32);                                                          // 4F4CD(32h)
     const bool target_before = ((A.facing & 3) != 0);                    // facing != 0 draws the target before the effect
     auto blit = [&](int frame) {
@@ -1067,8 +1067,8 @@ void CombatII::battle_fx_32589_anim(int unit_index, int target_index) {
     }
     // (9) 36-frame tail: target anchor plus a pose-0 D66A8 sprite smear.
     const auto& T = units_[(size_t)target_index];
-    const int tx = (T.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + UNIT_ANCHOR_X + 0x0C;
-    const int ty = (T.y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + UNIT_ANCHOR_Y - 2;
+    const int tx = (T.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X + 0x0C;
+    const int ty = (T.y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y - 2;
     const NC2Frame* tfr = nc2_frame_for(T.sprite_type, T.facing & 3, 0);  // D66A8 pose 0
     const int impact = dir_base + 9;                                     // var_C + 9
     sfx(0x33);                                                           // 4F4CD(33h)
@@ -1149,8 +1149,8 @@ bool CombatII::battle_fx_32bcb_anim(int unit_index) {
     A.anim_frame = 8;                                                      // [64h] = 8
     const int ax = (A.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + UNIT_ANCHOR_X;
     const int ay = (A.y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + UNIT_ANCHOR_Y;
-    const int var54 = ax + 0x0C;                                           // 10971+0Ch
-    const int si_y = ay - 2;                                               // 10988-2
+    const int var54 = (A.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X + 0x0C; // 10971+0Ch
+    const int si_y = (A.y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y - 2;    // 10988-2
     game_timer_set(0x0C);                                                  // 1033B(0Ch)
     const NC2Frame* fr8 = nc2_frame_for(A.sprite_type, 0, 8);              // D66A8 pose 8
     const NC2Frame* fr9 = nc2_frame_for(A.sprite_type, 0, 9);              // D66A8 pose 9
@@ -1198,8 +1198,8 @@ bool CombatII::battle_fx_32bcb_anim(int unit_index) {
             const int ui = battle_target_list_[(size_t)i];
             if (ui < 0 || (size_t)ui >= units_.size()) continue;
             const auto& U = units_[(size_t)ui];
-            const int ux = (U.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + UNIT_ANCHOR_X + 0x0C;
-            const int uy = (U.y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + UNIT_ANCHOR_Y + 2;
+            const int ux = (U.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X + 0x0C;
+            const int uy = (U.y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y + 2;
             const MagicFxFrame& e = magic_frames_[(size_t)idx];
             battle_fx_blit_tinted_unclipped(idx, ux + e.xo, uy + e.yo, 70); // 5F29D (61147 1Fh,46h)
             if (v >= 0x26 && v < 0x64 && 31 < nframes && 29 < nframes) {
@@ -1475,8 +1475,8 @@ void CombatII::battle_fx_367ee_anim(int unit_index) {
     A.facing = 0;
     for (int ti : battle_target_list_) battle_highlight_add(ti);          // 44D89
     game_timer_set(8);                                                    // 1033B(8)
-    const int ax0 = (A.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + UNIT_ANCHOR_X;
-    const int ay0 = (A.y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + UNIT_ANCHOR_Y;
+    const int ax0 = (A.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X;
+    const int ay0 = (A.y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y;
     const int si = ax0 + 0x0C;                                            // 10971+0Ch
     const int di = ay0 - 2;                                               // 10988-2
     // F106A/F1064/F1066 alias [+8]/[+2]/[+4] of the F0DAA[58] record, not separate globals
@@ -1850,9 +1850,8 @@ void CombatII::battle_fx_3aee8_anim(int unit_index) {
     battle_dim_row0_ = false;                                              // 44D6E(0)
     battle_highlight_clear();                                              // 44D75
     A.facing = saved_facing;                                               // restore [63h]
-    for (int ti : battle_target_list_) {                                   // 12124
-        if (ti < 0 || (size_t)ti >= units_.size()) continue;
-        units_[(size_t)ti].anim_frame = 0;
+    for (int ti : battle_target_list_) {                                  // 12124
+        if (ti >= 0 && (size_t)ti < units_.size()) reset_unit_pose(units_[(size_t)ti]);
     }
     battle_weapon_2caf7_loop(unit_index, 3, 0x1B58);                        // 2CAF7(3, 1B58h)
     weather_tick_enabled_ = true;                                          // 103A0

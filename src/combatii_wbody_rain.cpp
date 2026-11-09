@@ -45,7 +45,7 @@
 //   454B3 -> battle_fx_world(+flush)+overlay, 5E9E8 -> battle_fx_commit,
 //   499E4 -> wait_game_tick, 4F4CD -> sfx, 499BD -> combat_rand,
 //   5EFB9 -> fx_blit_nsp (the caller adds the entry xo/yo because the original already
-//   does), 10971/10988 -> unit anchors in screen space, 1214F -> anim_frame (0Ah, or 0
+//   does), 10971/10988 -> tile anchors in screen space, 1214F -> anim_frame (0Ah, or 0
 //   for sprites >= 12Ch), 12F2A -> battle_draw_unit_now, 12124 -> reset_unit_pose,
 //   5F9AE -> pal_load_range, 1D770/2CACA/2CAF7 -> battle_weapon_2caf7_loop(2, 1B58h).
 //   6104A/6106C/103A0/11EE4/11E04 are palette-LUT and slot-occupancy details, omitted as
@@ -189,8 +189,8 @@ int CombatII::battle_fx_39a49_anim(int unit_index) {
     battle_highlight_clear();                                                  // sub_44D75
     for (int ti : battle_target_list_) battle_highlight_add(ti);               // 44D89
     game_timer_set(5);                                                         // sub_1033B(5)
-    const int anchor_x = (A.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + UNIT_ANCHOR_X; // sub_10971
-    const int anchor_y = (A.y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + UNIT_ANCHOR_Y; // sub_10988
+    const int anchor_x = (A.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X; // sub_10971
+    const int anchor_y = (A.y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y; // sub_10988
 
     // Step 6: facing branch. Intro frames, curtain entry and seed constants per the
     // table at the top of the file.
@@ -259,8 +259,8 @@ int CombatII::battle_fx_39a49_anim(int unit_index) {
     for (int r = 0; r < 13; ++r) {
         const int cx = centre_x + kDiamond[r][0];
         const int cy = centre_y + kDiamond[r][1];
-        dia_x[r] = (cx - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + UNIT_ANCHOR_X + 0x0C;
-        dia_y[r] = (cy - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + UNIT_ANCHOR_Y - 2;
+        dia_x[r] = (cx - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X + 0x0C;
+        dia_y[r] = (cy - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y - 2;
     }
 
     for (int i = 0; i < kSlots; ++i) {                                         // loc_39D50 / 3A026 / 3A2C6 / 3A59E
