@@ -792,9 +792,16 @@ void CombatII::battle_fx_37fa4_anim(int unit_index) {
     A.anim_frame = (uint8_t)(A.anim_frame + 1);                        // inc [64h]
     present_cutscene_frame();                                          // 45559 = 454B3 + 5E9E8
 
-    // (8) loc_381EF: the original advance (49ABC) already ran at loc_3809B before (3), so only
-    // the landing tile is computed here. The advance is at most 7 tiles and stops in front of
-    // a hostile unit (1D124 + 165C2 per tile, jmp loc_38102 at loc_3809B).
+    battle_fx_37fa4_dash_and_lightning(unit_index, true);
+}
+
+// loc_381EF..loc_38326: center on the caster, advance up to 7 tiles to the hostile in front,
+// dash with 12 afterimages, then the 9-frame irus lightning block.  A retarget from loc_38715
+// re-enters here with var_20 already recomputed.
+void CombatII::battle_fx_37fa4_dash_and_lightning(int unit_index, bool load_nsp) {
+    if (unit_index < 0 || (size_t)unit_index >= units_.size()) return;
+    auto& A = units_[(size_t)unit_index];
+    camera_center_on(A.x, A.y);                                        // 46DF1
     int dash_x = A.x, dash_y = A.y;
     const int dash_army = battle_effective_army(A);
     for (int i = 0; i < 7; ++i) {
@@ -817,17 +824,21 @@ void CombatII::battle_fx_37fa4_anim(int unit_index) {
         }
         dash_x = nx; dash_y = ny;
     }
-    fx_37fa4_rush(unit_index, dash_x, dash_y);                         // (8)
-    if (!battle_nsp_load("irus.nsp") || magic_frames_.empty()) {        // 1FEA4
-        if (battle_trace_) fprintf(stderr, "COMBAT: warning: 37FA4 unit=%d irus.nsp missing\n", A.id);
-        battle_dim_row0_ = false;
-        fx_pal_mix(0x00, 0x100, 0, 0);
+    fx_37fa4_rush(unit_index, dash_x, dash_y);                         // 3827D
+    if (load_nsp) {
+        if (!battle_nsp_load("irus.nsp") || magic_frames_.empty()) {    // 1FEA4
+            if (battle_trace_) fprintf(stderr, "COMBAT: warning: 37FA4 unit=%d irus.nsp missing\n", A.id);
+            battle_dim_row0_ = false;
+            fx_pal_mix(0x00, 0x100, 0, 0);
+            return;
+        }
+    } else if (magic_frames_.empty()) {
         return;
     }
     game_timer_set(9);                                                 // 1033B(9)
     fx_trail_reset();                                                  // 30544
 
-    // (7) 9 frames of lightning.
+    // loc_38326: 9 frames of lightning.
     const int nframes = (int)magic_frames_.size();
     for (int i = 0; i < 9 && !should_exit_; ++i) {
         battle_fx_world();                                             // 454B3
@@ -842,9 +853,8 @@ void CombatII::battle_fx_37fa4_anim(int unit_index) {
         battle_fx_commit();                                            // 5E9E8
         wait_game_tick();                                              // 499E4
     }
-    // After (7) (53921~53926): sub_1214F(first target) -> pose 0Ah (0 for sprites >= 12Ch)
-    // -> 1033B(0Ch). Dim release and the 5F9AE palette restore belong to the original tail
-    // (54205~54212) and are done by the caller battle_weapon_37fa4 after (9).
+    // 53921~53926: sub_1214F(first target) -> pose 0Ah (0 for sprites >= 12Ch)
+    // -> 1033B(0Ch). Dim release and the 5F9AE palette restore belong to the caller's tail.
     if (!battle_target_list_.empty()) {
         const int ti = battle_target_list_[0];
         if (ti >= 0 && (size_t)ti < units_.size()) {

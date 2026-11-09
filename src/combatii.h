@@ -660,6 +660,7 @@ private:
     int  battle_fx_2cc3a_anim(int unit_index, int variant, int sfx_id);   // sub_2CC3A effect body
     void battle_fx_341c7_anim(int unit_index);                // sub_341C7 f_quake
     void battle_fx_37fa4_anim(int unit_index);                // sub_37FA4 irus (steps 1-7)
+    void battle_fx_37fa4_dash_and_lightning(int unit_index, bool load_nsp); // loc_381EF..38326
     void battle_fx_32589_anim(int unit_index, int target_index); // sub_32589 arcion (129 frames)
     void battle_fx_34c48_anim(int unit_index);                // sub_34C48 shak2 (106 frames)
     bool battle_fx_32bcb_anim(int unit_index);                // sub_32BCB icer.nsp (429 frames)

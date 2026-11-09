@@ -11070,53 +11070,59 @@ int CombatII::battle_weapon_37fa4(int unit_index) {
     // dim/305A2/30824/irus for 9 frames, (8) dash).
     battle_fx_37fa4_anim(unit_index);
     // (9) 10 hits (loc_383A2..loc_385E6). One turn of the original is
-    //     [A] 1 frame (pose 5) -> [B] 5 frames (pose 6) -> var_C++ -> [48h] -= var_20
-    //     -> 4F4CD(14h) -> [C] 2 frames (pose 7,8) -> 4F4CD(1) -> [D] 5 frames (pose 9)
-    //     -> shake (target [65h]/[66h] +/-1 along the facing) -> var_C++ -> [48h] -= var_20
-    //     -> repeat while >= 0,
-    //   and var_C > 0Ah jumps to loc_3860F (damage committed). So there are 10 damage
-    //   applications and the frames are A1+B5 + C2+D5 = 13 per turn over 5 turns plus a final
-    //   A+B. The original computes var_20 once before the loop (1D770 + 1388h); the port
-    //   rerolls battle_damage per hit as before (existing approximation).
-    auto apply_hit = [&](int hit_no) -> bool {          // [48h] -= var_20
-        if (ti < 0 || (size_t)ti >= units_.size() || !units_[(size_t)ti].active || units_[(size_t)ti].hp <= 0) {
-            // Re-collect: prefer the front line, otherwise the nearest on screen.
-            int nxt = -1;
-            if (battle_weapon_collect_line(unit_index, 7) > 0) nxt = battle_target_list_[0];
-            else if (battle_weapon_collect_nearest(unit_index) > 0) nxt = battle_target_list_[0];
-            if (nxt < 0) return false;
-            ti = nxt;
-            if (battle_trace_) fprintf(stderr, "COMBAT: 37fa4 unit=%d retarget -> %d (hit %d)\n",
-                                        units_[(size_t)unit_index].id, units_[(size_t)ti].id, hit_no);
-        }
+    //     [A] 1 frame (pose 5) -> 4F4CD(1) -> [B] 5 frames (pose 6) -> var_C++ ->
+    //     [48h] -= var_20 -> 4F4CD(14h) -> [C] 2 frames (pose 7,8) -> 4F4CD(1) ->
+    //     [D] 5 frames (pose 9) -> shake (target [65h]/[66h] +/-1 along the facing) ->
+    //     var_C++ -> [48h] -= var_20 -> repeat while [48h] >= 0,
+    //   and var_C >= 0Ah jumps to loc_3860F before another A/B block.  So there are 10
+    //   damage applications and the frames are A1+B5 + C2+D5 = 13 per turn over 5 turns.
+    //   The original computes var_20 once before the loop (38124: 1D770 + 1388h) and only
+    //   recomputes it after a retarget (38715).  It subtracts [48h] directly: no 45BFB/
+    //   45ED2 number animation and no per-hit 53797 trigger.
+    int hit_damage = 0;                                 // var_20
+    auto refresh_hit_damage = [&]() {
         const int base = battle_damage(unit_index, ti, 0, 1, 0); // sub_1D770(ebx=0, ecx=1)
-        const int dmg = base + 0x1388;
+        hit_damage = base + 0x1388;
+        if (battle_trace_) fprintf(stderr, "COMBAT: 37fa4 unit=%d target=%d base=%d dmg=%d (cached)\n",
+                                    units_[(size_t)unit_index].id, units_[(size_t)ti].id, base, hit_damage);
+    };
+    refresh_hit_damage();
+    // Returns 0 to stop the strike, 1 to continue the current block, 2 when the dead target was
+    // replaced and the original jumps back to loc_381EF (dash + lightning) before loc_383A2.
+    auto apply_hit = [&](int hit_no) -> int {           // [48h] -= var_20
+        if (ti < 0 || (size_t)ti >= units_.size() || !units_[(size_t)ti].active) return 0;
         auto& T = units_[(size_t)ti];
         const int old_raw = battle_hp_raw(T);
-        int new_raw = old_raw - dmg;
-        if (new_raw > battle_max_hp_raw(T)) new_raw = battle_max_hp_raw(T);
-        const int new_hp = new_raw <= 0 ? 0 : (new_raw + 99) / 100;
-        const int delta = new_hp - T.hp;
-        if (battle_trace_) fprintf(stderr, "COMBAT: 37fa4 unit=%d -> target=%d hit=%d base=%d dmg=%d hp_raw %d->%d\n",
-                                    units_[(size_t)unit_index].id, T.id, hit_no, base, dmg, old_raw, new_raw);
-        if (delta != 0) {
-            VmEvent hp; hp.type = VmEventType::Hp; hp.hp_unit = ti;
-            hp.hp_delta = delta; hp.hp_dir = units_[(size_t)unit_index].facing & 3; hp.hp_killer = unit_index;
-            play_hp_change(hp);
-            if (should_exit_) return false;
-            if (!units_[(size_t)unit_index].active) return false;
-        } else {
-            run_unit_hp_trigger(ti, unit_index, 1);
-        }
-        return !should_exit_;
+        const int new_raw = old_raw - hit_damage;
+        T.hp = new_raw <= 0 ? 0 : (new_raw + 99) / 100;
+        T.hp_deficit = T.hp > 0 ? T.hp * 100 - new_raw : 0;
+        if (battle_trace_) fprintf(stderr, "COMBAT: 37fa4 unit=%d -> target=%d hit=%d dmg=%d hp_raw %d->%d\n",
+                                    units_[(size_t)unit_index].id, T.id, hit_no, hit_damage, old_raw, new_raw);
+        if (new_raw >= 0) return 1;                       // cmp [48h],0 / jge loc_383A2
+        // loc_3860F: 13F08 (grid mark), 1DB1D, then F0648 = 0.
+        play_unit_death(ti, unit_index);
+        ti = -1;
+        if (should_exit_ || hit_no >= 0x0A) return 0;     // var_C >= 0Ah -> loc_3873C
+        // loc_386A1..38715: rescan the seven-tile line; a new target recomputes var_20 and
+        // resumes at loc_381EF.
+        if (battle_weapon_collect_line(unit_index, 7) <= 0) return 0;
+        ti = battle_target_list_[0];
+        refresh_hit_damage();
+        if (battle_trace_) fprintf(stderr, "COMBAT: 37fa4 unit=%d retarget -> %d (hit %d)\n",
+                                    units_[(size_t)unit_index].id, units_[(size_t)ti].id, hit_no);
+        return 2;
     };
     int hit = 0;                                        // var_C
-    while (hit <= 0x0A && !should_exit_) {
+    while (!should_exit_) {
+        if (hit >= 0x0A) break;                           // cmp var_C,0Ah / jge loc_3860F
         const int ent = hit % 3;                         // [esp+12h]>>16 % 3 (F0DAA entry)
         fx_37fa4_hit_block(unit_index, ent, 5, 1);       // [A] 1 frame
+        sfx(0x01);                                        // 4F4CD(1)
         fx_37fa4_hit_block(unit_index, ent, 6, 5);       // [B] 5 frames
-        if (++hit > 0x0A) break;                          // var_C++ / cmp 0Ah
-        if (!apply_hit(1)) break;                         // damage 1
+        ++hit;                                             // var_C++
+        int r = apply_hit(1);                              // damage 1
+        if (r == 0) break;
+        if (r == 2) { battle_fx_37fa4_dash_and_lightning(unit_index, false); continue; }
         sfx(0x14);                                        // 4F4CD(14h)
         fx_37fa4_hit_block(unit_index, ent, 7, 1);       // [C] di=7
         fx_37fa4_hit_block(unit_index, ent, 8, 1);       // [C] di=8
@@ -11134,16 +11140,17 @@ int CombatII::battle_weapon_37fa4(int unit_index) {
             }
         }
         ++hit;                                            // var_C++
-        if (!apply_hit(2)) break;                         // damage 2
+        r = apply_hit(2);                                  // damage 2
+        if (r == 0) break;
+        if (r == 2) battle_fx_37fa4_dash_and_lightning(unit_index, false);
     }
     // Tail (54199..54220): 44D75, 44D6E(0), 5F9AE (master palette restore), 12124, 1FFCD.
-    if (ti >= 0 && (size_t)ti < units_.size()) reset_unit_pose(units_[(size_t)ti]);
-    battle_dim_row0_ = false;                           // 44D6E(0)
+    battle_highlight_clear();                           // 44D75
+    battle_dim_row0_ = false;                           // 44D6E(0, 100h)
     pal_load_range(0, 256, &battle_palette_[0][0]);     // 5F9AE
-    run_unit_hp_trigger(unit_index, -1, 1);
-    reset_unit_pose(units_[(size_t)unit_index]);        // 12124
+    reset_unit_pose(units_[(size_t)unit_index]);        // 12124 (caster)
+    if (ti >= 0 && (size_t)ti < units_.size()) reset_unit_pose(units_[(size_t)ti]); // 12124 (F0648)
     game_timer_set(6);
-    battle_highlight_clear();   // tail sub_44D75 (54115/54205 range)
     battle_nsp_release();       // 1FFCD
     return 0; // the normal elect path returns 0 (4C98A skips 301BB and the cost)
 }
