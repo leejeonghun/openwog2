@@ -62,7 +62,7 @@
 //       for all + 5E9E8+499E4 -> 5FA2C 0..64h (+4) -> 5F9AE -> 44D6E(0) -> BA838 = 0 ->
 //       [64h] = 4 -> 11E04 for all -> restore [63h] -> 12124 for all ->
 //       2CAF7(caster, ebx=0Ah, edx=3E8h) -> 103A0/61115 -> eax = 1.
-//       The port skips only the 310DE 0xFA00 scan transition; both palette ramps run.
+//       The 310DE 0xFA00 scan transition and both palette ramps run in the port.
 //
 // Port mapping: 1A1F8->battle_weapon_collect_screen, 1FEA4->battle_nsp_load,
 //   1FFCD->battle_nsp_release, 1FFFE->battle_fx_blit, 5EE51->battle_fx_blit,
@@ -71,8 +71,9 @@
 //   454B3->battle_fx_world, 5E9E8->battle_fx_commit, 454B3+5E9E8->battle_fx_present,
 //   1033B->game_timer_set, 499E4->wait_game_tick, 4F4CD->sfx, 499BD->combat_rand,
 //   30824->fx_pal_mix(0x60, 0x100, 0, 0), 5FA2C->pal_scale_range,
-//   44D6E->battle_dim_row0_, 12F2A->(battle_fx_world draws every unit),
-//   12124->reset_unit_pose, 2CAF7->battle_weapon_2caf7_loop,
+//   44D6E->battle_dim_row0_, 12F2A->battle_draw_unit_now, 30F98->clear_black,
+//   12124->reset_unit_pose, 1214F->target anim_frame = 0Ah (0 for sprites >= 12Ch),
+//   2CAF7->battle_weapon_2caf7_loop,
 //   30F61->cam_fine_y_ toggle (1px shake), 30FD1->column_trail(), 3108E->wobble().
 //
 // Deviations:
@@ -81,10 +82,11 @@
 //     battle_fx_world and battle_fx_commit, the same window the original uses.
 //   - The third argument of 5F305/5F29D is the tint LUT at [entry+8] in the original. The
 //     port takes a percentage, fixed at tint 50h to match 61147(1, 50h).
-//   - Per-unit 12F2A calls are omitted because battle_fx_world/flush already draw every
-//     unit once per frame.
-//   - 11EE4/11E04 (release/re-occupy) and 1214F (fixed-pose draw) are replaced by the
-//     units_ model and the renderer; reset_unit_pose is called from the tail.
+//   - Per-unit 12F2A calls use battle_draw_unit_now at the same points as the original. On
+//     the cleared stages the port draws one target, flushes its queued effects, draws that
+//     target, and only then moves to the next target, matching the ASM's effect/12F2A order.
+//   - 11EE4/11E04 (release/re-occupy) are replaced by the units_ model and the renderer;
+//     1214F is the target anim_frame assignment in (6); reset_unit_pose is called from the tail.
 //   - 61147/6104A/61115 (LUT setup and restore) are covered by the port's palette path;
 //     103A8/103A0 map to weather_tick_enabled_.
 //   - 30F98 clears the visible 200x480 viewport to colour 0 and toggles the 1px shake. The
@@ -168,6 +170,11 @@ int CombatII::battle_fx_31283_anim(int unit_index) {
         if (ti < 0 || (size_t)ti >= units_.size()) return nullptr;
         return &units_[(size_t)ti];
     };
+    auto draw_target_units = [&]() {
+        for (int k = 0; k < count; ++k) {
+            if (target_at(k)) battle_draw_unit_now(targets[(size_t)k]);   // sub_12F2A
+        }
+    };
     // sub_10971/sub_10988: tile origin, i.e. TILE_ANCHOR (4,4), not the unit-sprite anchor.
     // The particle lines and NSP blits are positioned from this origin; using
     // UNIT_ANCHOR_X/Y shifts the first effect 12px right and 2px up.
@@ -202,8 +209,11 @@ int CombatII::battle_fx_31283_anim(int unit_index) {
     fx_pal_mix(0x60, 0x100, 0, 0x28);                      // sub_30824(0, 28h); edx from 44D6E
     C.facing = 0;                                          // mov byte [ebp+63h],0
     if (should_exit_) { battle_dim_row0_ = false; battle_nsp_release(); return 1; }
-    battle_fx_present();                                   // 454B3 + 12F2A + 5E9E8 + 499E4
-    wait_game_tick();
+    battle_fx_world();                                     // sub_454B3
+    draw_target_units();                                   // 12F2A targets
+    battle_draw_unit_now(unit_index);                      // 12F2A caster
+    battle_fx_commit();                                    // sub_5E9E8
+    wait_game_tick();                                      // sub_499E4
 
     std::vector<int16_t> saved_x((size_t)count, 0), saved_y((size_t)count, 0);  // var_2F8/var_1CC
     for (int k = 0; k < count; ++k) {
@@ -221,10 +231,11 @@ int CombatII::battle_fx_31283_anim(int unit_index) {
         const CombatUnitPlacement* T = target_at(k);
         return screen_y(T ? T->y : saved_y[(size_t)k]);
     };
-    auto draw_target_units = [&]() {
-        for (int k = 0; k < count; ++k) {
-            if (target_at(k)) battle_draw_unit_now(targets[(size_t)k]);   // sub_12F2A
-        }
+    // 30FD1/5F305/5F29D are immediate in the original; the port queues them, so flush one
+    // target's effect before drawing that target with 12F2A (effect under its own unit).
+    auto flush_target_effect = [&](int k) {
+        battle_fx_flush();
+        if (target_at(k)) battle_draw_unit_now(targets[(size_t)k]);      // sub_12F2A
     };
 
     // ---- (3)(4) main loop (loc_3144D) ----
@@ -339,6 +350,10 @@ int CombatII::battle_fx_31283_anim(int unit_index) {
     C.anim_frame = 9;                                        // mov byte [ebp+64h],9
     int sub_frame = 3;                                       // var_34
     for (int k = 0; k < count; ++k) {
+        if (CombatUnitPlacement* T = target_at(k)) {
+            // sub_1214F: collapsed target pose for the falling strike.
+            T->anim_frame = (T->sprite_type < 0x12C) ? (uint8_t)0x0A : (uint8_t)0x00;
+        }
         speed[(size_t)k] = (uint8_t)(combat_rand(6) + 0x0F);
         color[(size_t)k] = 0;
         height[(size_t)k] = (int16_t)(k * 0x64 + 0xC8);      // imul ebx,edi,64h; add ebx,0C8h
@@ -420,9 +435,8 @@ int CombatII::battle_fx_31283_anim(int unit_index) {
                             column_trail(k, sub_frame);      // loc_31C64: sub_30FD1
                         }
                     }
+                    flush_target_effect(k);                      // 12F2A after the target's effect
                 }
-                battle_fx_flush();                           // target 5F305/30FD1 frames
-                draw_target_units();                         // 12F2A targets
                 // Caster frame: var_10 (= pass) == 3 uses F0DAA[0], otherwise var_10
                 const int cf = (pass == 3) ? 0 : pass;
                 if (cf < nframes) {
@@ -448,9 +462,8 @@ int CombatII::battle_fx_31283_anim(int unit_index) {
                 for (int k = 0; k < count; ++k) {            // loc_31DD3
                     column_trail(k, sub_frame);              // 30FD1
                     wobble(k);                               // 3108E
+                    flush_target_effect(k);                  // 12F2A after 30FD1
                 }
-                battle_fx_flush();                           // target 30FD1 frames
-                draw_target_units();                         // 12F2A targets
                 if (f < nframes) {
                     const MagicFxFrame& fr = magic_frames_[(size_t)f];
                     battle_fx_blit(f, anchor_x + fr.xo, anchor_y + fr.yo);
@@ -477,9 +490,8 @@ int CombatII::battle_fx_31283_anim(int unit_index) {
                 for (int k = 0; k < count; ++k) {            // loc_31F26
                     column_trail(k, sub_frame);              // 30FD1
                     wobble(k);                               // 3108E
+                    flush_target_effect(k);                  // 12F2A after 30FD1
                 }
-                battle_fx_flush();                           // target 30FD1 frames
-                draw_target_units();                         // 12F2A targets
                 if (esi < nframes) {
                     const MagicFxFrame& fr = magic_frames_[(size_t)esi];
                     battle_fx_blit_tinted_unclipped(esi, base_x + fr.xo, base_y + fr.yo, 0x50); // 5F29D
@@ -508,9 +520,8 @@ int CombatII::battle_fx_31283_anim(int unit_index) {
         for (int k = 0; k < count; ++k) {                    // loc_3204D
             column_trail(k, sub_frame);                      // 30FD1
             wobble(k);                                       // 3108E
+            flush_target_effect(k);                          // 12F2A after 30FD1
         }
-        battle_fx_flush();                                   // target 30FD1 frames
-        draw_target_units();                                 // 12F2A targets
         battle_draw_unit_now(unit_index);                    // 12F2A caster
         battle_fx_commit();
         wait_game_tick();
@@ -525,9 +536,8 @@ int CombatII::battle_fx_31283_anim(int unit_index) {
         for (int k = 0; k < count; ++k) {                    // loc_32130
             column_trail(k, sub_frame);                      // 30FD1
             wobble(k);                                       // 3108E
+            flush_target_effect(k);                          // 12F2A after 30FD1
         }
-        battle_fx_flush();                                   // target 30FD1 frames
-        draw_target_units();                                 // 12F2A targets
         if (sil) {
             if (sil_n > 0) {                                 // var_24 > 0
                 int rows = (sil_n < 6) ? 6 : sil_n;           // var_3C = max(var_24,6)
@@ -566,9 +576,8 @@ int CombatII::battle_fx_31283_anim(int unit_index) {
                 for (int k = 0; k < count; ++k) {        // loc_322F1
                     column_trail(k, sub_frame);          // 30FD1
                     wobble(k);                           // 3108E
+                    flush_target_effect(k);              // 12F2A after 30FD1
                 }
-                battle_fx_flush();                       // target 30FD1 frames
-                draw_target_units();                     // 12F2A targets
             }
             if (di < nframes) {
                 const MagicFxFrame& fr = magic_frames_[(size_t)di];
@@ -590,9 +599,8 @@ int CombatII::battle_fx_31283_anim(int unit_index) {
     for (int k = 0; k < count; ++k) {                        // loc_323E2
         column_trail(k, sub_frame);                          // 30FD1
         wobble(k);                                           // 3108E
+        flush_target_effect(k);                              // 12F2A after 30FD1
     }
-    battle_fx_flush();                                       // target 30FD1 frames
-    draw_target_units();                                     // 12F2A targets
     battle_fx_commit();                                      // sub_5E9E8
     wait_game_tick();                                        // sub_499E4
     battle_nsp_release();                                    // sub_1FFCD (before 310DE)
