@@ -97,11 +97,16 @@
 //     follow, so stages (5)-(11) run over black instead of a redrawn map. The one explicit
 //     colour-1 clear in (10) (di == 0Dh) is kept as well.
 //   - 310DE was measured as 7 passes (var_4 += 8); each pass memsets the whole display
-//     (17700h) and then rebuilds each row from the snapshot via loop A ((200-y)*8/5, left,
-//     starting row var_8 = pass*5) and loop B (y*8/5, right). That scan transition is
-//     reproduced as-is. Only the high-word offsets read by both loops come from
-//     uninitialised stack and are kept at 0. 61115 (release tint LUT) is a no-op because
-//     the port caches no LUT; the two palette ramps run through 5FA2C(0..100h) and 499E4.
+//     (17700h) and then rebuilds each row from the snapshot. The `[var_C+2]>>16` and
+//     `[var_8+2]>>16` reads are stack aliases, not uninitialised values: the first is
+//     var_8 (vertical shift) and the second is var_4 (horizontal shift). Loop A copies
+//     source row y to viewport row y-var_8 starting at column var_4; loop B copies source
+//     row y to viewport row y+var_8 starting at column 320-count-var_4. The measured
+//     var_8 sequence is 0,0,5,10,15,20,25. The original's off-screen overhangs fall in
+//     its 480-wide row padding; the port clips them to the visible 320 columns. That
+//     diagonal split is reproduced as-is.
+//     61115 (release tint LUT) is a no-op because the port caches no LUT; the two palette
+//     ramps run through 5FA2C(0..100h) and 499E4.
 //   - Frame selection in (7)(8)(9) uses unk_F0DAA entry offsets, and magic_frames_ holds
 //     the same order, so it is expressed as frame numbers (0..8, reusing 0). The 12-frame
 //     column at 10h spacing in 30FD1 follows the same rule.
@@ -111,9 +116,6 @@
 //     the low word of var_44 (2Fh), decremented per row to 2Fh..2Ah.
 //   - 61115 frees dword_12764C[] (the 0x100-entry tint LUT). The port computes the tint per
 //     blit instead of caching it, so there is no equivalent (no-op).
-//   - The `[var_C+2]/[var_8+2] >> 16` terms added by loops A/B read the high words of a
-//     pointer and a word local, so they depend on the runtime stack. In the game they are
-//     effectively 0, and the port pins them to 0.
 #include "combatii.h"
 #include "combatii_internal.h"
 
@@ -612,15 +614,15 @@ int CombatII::battle_fx_31283_anim(int unit_index) {
     //     - 7 passes: var_4 = 0, 8, 10h, 18h, 20h, 28h, 30h (cmp bx,32h).
     //     - Each pass memsets the canvas at +0BB80h with 17700h bytes (ebx = offset
     //       loc_17700 = 0x17700, exactly 200 rows x 480), then refills it from the snapshot.
-    //       var_8 = var_4/8*5 (0, 5, 10, 15, 20, 25, 30) is loop A's starting row.
-    //     - Loop A (loc_31182): ebx = var_8..199, count = (200-ebx)*8/5, source and
-    //       destination both start at the left edge of row ebx.
-    //     - Loop B (loc_311E4): ebx = 0..199, count = ebx*8/5, source and destination both
-    //       start count bytes before the right edge (320-count).
-    //       A+B split each row, leaving a 1px seam at the boundary from rounding.
-    //     - The `[var_C+2]>>16` / `[var_8+2]>>16` terms read the high words of the var_C
-    //       pointer and of the word-only var_8 (an original bug: uninitialised stack). They
-    //       are effectively 0 in the game, so the port pins them to 0.
+    //       var_8 is loop A's starting row; the measured sequence is 0,0,5,10,15,20,25.
+    //     - Loop A (loc_31182): ebx = var_8..199, count = (200-ebx)*8/5. Source row
+    //       ebx, destination viewport row ebx-var_8, both starting at column var_4.
+    //     - Loop B (loc_311E4): ebx = 0..199-var_8, count = ebx*8/5. Source row ebx,
+    //       destination viewport row ebx+var_8, starting at column 320-count-var_4.
+    //       The opposite vertical shifts and horizontal offsets create the diagonal split.
+    //     - `[var_C+2]>>16` aliases var_8 and `[var_8+2]>>16` aliases var_4; measured
+    //       var_8 starts 0,0,5,10,15,20,25. The original's overhangs live in its 480-wide
+    //       row padding, so the port clips both runs to the visible 320 columns.
     //     - Each pass runs 5E9E8 (output) + 499E4 (wait).
     {
         uint8_t* bb = video_.get_backbuffer();
@@ -628,20 +630,39 @@ int CombatII::battle_fx_31283_anim(int unit_index) {
             std::vector<uint8_t> snap((size_t)SCREEN_W * SCREEN_H);
             std::memcpy(snap.data(), bb, snap.size());
             for (int pass = 0; pass < 7 && !should_exit_; ++pass) {
-                const int var8 = pass * 5;                       // var_8 = (var_4/8)*5, loop A start row
+                const int var4 = pass * 8;                       // horizontal offset
+                // The original's high-word alias makes var_8 lag one pass; the measured
+                // loop A start rows are 0,0,5,10,15,20,25.
+                const int var8 = (pass < 2) ? 0 : (pass - 1) * 5;
                 std::memset(bb, 0, (size_t)SCREEN_W * SCREEN_H);  // canvas+0BB80h, 17700h bytes
-                // Loop A: top to bottom, from the left edge, (200-y)*8/5 bytes
+                // Loop A: source row y -> viewport row y-var8, column var4.
+                // The original writes into the 480-wide canvas padding; clip to the
+                // visible 320 columns for the port's 320-wide backbuffer.
                 for (int y = var8; y < SCREEN_H; ++y) {
-                    const int count = (SCREEN_H - y) * 8 / 5;
-                    std::memcpy(bb + (size_t)y * SCREEN_W,
+                    int count = (SCREEN_H - y) * 8 / 5;
+                    if (count > SCREEN_W - var4) count = SCREEN_W - var4;
+                    if (count <= 0) continue;
+                    std::memcpy(bb + (size_t)(y - var8) * SCREEN_W + (size_t)var4,
                                 snap.data() + (size_t)y * SCREEN_W, (size_t)count);
                 }
-                // Loop B: from the right edge of each row, y*8/5 bytes (A+B cover one row)
-                for (int y = 0; y < SCREEN_H; ++y) {
-                    const int count = y * 8 / 5;
-                    const int col = SCREEN_W - count;
-                    std::memcpy(bb + (size_t)y * SCREEN_W + (size_t)col,
-                                snap.data() + (size_t)y * SCREEN_W + (size_t)col,
+                // Loop B: source row y -> viewport row y+var8, column 320-count-var4.
+                // A negative destination column is the original's off-screen left
+                // overhang; skip it and copy only the visible part of the run.
+                for (int y = 0; y < SCREEN_H - var8; ++y) {
+                    int count = y * 8 / 5;
+                    int src_col = SCREEN_W - count;
+                    int dst_col = src_col - var4;
+                    if (dst_col < 0) {
+                        const int skip = -dst_col;
+                        if (skip >= count) continue;
+                        src_col += skip;
+                        count -= skip;
+                        dst_col = 0;
+                    }
+                    if (dst_col + count > SCREEN_W) count = SCREEN_W - dst_col;
+                    if (count <= 0) continue;
+                    std::memcpy(bb + (size_t)(y + var8) * SCREEN_W + (size_t)dst_col,
+                                snap.data() + (size_t)y * SCREEN_W + (size_t)src_col,
                                 (size_t)count);
                 }
                 battle_fx_commit();                              // sub_5E9E8
