@@ -298,33 +298,35 @@ int CombatII::battle_fx_2cc3a_anim(int unit_index, int variant, int sfx_id) {
         // Current pose, one frame (sub_5F3FD).
         if (const NC2Frame* cf = nc2_frame_for(A.sprite_type, A.facing & 3, 5 + frames % 5))
             blit_nc2_frame(sx + cf->x_off, sy + cf->y_off, *cf);
-        // Switch on frame % 5 (loc_2CFCD/loc_2D092/loc_2D0C4/loc_2D183).
-        //   case 0/2: 4F4CD(cx) plus one blinking frame when var_24 == 1.
+        // Switch on frame % 5 (off_2CC16: case 0 = loc_2D183, 1 = loc_2CFCD,
+        //   2 = loc_2D092, 3 = loc_2D1B8, 4 = loc_2D0C4).
+        //   case 1/4: 4F4CD(cx) plus one blinking frame when var_24 == 1.
         //      var_24 = (unk_BA8AD + 40*slot + 3 != 0FFh) is a per-slot data byte; the port has
         //      no such table and treats it as always true. The original body is
         //      5EECF(save) -> 5F3FD(pose) -> 5E9E8 -> 499E4 -> 5EE51(restore) -> 5F3FD(next).
         //      The port redraws the world every frame, so showing the pose for one more frame
         //      is one commit + tick.
-        //   case 1/3: all units [+64h] = 3 (hit pose); case 3 only when the trail is at least 3.
+        //   case 2: all units [+64h] = 3 (hit pose); case 0 does the same only when the
+        //      trail is at least 3 (cmp di,2). Case 3 has no body.
         switch (frames % 5) {
             case 0:
-            case 2:
+                if (trail > 2)
+                    for (size_t i = 0; i < units_.size(); ++i)
+                        if (units_[i].active && units_[i].sprite_type < 0x12C) units_[i].anim_frame = 3;
+                break;
+            case 1:
+            case 4:
                 sfx(sfx_id);                                          // 4F4CD([esp+66h]>>16 = cx)
                 battle_fx_commit();                                   // 5F3FD -> 5E9E8
                 wait_game_tick();                                     // 499E4
                 if (const NC2Frame* cf = nc2_frame_for(A.sprite_type, A.facing & 3, 5 + frames % 5))
                     blit_nc2_frame(sx + cf->x_off, sy + cf->y_off, *cf);   // 5EE51 + 5F3FD(next pose)
                 break;
-            case 1:
+            case 2:
                 for (size_t i = 0; i < units_.size(); ++i)
                     if (units_[i].active && units_[i].sprite_type < 0x12C) units_[i].anim_frame = 3;
                 break;
-            case 3:
-                if (trail > 2)
-                    for (size_t i = 0; i < units_.size(); ++i)
-                        if (units_[i].active && units_[i].sprite_type < 0x12C) units_[i].anim_frame = 3;
-                break;
-            default: break;   // case 4 does not exist
+            default: break;   // case 3 (loc_2D1B8) has no body
         }
         // Shake (loc_2D1B8): when frame%5 == 2 or (frame%5 == 0 and trail > 2), every unit is
         // moved by 2 or 3 pixels according to the caster facing (the whole screen shakes).
