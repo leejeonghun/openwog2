@@ -1689,9 +1689,10 @@ void CombatII::battle_fx_367ee_anim(int unit_index) {
 //   (2) 1033B(5) + 80 particles (life 499BD(3)+1, angle 499BD(168h), offset rand&1 -> 2/4)
 //   (3) 15 x 3ADBE (amplitude 1): 12 frames (var_4 = 2..7 x 2 shakes), every frame
 //      5EE51(F0DAA[var_4]) + 80 particles + target [65h] shake (-1 even sub-frame, +1 odd)
-//   (4) 9 x 3ADBE (amplitude 2), 4F4CD(32h) per block
+//   (4) re-seed (life rand(3)+1, offset rand(5)+5, counters 0), 9 x 3ADBE (amplitude 2)
+//       with 4F4CD(32h) after each call
 //   (5) 4 x 3ADBE (amplitude 3)
-//   (6) 2 rounds x 4 frames: 5EE51(F0DAA[round]) + target [65h] +-5 alternating
+//   (6) 2 rounds x 4 frames: 5EE51(F0DAA[1] then [0]) + target [65h] +-5 alternating
 //   (7) tail: [1E]|=2, [1F]=5Ah, 197AD(type < 12Ch), 1FFCD, 5F9AE(0), 44D6E(0),
 //      44D75, 11E04, restore [63h], 12124 all, 2CAF7(3, 1B58h), 103A0
 //
@@ -1769,9 +1770,9 @@ void CombatII::battle_fx_3aee8_anim(int unit_index) {
     for (int i = 0; i < 80; ++i) {                                        // init the 80 particles
         p[(size_t)i].x = (float)(si - 4);                                 // [esp+42Ah]>>16 - 4
         p[(size_t)i].y = (float)(di - 0x17);                              // [esp+426h]>>16 - 17h
+        p[(size_t)i].life = 1 + (int)combat_rand(3);                      // 499BD(3)+1 (rand order: life)
         p[(size_t)i].speed = (int)combat_rand(0x168);                     // 499BD(168h) - angle in degrees
         p[(size_t)i].off = combat_rand(2) ? 4 : 2;                        // var_24: rand&1 -> 2/4
-        p[(size_t)i].life = 1 + (int)combat_rand(3);                      // 499BD(3)+1
     }
     auto draw_p = [&](int ch) {                                           // sub_3A950
         uint8_t* buf = video_.get_backbuffer();
@@ -1783,7 +1784,7 @@ void CombatII::battle_fx_3aee8_anim(int unit_index) {
         auto head = [](PS& s, int xi, int yi) {                            // loc_3AC54
             s.tx[0] = (int16_t)xi;
             s.ty[0] = (int16_t)yi;
-            for (int i = s.life - 1; i >= 0; --i) {                        // [i+1] = [i]
+            for (int i = s.trail - 1; i >= 0; --i) {                       // [i+1] = [i], shift count is arg_8 (trail)
                 s.tx[i + 1] = s.tx[i];
                 s.ty[i + 1] = s.ty[i];
             }
@@ -1863,13 +1864,21 @@ void CombatII::battle_fx_3aee8_anim(int unit_index) {
         sfx(0x32);                                                        // 4F4CD(32h)
         adbe(1, 1);
     }
+    // loc_3B23C: re-seed before the ch=2 blocks. Position, angle and trail keep running;
+    // only the sub-counter, phase, steps-per-call and offset start over (offset now 5..9).
+    for (auto& s : p) {
+        s.up = 0;                                                         // var_120
+        s.ph = 0;                                                         // var_170
+        s.life = 1 + (int)combat_rand(3);                                 // rand(3)+1
+        s.off = 5 + (int)combat_rand(5);                                  // rand(5)+5
+    }
     for (int k = 0; k < 9 && !should_exit_; ++k) {                          // (4)
-        sfx(0x32);
         adbe(3, 2);
+        sfx(0x32);                                                        // 4F4CD runs after 3ADBE here
     }
     for (int k = 0; k < 4 && !should_exit_; ++k) adbe(5, 3);                // (5)
-    for (int round = 0; round < 2 && !should_exit_; ++round) {
-        // (6) 2 x 4 frames
+    for (int round = 1; round >= 0 && !should_exit_; --round) {
+        // (6) 2 x 4 frames; var_1C holds 1 first, then 0
         for (int cx = 0; cx < 4 && !should_exit_; ++cx) {
             shake(5, (cx & 1) == 0);
             frame();
