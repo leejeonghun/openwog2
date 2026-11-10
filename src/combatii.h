@@ -2356,6 +2356,21 @@ private:
     int battle_weapon_collect_line(int unit_index, int range); // 37FA4 single target on a 7-cell straight line (first hostile)
     int battle_weapon_collect_2e0f0(int unit_index, int radius); // sub_2E0F0 automatic: front ray dist 1..R, every hostile, far to near
     void battle_weapon_apply_status(int target_index, int bit, int duration); // [+1Eh]|=bit, [+1Fh]=dur
+    // One prepared 45BFB entry (number, screen anchor, colour) for the shared 287AF pass.
+    struct BattleDamageFx {
+        int unit;
+        int slot;
+        char digits[8];
+        int ndig;
+        int sx0;
+        int digit_y[5];
+        uint8_t color;
+    };
+    void battle_damage_fx_prepare(int caster_index, int ti, int slot, int fin,
+                                  std::vector<BattleDamageFx>& fx); // 45BFB + [48h] -= fin + 45ED2
+    void battle_damage_fx_play(std::vector<BattleDamageFx>& fx,
+                               const std::vector<int>& targets); // 287AF 24 frames + 12124 + 499DA(24h)
+    void battle_damage_fx_triggers(const std::vector<int>& targets, int caster_index); // 1ED45
     int battle_weapon_2caf7_loop(int unit_index, int mul, int add); // sub_2CAF7 gameplay core
     int battle_weapon_308ee(int unit_index); // edi 0: fire.ssp + 308EE (2, 10000 + [1E]1)
     int battle_weapon_31283(int unit_index); // edi 1: kang + f-blast + slash (10, 1000)

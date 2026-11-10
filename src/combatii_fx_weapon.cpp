@@ -1001,8 +1001,6 @@ void CombatII::battle_fx_34c48_anim(int unit_index) {
     pal_load_range(0, 256, &battle_palette_[0][0]);                       // 5F9AE
     battle_dim_row0_ = false;                                            // 44D6E(0)
     battle_highlight_clear();                                            // 44D75
-    battle_nsp_release();                                                // 1FFCD
-    weather_tick_enabled_ = true;                                        // 103A0
     if (battle_trace_)
         fprintf(stderr, "COMBAT: 34C48 unit=%d dir=%d frames=%d(%d)\n",
                 A.id, dir, (int)magic_frames_.size(), 3 * 24 + 33);

@@ -9394,36 +9394,25 @@ int CombatII::battle_weapon_2cc3a(int unit_index, int variant, int sfx_id) {
     // The presentation (44D89 all targets -> [+64h]=5 -> 5 swing poses -> dim -> afterimage,
     // shake, cleanup) lives in combatii_fx_weapon.cpp; the damage loop follows it.
     battle_fx_2cc3a_anim(unit_index, variant, sfx_id);
-    for (int ti : targets) {
+    std::vector<BattleDamageFx> fx;
+    fx.reserve(targets.size());
+    for (size_t slot = 0; slot < targets.size(); ++slot) {
+        const int ti = targets[slot];
         if (ti < 0 || (size_t)ti >= units_.size()) continue;
-        if (!units_[(size_t)ti].active || units_[(size_t)ti].hp <= 0) continue;
+        auto& T = units_[(size_t)ti];
+        if (!T.active || T.hp <= 0) continue;
         const int base = battle_damage(unit_index, ti, 0, 0, 0); // sub_1D770(ebx=0, ecx=0)
         const int scaled = si * base / 10;
         const int fin = battle_weapon_2caca(unit_index, scaled);
-        auto& T = units_[(size_t)ti];
-        const int old_raw = battle_hp_raw(T);
-        int new_raw = old_raw - fin;
-        if (new_raw > battle_max_hp_raw(T)) new_raw = battle_max_hp_raw(T);
-        const int new_hp = new_raw <= 0 ? 0 : (new_raw + 99) / 100;
-        const int delta = new_hp - T.hp;
-        if (battle_trace_) fprintf(stderr, "COMBAT: 2cc3a unit=%d -> target=%d base=%d scaled=%d final=%d hp_raw %d->%d\n",
-                                    A.id, T.id, base, scaled, fin, old_raw, new_raw);
-        if (delta != 0) {
-            VmEvent hp; hp.type = VmEventType::Hp; hp.hp_unit = ti;
-            hp.hp_delta = delta;
-            hp.hp_dir = A.facing & 3;
-            hp.hp_killer = unit_index;
-            play_hp_change(hp); // 45BFB + HP loss + 45ED2 + death + triggers
-            if (should_exit_) return 1;
-            if (!units_[(size_t)unit_index].active) return 1;
-        } else {
-            // play_hp_change reads a 0 delta as death, so run the trigger directly.
-            run_unit_hp_trigger(ti, unit_index, 1); // sub_1ED45, mode 1 for the target
-        }
+        if (battle_trace_) fprintf(stderr, "COMBAT: 2cc3a unit=%d -> target=%d base=%d scaled=%d final=%d\n",
+                                    A.id, T.id, base, scaled, fin);
+        battle_damage_fx_prepare(unit_index, ti, (int)slot, fin, fx); // 45BFB + [48h] -= fin + 45ED2
     }
-    run_unit_hp_trigger(unit_index, -1, 1); // sub_1ED45(ebp) cleanup for the caster
-    reset_unit_pose(units_[(size_t)unit_index]); // sub_12124
-    game_timer_set(6); // tail 1033B(6): period only, no wait
+    battle_damage_fx_play(fx, targets);                              // sub_287AF
+    game_timer_set(6);                                               // sub_1033B(6)
+    battle_damage_fx_triggers(targets, unit_index);                  // sub_1ED45(caster)
+    if (!should_exit_ && (size_t)unit_index < units_.size())
+        reset_unit_pose(units_[(size_t)unit_index]);                 // sub_12124(caster)
     return 1;
 }
 
@@ -10576,19 +10565,21 @@ int CombatII::battle_weapon_2ef4a(int unit_index, int di, int type, int add) {
         battle_dim_row0_ = false;                             // sub_44D6E(0)
     }
 
+    std::vector<BattleDamageFx> fx;
+    fx.reserve(targets.size());
     if (n > 0) {
-        for (int ti : targets) {
-            if (!battle_weapon_hit_target(unit_index, ti, tmp)) return 1;
+        for (size_t slot = 0; slot < targets.size(); ++slot) {
+            const int ti = targets[slot];
+            if (ti < 0 || (size_t)ti >= units_.size()) continue;
+            auto& T = units_[(size_t)ti];
+            if (!T.active || T.hp <= 0) continue;
+            battle_damage_fx_prepare(unit_index, ti, (int)slot, tmp, fx); // 45BFB + [48h] -= tmp + 45ED2
         }
     }
-    for (int ti : targets) {
-        if (ti >= 0 && (size_t)ti < units_.size()) reset_unit_pose(units_[(size_t)ti]); // 12124
-    }
-    if ((size_t)unit_index < units_.size() && units_[(size_t)unit_index].active) {
-        run_unit_hp_trigger(unit_index, -1, 1);               // sub_1ED45
+    battle_damage_fx_play(fx, targets);                            // sub_287AF + 12124
+    battle_damage_fx_triggers(targets, unit_index);                // sub_1ED45(caster)
+    if ((size_t)unit_index < units_.size())
         units_[(size_t)unit_index].anim_frame = (uint8_t)saved_pose;
-    }
-    game_timer_set(6);
     return 1;
 }
 
@@ -10827,78 +10818,51 @@ void CombatII::battle_weapon_apply_status(int target_index, int bit, int duratio
     t.ail_1f = (uint16_t)duration; // mov [1Fh],dur (word)
 }
 
-// sub_2CAF7 gameplay core (eax=unit, ebx=mul, dx=add).
-//   [44h] = orig*mul (low 16 bits) -> per target sub_1D770(0,0) -> dmg = add+base ->
-//   45BFB (damage number) / HP -= dmg / 45ED2 (knockback). The whole list is prepared before
-//   any animation: sub_287AF then runs 24 frames at period 3 with every target animated in
-//   parallel (45F29/45CCB), stands all of them up (12124) and restores the period (499DA 24h).
-//   sub_1ED45(caster) follows: a dead target runs sub_1DB1D and leaves F0648, a survivor gets
-//   sub_53797(victim, caster, 1). The caller owns the caster's pose.
-int CombatII::battle_weapon_2caf7_loop(int unit_index, int mul, int add) {
-    if (unit_index < 0 || (size_t)unit_index >= units_.size()) return -1;
-    if (battle_target_list_.empty()) return -1;
-    const std::vector<int> targets = battle_target_list_;
-    auto& A = units_[(size_t)unit_index];
-    const int16_t orig44 = A.combat_value_44;
-    const int32_t prod = (int32_t)orig44 * (int32_t)mul;
-    A.combat_value_44 = (int16_t)(prod & 0xFFFF); // imul + mov [44h],ax
-    if (battle_trace_) fprintf(stderr, "COMBAT: 2caf7 unit=%d mul=%d add=%d orig44=%d temp44=%d targets=%zu\n",
-                                A.id, mul, add, (int)orig44, (int)A.combat_value_44, targets.size());
-
-    // sub_45BFB stores each target's number and start position in per-slot globals (F9488 /
-    // F9708) and sub_287AF reads them back for every slot, so the list is prepared first and
-    // animated together.
-    struct DmgFx {
-        int unit;
-        int slot;
-        char digits[8];
-        int ndig;
-        int sx0;
-        int digit_y[5];
-        uint8_t color;
-    };
-    std::vector<DmgFx> fx;
-    fx.reserve(targets.size());
+// ---- batched damage presentation shared by sub_2CAF7/2CC3A/2EF4A/34C48 ----
+// sub_45BFB prepares one target's number and start position, subtracts the raw damage from
+// [+48h] and sets the 45ED2 knockback. The whole list is prepared before sub_287AF animates
+// it in parallel (45F29/45CCB), so every caller uses this same entry point.
+void CombatII::battle_damage_fx_prepare(int caster_index, int ti, int slot, int fin,
+                                        std::vector<BattleDamageFx>& fx) {
+    if (caster_index < 0 || (size_t)caster_index >= units_.size()) return;
+    if (ti < 0 || (size_t)ti >= units_.size()) return;
+    auto& A = units_[(size_t)caster_index];
+    auto& T = units_[(size_t)ti];
+    if (!T.active || T.hp <= 0) return;
+    const int old_raw = battle_hp_raw(T);
+    int new_raw = old_raw - fin;
+    if (new_raw > battle_max_hp_raw(T)) new_raw = battle_max_hp_raw(T);
+    const int new_hp = new_raw <= 0 ? 0 : (new_raw + 99) / 100;
+    if (battle_trace_) fprintf(stderr, "COMBAT: damage fx unit=%d -> target=%d final=%d hp_raw %d->%d\n",
+                                A.id, T.id, fin, old_raw, new_raw);
+    BattleDamageFx d{};
+    d.unit = ti;
+    d.slot = slot;
+    d.sx0 = (T.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X;
+    const int sy0 = (T.y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y;
+    for (int k = 0; k < 5; k++) d.digit_y[k] = sy0 + 10;   // word_F9708
+    // sub_45BFB: idiv 64h; above 999 no number is shown, otherwise the digits are the display
+    // damage (fin/100), not the rounded HP difference.
+    const int shown = fin / 100;
+    if (fin > 0 && shown <= 999) d.ndig = snprintf(d.digits, sizeof(d.digits), "%d", shown);
     static constexpr uint8_t kDmgColor[8] = {0x04, 0x10, 0x31, 0x51, 0x20, 0x01, 0x00, 0x00};
-    for (size_t slot = 0; slot < targets.size(); ++slot) {
-        const int ti = targets[slot];
-        if (ti < 0 || (size_t)ti >= units_.size()) continue;
-        auto& T = units_[(size_t)ti];
-        if (!T.active || T.hp <= 0) continue;
-        const int base = battle_damage(unit_index, ti, 0, 0, 0); // sub_1D770(ebx=0, ecx=0)
-        const int fin = add + base;
-        const int old_raw = battle_hp_raw(T);
-        int new_raw = old_raw - fin;
-        if (new_raw > battle_max_hp_raw(T)) new_raw = battle_max_hp_raw(T);
-        const int new_hp = new_raw <= 0 ? 0 : (new_raw + 99) / 100;
-        if (battle_trace_) fprintf(stderr, "COMBAT: 2caf7 unit=%d -> target=%d base=%d final=%d hp_raw %d->%d\n",
-                                    A.id, T.id, base, fin, old_raw, new_raw);
-        DmgFx d{};
-        d.unit = ti;
-        d.slot = (int)slot;
-        d.sx0 = (T.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X;
-        const int sy0 = (T.y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y;
-        for (int k = 0; k < 5; k++) d.digit_y[k] = sy0 + 10;  // word_F9708
-        // sub_45BFB: idiv 64h; above 999 no number is shown, otherwise the digits are the
-        // display damage (fin/100), not the rounded HP difference.
-        const int shown = fin / 100;
-        if (fin > 0 && shown <= 999) d.ndig = snprintf(d.digits, sizeof(d.digits), "%d", shown);
-        d.color = kDmgColor[std::min(std::max(battle_effective_army(T), 0), 7)];
-        T.walk_off_x = T.walk_off_y = 0;                       // sub_45BFB prologue
-        T.hp = new_hp;
-        T.hp_deficit = new_hp > 0 ? new_hp * 100 - new_raw : 0; // exact [+48h] after the subtract
-        setup_knockback_hit(T, A.facing & 3);                  // sub_45ED2
-        fx.push_back(d);
-    }
-    A.combat_value_44 = orig44; // restore [44h]
+    d.color = kDmgColor[std::min(std::max(battle_effective_army(T), 0), 7)];
+    T.walk_off_x = T.walk_off_y = 0;                       // sub_45BFB prologue
+    T.hp = new_hp;
+    T.hp_deficit = new_hp > 0 ? new_hp * 100 - new_raw : 0; // exact [+48h] after the subtract
+    setup_knockback_hit(T, A.facing & 3);                  // sub_45ED2
+    fx.push_back(d);
+}
 
-    // sub_287AF: 1033B(3,1) -> 24 frames of 45F29/45CCB over the whole list -> 12124 for every
-    // target -> 499DA(0x24).
+// sub_287AF: period 3, 24 frames with every prepared target animated together (45F29/45CCB),
+// then sub_12124 for all targets and sub_499DA(0x24).
+void CombatII::battle_damage_fx_play(std::vector<BattleDamageFx>& fx,
+                                     const std::vector<int>& targets) {
     if (!small_font_tried_) load_small_font();
     const bool damage_small_font = small_font_loaded_;
     game_timer_set(3);
     for (int f = 1; f <= 0x18 && !should_exit_ && !skip_cutscene_; ++f) {
-        for (DmgFx& d : fx) {
+        for (BattleDamageFx& d : fx) {
             if (d.unit < 0 || (size_t)d.unit >= units_.size()) continue;
             auto& U = units_[(size_t)d.unit];
             apply_knockback_hit(U, d.slot, f);                 // sub_45F29(U, slot, frame)
@@ -10910,7 +10874,7 @@ int CombatII::battle_weapon_2caf7_loop(int unit_index, int mul, int add) {
         }
         render_battle_frame();
         uint8_t* bb = video_.get_backbuffer();
-        for (const DmgFx& d : fx) {
+        for (const BattleDamageFx& d : fx) {
             if (d.ndig <= 0) continue;
             const int x0 = d.sx0 + 12 - d.ndig * 3;
             if (x0 - 16 < 0 || x0 - 16 >= 0x120) continue;
@@ -10941,23 +10905,62 @@ int CombatII::battle_weapon_2caf7_loop(int unit_index, int mul, int add) {
         }
     }
     game_timer_set(0x24);                                      // sub_499DA(0x24)
+}
 
-    // sub_1ED45(caster): the list is walked again. A dead slot runs sub_1DB1D and is cleared
-    // from F0648; a survivor gets sub_53797(victim, caster, 1).
-    if (!should_exit_) {
-        for (size_t slot = 0; slot < targets.size(); ++slot) {
-            const int ti = targets[slot];
-            if (ti < 0 || (size_t)ti >= units_.size()) continue;
-            if (units_[(size_t)ti].hp <= 0) {
-                play_unit_death(ti, unit_index);               // sub_1DB1D
-                if (should_exit_) break;
-                if (slot < battle_target_list_.size()) battle_target_list_[slot] = -1;
-            } else {
-                run_unit_hp_trigger(ti, unit_index, 1);        // sub_53797
-                if (should_exit_) break;
-            }
+// sub_1ED45(caster): a dead target runs sub_1DB1D and leaves F0648, a survivor gets
+// sub_53797(victim, caster, 1).
+void CombatII::battle_damage_fx_triggers(const std::vector<int>& targets, int caster_index) {
+    if (should_exit_) return;
+    for (size_t slot = 0; slot < targets.size(); ++slot) {
+        const int ti = targets[slot];
+        if (ti < 0 || (size_t)ti >= units_.size()) continue;
+        if (units_[(size_t)ti].hp <= 0) {
+            play_unit_death(ti, caster_index);                 // sub_1DB1D
+            if (should_exit_) break;
+            if (slot < battle_target_list_.size()) battle_target_list_[slot] = -1;
+        } else {
+            run_unit_hp_trigger(ti, caster_index, 1);          // sub_53797
+            if (should_exit_) break;
         }
     }
+}
+
+// sub_2CAF7 gameplay core (eax=unit, ebx=mul, dx=add).
+//   [44h] = orig*mul (low 16 bits) -> per target sub_1D770(0,0) -> dmg = add+base ->
+//   45BFB (damage number) / HP -= dmg / 45ED2 (knockback). The whole list is prepared before
+//   any animation: sub_287AF then runs 24 frames at period 3 with every target animated in
+//   parallel (45F29/45CCB), stands all of them up (12124) and restores the period (499DA 24h).
+//   sub_1ED45(caster) follows: a dead target runs sub_1DB1D and leaves F0648, a survivor gets
+//   sub_53797(victim, caster, 1). The caller owns the caster's pose.
+int CombatII::battle_weapon_2caf7_loop(int unit_index, int mul, int add) {
+    if (unit_index < 0 || (size_t)unit_index >= units_.size()) return -1;
+    if (battle_target_list_.empty()) return -1;
+    const std::vector<int> targets = battle_target_list_;
+    auto& A = units_[(size_t)unit_index];
+    const int16_t orig44 = A.combat_value_44;
+    const int32_t prod = (int32_t)orig44 * (int32_t)mul;
+    A.combat_value_44 = (int16_t)(prod & 0xFFFF); // imul + mov [44h],ax
+    if (battle_trace_) fprintf(stderr, "COMBAT: 2caf7 unit=%d mul=%d add=%d orig44=%d temp44=%d targets=%zu\n",
+                                A.id, mul, add, (int)orig44, (int)A.combat_value_44, targets.size());
+
+    // sub_45BFB/45ED2 prepare every target before sub_287AF animates the whole list at once.
+    std::vector<BattleDamageFx> fx;
+    fx.reserve(targets.size());
+    for (size_t slot = 0; slot < targets.size(); ++slot) {
+        const int ti = targets[slot];
+        if (ti < 0 || (size_t)ti >= units_.size()) continue;
+        auto& T = units_[(size_t)ti];
+        if (!T.active || T.hp <= 0) continue;
+        const int base = battle_damage(unit_index, ti, 0, 0, 0); // sub_1D770(ebx=0, ecx=0)
+        const int fin = add + base;
+        if (battle_trace_) fprintf(stderr, "COMBAT: 2caf7 unit=%d -> target=%d base=%d final=%d\n",
+                                    A.id, T.id, base, fin);
+        battle_damage_fx_prepare(unit_index, ti, (int)slot, fin, fx);
+    }
+    A.combat_value_44 = orig44; // restore [44h]
+
+    battle_damage_fx_play(fx, targets);                        // sub_287AF
+    battle_damage_fx_triggers(targets, unit_index);            // sub_1ED45(caster)
     return 1;
 }
 
@@ -11050,9 +11053,9 @@ int CombatII::battle_weapon_341c7(int unit_index) {
 // (ASM 496B4..496CF), shak2 presentation (106 frames) + per target base*4+6000 through 2CACA.
 int CombatII::battle_weapon_34c48(int unit_index) {
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return -1;
-    int fx = 0, fy = 0;
-    battle_weapon_front_tile(unit_index, fx, fy);                        // sub_1A1DE
-    const int n = battle_weapon_collect_rect(unit_index, fx, fy, 1, 3);  // sub_1A452/1A552/1A1F8
+    int front_x = 0, front_y = 0;
+    battle_weapon_front_tile(unit_index, front_x, front_y);              // sub_1A1DE
+    const int n = battle_weapon_collect_rect(unit_index, front_x, front_y, 1, 3); // sub_1A452/1A552/1A1F8
     if (n <= 0) {
         if (battle_trace_) fprintf(stderr, "COMBAT: 34c48 unit=%d empty -> -1\n", units_[(size_t)unit_index].id);
         return -1;
@@ -11067,32 +11070,24 @@ int CombatII::battle_weapon_34c48(int unit_index) {
     battle_fx_34c48_anim(unit_index);
     if (should_exit_) return 1;
     if (targets.empty()) return -1;
-    for (int ti : targets) {
+    std::vector<BattleDamageFx> fx;
+    fx.reserve(targets.size());
+    for (size_t slot = 0; slot < targets.size(); ++slot) {
+        const int ti = targets[slot];
         if (ti < 0 || (size_t)ti >= units_.size()) continue;
-        if (!units_[(size_t)ti].active || units_[(size_t)ti].hp <= 0) continue;
+        auto& T = units_[(size_t)ti];
+        if (!T.active || T.hp <= 0) continue;
         const int base = battle_damage(unit_index, ti, 0, 0, 0);
         const int tmp = 4 * base + 0x1770;
         const int fin = battle_weapon_2caca(unit_index, tmp);
-        auto& T = units_[(size_t)ti];
-        const int old_raw = battle_hp_raw(T);
-        int new_raw = old_raw - fin;
-        if (new_raw > battle_max_hp_raw(T)) new_raw = battle_max_hp_raw(T);
-        const int new_hp = new_raw <= 0 ? 0 : (new_raw + 99) / 100;
-        const int delta = new_hp - T.hp;
-        if (battle_trace_) fprintf(stderr, "COMBAT: 34c48 unit=%d -> target=%d base=%d tmp=%d final=%d hp_raw %d->%d\n",
-                                    A.id, T.id, base, tmp, fin, old_raw, new_raw);
-        if (delta != 0) {
-            VmEvent hp; hp.type = VmEventType::Hp; hp.hp_unit = ti;
-            hp.hp_delta = delta; hp.hp_dir = A.facing & 3; hp.hp_killer = unit_index;
-            play_hp_change(hp);
-            if (should_exit_) return 1;
-            if (!units_[(size_t)unit_index].active) return 1;
-        } else {
-            run_unit_hp_trigger(ti, unit_index, 1);
-        }
+        if (battle_trace_) fprintf(stderr, "COMBAT: 34c48 unit=%d -> target=%d base=%d tmp=%d final=%d\n",
+                                    A.id, T.id, base, tmp, fin);
+        battle_damage_fx_prepare(unit_index, ti, (int)slot, fin, fx); // 45BFB + [48h] -= fin + 45ED2
     }
-    run_unit_hp_trigger(unit_index, -1, 1);
-    game_timer_set(6);
+    battle_damage_fx_play(fx, targets);                     // sub_287AF + 12124
+    battle_damage_fx_triggers(targets, unit_index);         // sub_1ED45(caster)
+    battle_nsp_release();                                   // sub_1FFCD
+    weather_tick_enabled_ = true;                           // sub_103A0
     return 1;
 }
 
