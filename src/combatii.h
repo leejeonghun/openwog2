@@ -2345,7 +2345,6 @@ private:
                                    int* last_x = nullptr, int* last_y = nullptr); // 1A452/1A552 + 1A1F8
     int battle_weapon_collect_dia_at(int unit_index, int x, int y, int r); // 1AC08/1AC59 + 1A1F8
     void battle_weapon_front_tile(int unit_index, int& fx, int& fy); // 1A1DE + 1A146
-    bool battle_weapon_hit_target(int unit_index, int ti, int fin);  // 45BFB/HP/45ED2 on one target
     void battle_knockback_2e896(int target_index, int dir);          // sub_2E896
     bool battle_weapon_2ed9a_pick(int unit_index, int radius, int& out_x, int& out_y); // sub_2ED9A
     int battle_weapon_2ef4a(int unit_index, int di, int type, int add); // sub_2EF4A

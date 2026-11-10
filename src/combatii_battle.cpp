@@ -10297,34 +10297,6 @@ void CombatII::battle_weapon_front_tile(int unit_index, int& fx, int& fy) {
     fx = pt.x; fy = pt.y;
 }
 
-// Applies fixed damage fin (x100) to one target and runs the 45BFB + HP + 45ED2 + death +
-// trigger presentation, using the same convention as the 2CAF7 target loop.
-// Returns false when the scene ended or the attacker died (the caller must stop).
-bool CombatII::battle_weapon_hit_target(int unit_index, int ti, int fin) {
-    if (unit_index < 0 || (size_t)unit_index >= units_.size()) return false;
-    if (ti < 0 || (size_t)ti >= units_.size()) return true;
-    auto& A = units_[(size_t)unit_index];
-    auto& T = units_[(size_t)ti];
-    if (!T.active || T.hp <= 0) return true;
-    const int old_raw = battle_hp_raw(T);
-    int new_raw = old_raw - fin;
-    if (new_raw > battle_max_hp_raw(T)) new_raw = battle_max_hp_raw(T);
-    const int new_hp = new_raw <= 0 ? 0 : (new_raw + 99) / 100;
-    const int delta = new_hp - T.hp;
-    if (battle_trace_) fprintf(stderr, "COMBAT: hit unit=%d -> target=%d final=%d hp_raw %d->%d\n",
-                                A.id, T.id, fin, old_raw, new_raw);
-    if (delta != 0) {
-        VmEvent hp; hp.type = VmEventType::Hp; hp.hp_unit = ti;
-        hp.hp_delta = delta; hp.hp_dir = A.facing & 3; hp.hp_killer = unit_index;
-        play_hp_change(hp);
-        if (should_exit_) return false;
-        if (!units_[(size_t)unit_index].active) return false;
-    } else {
-        run_unit_hp_trigger(ti, unit_index, 1); // sub_1ED45
-    }
-    return true;
-}
-
 // sub_2E896(eax=target, edx=facing): knockback. Does nothing when [61h] >= 0x12C or
 //   [5Ch] != 0.
 //   Sets [64h] = 0Ah, builds the 169D7 selector grid (impassable/occupied -2), then walks up
