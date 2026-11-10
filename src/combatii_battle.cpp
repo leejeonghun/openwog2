@@ -11042,6 +11042,7 @@ int CombatII::battle_weapon_341c7(int unit_index) {
         return -1;
     }
     battle_fx_341c7_anim(unit_index);   // 44D89 registers all, 5E9D0/305A2/30824 for 10 frames, f_quake 6+7 frames
+    reset_unit_pose(units_[(size_t)unit_index]); // sub_12124(caster), ASM 49658 before 2CAF7
     return battle_weapon_2caf7_loop(unit_index, 2, 0x4E20);
 }
 
