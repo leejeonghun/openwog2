@@ -307,36 +307,25 @@ int CombatII::battle_fx_356db_anim(int unit_index) {
         fprintf(stderr, "COMBAT: warning: 356DB unit=%d sarah.nsp missing (presentation skipped)\n", A.id);
     }
 
-    // ---- damage (tail of step 8: 1D770 -> x5 + 0BB8 -> 2CACA -> 45BFB/45ED2/287AF/1ED45) ----
+    // ---- damage (tail of step 8: 12124 caster/target -> 1D770 -> x5 + 0BB8 -> 2CACA ->
+    //      45BFB/HP/45ED2 -> 287AF -> 1ED45 -> 1FFCD -> 103A0) ----
     if (should_exit_) return 1;
     if (ti < 0 || (size_t)ti >= units_.size() || !units_[(size_t)ti].active) return -1;
+    reset_unit_pose(A);                                          // sub_12124(caster), ASM 51266
+    reset_unit_pose(units_[(size_t)ti]);                         // sub_12124(target), ASM 51269
     const int base = battle_damage(unit_index, ti, 0, 0, 0);      // sub_1D770(ebx=0, ecx=0)
     const int tmp = 5 * base + 0x0BB8;
     const int fin = battle_weapon_2caca(unit_index, tmp);         // sub_2CACA
-    {
-        auto& T = units_[(size_t)ti];
-        const int old_raw = battle_hp_raw(T);
-        int new_raw = old_raw - fin;
-        if (new_raw > battle_max_hp_raw(T)) new_raw = battle_max_hp_raw(T);
-        const int new_hp = new_raw <= 0 ? 0 : (new_raw + 99) / 100;
-        const int delta = new_hp - T.hp;
-        if (battle_trace_)
-            fprintf(stderr, "COMBAT: 356db unit=%d -> target=%d base=%d tmp=%d final=%d hp_raw %d->%d\n",
-                    A.id, T.id, base, tmp, fin, old_raw, new_raw);
-        if (delta != 0) {
-            VmEvent hp; hp.type = VmEventType::Hp; hp.hp_unit = ti;
-            hp.hp_delta = delta; hp.hp_dir = A.facing & 3; hp.hp_killer = unit_index;
-            play_hp_change(hp);                                   // sub_45BFB
-            if (should_exit_) return 1;
-        } else {
-            run_unit_hp_trigger(ti, unit_index, 1);
-        }
-    }
-    run_unit_hp_trigger(unit_index, -1, 1);                      // sub_1ED45
-    battle_nsp_release();                                        // sub_1FFCD (after the damage)
+    if (battle_trace_)
+        fprintf(stderr, "COMBAT: 356db unit=%d -> target=%d base=%d tmp=%d final=%d\n",
+                A.id, units_[(size_t)ti].id, base, tmp, fin);
+    std::vector<BattleDamageFx> fx;
+    fx.reserve(1);
+    battle_damage_fx_prepare(unit_index, ti, 0, fin, fx);        // 45BFB + [48h] -= fin + 45ED2
+    const std::vector<int> targets{ti};
+    battle_damage_fx_play(fx, targets);                          // sub_287AF
+    battle_damage_fx_triggers(targets, unit_index);              // sub_1ED45(caster)
+    battle_nsp_release();                                        // sub_1FFCD
     weather_tick_enabled_ = true;                                // sub_103A0
-    reset_unit_pose(units_[(size_t)unit_index]);                 // sub_12124
-    game_timer_set(6);                                           // 287AF hit-pace approximation
-    battle_highlight_clear();                                    // sub_44D75 (51257)
     return 1;
 }
