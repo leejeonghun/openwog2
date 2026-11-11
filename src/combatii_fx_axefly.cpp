@@ -110,5 +110,6 @@ int CombatII::battle_fx_2dd7a(int unit_index, int tx, int ty, int k) {
     reset_unit_pose(units_[(size_t)unit_index]);                     // sub_12124
     present_cutscene_frame();                                        // sub_45559
     game_timer_set(0x20);                                            // sub_499DA(20h)
+    wait_game_tick();                                                // 499DA falls through to 499E4
     return 1;
 }

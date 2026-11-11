@@ -328,19 +328,21 @@ int CombatII::battle_fx_2cc3a_anim(int unit_index, int variant, int sfx_id) {
                 break;
             default: break;   // case 3 (loc_2D1B8) has no body
         }
-        // Shake (loc_2D1B8): when frame%5 == 2 or (frame%5 == 0 and trail > 2), every unit is
-        // moved by 2 or 3 pixels according to the caster facing (the whole screen shakes).
+        // Shake (loc_2D1D4..loc_2D22C): when frame%5 == 2 or (frame%5 == 0 and trail > 2),
+        // only the F0648 targets move. loc_2D1D8 calls 1214F on each target first (pose 0Ah,
+        // or 0 for sprites >= 12Ch) and then ADDS the facing offset; [65h]/[66h] are not
+        // cleared here.
         if ((frames % 5) == 2 || ((frames % 5) == 0 && trail > 2)) {
-            for (size_t i = 0; i < units_.size(); ++i) {
-                auto& u = units_[i];
+            for (int ti : battle_target_list_) {
+                if (ti < 0 || (size_t)ti >= units_.size()) continue;
+                auto& u = units_[(size_t)ti];
                 if (!u.active) continue;
-                u.walk_off_x = 0;
-                u.walk_off_y = 0;
+                u.anim_frame = (u.sprite_type < 0x12C) ? 0x0A : 0;   // sub_1214F
                 switch (A.facing & 3) {
-                    case 0: u.walk_off_y += 2; break;   // south: [+66h] += 2
-                    case 1: u.walk_off_x -= 3; break;   // west:  [+65h] -= 3
-                    case 2: u.walk_off_y -= 2; break;   // north: [+66h] -= 2
-                    default: u.walk_off_x += 3; break;  // east:  [+65h] += 3
+                    case 0: u.walk_off_y += 2; break;   // south: add [66h],2
+                    case 1: u.walk_off_x -= 3; break;   // west:  sub [65h],3
+                    case 2: u.walk_off_y -= 2; break;   // north: sub [66h],2
+                    default: u.walk_off_x += 3; break;  // east:  add [65h],3
                 }
             }
             wait_game_tick();                                    // 499E4 at loc_2D22C
@@ -370,6 +372,7 @@ int CombatII::battle_fx_2cc3a_anim(int unit_index, int variant, int sfx_id) {
     }
     // (7) Wrap up.
     game_timer_set(0x40);                                        // sub_499DA(40h)
+    wait_game_tick();                                            // 499DA falls through to 499E4
     battle_highlight_clear();                                    // sub_44D75
     battle_dim_row0_ = false;                                    // sub_44D6E(0)
     for (size_t i = 0; i < units_.size(); ++i) {                 // restore the shake offsets
@@ -555,7 +558,8 @@ void CombatII::battle_fx_341c7_anim(int unit_index) {
     game_timer_set(9);                                                // 1033B(9)
 
     // (9) 0x40 (64) frames of falling rocks (loc_34785). Every frame:
-    //     shake (cam_fine_x = rand(3)-1) -> 5E9D0(clear) -> loop over 7 particles -> 5E9E8
+    //     shake (dword_BA838 = rand(3)-1, the 10988 fine Y) -> 5E9D0(clear) -> 7 particles
+    //     -> 5E9E8
     //     -> 499E4. When si > 3Ah the 307A6(10h,24h) palette ramp runs; 4F4CD fires at
     //   si == 0Ah and on every multiple of 12. Particle i draws unk_F0DAA[12h+i]
     //   (frames 18..24) at anchor + [4]/[6] and pushes [4]/[6] by +-rand(2) each frame using
@@ -573,7 +577,7 @@ void CombatII::battle_fx_341c7_anim(int unit_index) {
     const int ay0 = (A.y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + UNIT_ANCHOR_Y;
     static constexpr int kRockVel[7][2] = {{0,-1},{-1,0},{0,0},{1,0},{-1,1},{1,1},{0,1}};
     for (int si = 0; si < 0x40 && !should_exit_; ++si) {
-        cam_fine_x_ = combat_rand(3) - 1;                             // 499BD(3)-1 (shake)
+        cam_fine_y_ = combat_rand(3) - 1;                             // 499BD(3)-1 -> dword_BA838
         const int jit = si & 1;                                       // var_10 = si&1 (y jitter)
         video_.clear();                                               // 5E9D0(0, 0, 5DC0h)
         for (int i = 0; i < 7; ++i) {
@@ -648,7 +652,7 @@ void CombatII::battle_fx_341c7_anim(int unit_index) {
     //       5FD1C waits for vertical retrace (5E943) each step, so the port also ticks per
     //       step (same rule as the 276B9/2799A fades). The reference palette is the
     //       weather-applied unk_12824C, hence dlg_shade_pal_.
-    cam_fine_x_ = 0;                                                  // dword_BA838 = 0
+    cam_fine_y_ = 0;                                                  // dword_BA838 = 0
     if (!dlg_shade_pal_set_) snapshot_dialog_shade_palette();         // copy of unk_12824C
     const uint8_t (*master)[3] = dlg_shade_pal_;
     uint8_t solid[256 * 3];
@@ -720,8 +724,9 @@ void CombatII::fx_37fa4_rush(int unit_index, int dash_x, int dash_y) {
 //     5E9D0(ebx=5DC0, eax=0, edx=0) -> 5EE51(F0DAA[12*(hit%3)], x+0A0h, y+64h)
 //     -> 30784 (drop one afterimage) -> 305A2(unit, pose) -> 44DCC (redraw registered units)
 //     -> 5E9E8 -> 499E4
-//   They differ only in frame count (1/5/2/5), the 305A2 pose (5/6/7 and 8/9) and 1E2EA (the
-//   weapon arc, di<3) in blocks B and D; the arc is left to the port's weapon-arc model.
+//   They differ only in frame count (1/4/2/4), the 305A2 pose (5/6/7 and 8/9) and 1E2EA (the
+//   weapon arc, di<3) in blocks B and D. 1E2EA is called with edx = di (f8 = di-1) and
+//   ebx = 0 in block B / 1 in block D.
 void CombatII::fx_37fa4_hit_block(int unit_index, int irus_frame, int pose, int nframes) {
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return;
     const int n = (int)magic_frames_.size();
@@ -735,6 +740,34 @@ void CombatII::fx_37fa4_hit_block(int unit_index, int irus_frame, int pose, int 
         fx_trail_drop();                                         // 30784
         fx_trail_step(unit_index, pose);                         // 305A2
         render_highlight_units_direct();                         // 44DCC
+        // 1E2EA: WEA_EFFC weapon arc, only in B (pose 6, s=0) and D (pose 9, s=1), and
+        // only while di = i+1 < 3. The offsets come from the caster's 40-byte head table:
+        // +3/+4 when f8 == 1, +1/+2 otherwise, and the sprite index is base + f8.
+        if ((pose == 6 || pose == 9) && i + 1 < 3) {
+            auto& A = units_[(size_t)unit_index];
+            const int d = A.facing & 3;
+            const int s = (pose == 9) ? 1 : 0;                  // ebx
+            const int f8 = i;                                   // dec edx (20701)
+            const NC2Parser* np = nullptr;
+            auto it = nc2_chars_.find(A.sprite_type);
+            if (it != nc2_chars_.end()) np = it->second.get();
+            const int base = np ? np->head(d * 10 + s * 5 + 0) : -1;
+            if (np && base >= 0) {
+                const int kx = (f8 == 1) ? 3 : 1;               // unk_BA8B3 / unk_BA8B1
+                const int ky = (f8 == 1) ? 4 : 2;               // unk_BA8B4 / unk_BA8B2
+                const int idx = base + f8;
+                if (idx >= 0 && idx < (int)wea_effc_.size() &&
+                    !wea_effc_[(size_t)idx].rle.empty()) {
+                    const int ox = np->head(d * 10 + s * 5 + kx);
+                    const int oy = np->head(d * 10 + s * 5 + ky);
+                    const int ax = (A.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ +
+                                   TILE_ANCHOR_X + CENTER_ADD_X - ox;
+                    const int ay = (A.y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ +
+                                   TILE_ANCHOR_Y + CENTER_ADD_Y - oy;
+                    blit_sprite_480(ax, ay, wea_effc_[(size_t)idx].rle.data());
+                }
+            }
+        }
         battle_fx_commit();                                      // 5E9E8
         wait_game_tick();                                        // 499E4
     }
@@ -885,7 +918,7 @@ void CombatII::battle_fx_37fa4_dash_and_lightning(int unit_index, bool load_nsp)
 //       di = facing block: south 22h, west 0, north 3Ch, east 11h.
 //       varA/varB = south/north (7,8), west/east (8,7) - the two groups are opposite.
 //     (2) tail 33 frames: re-anchor to 10971+0Ch / 10988-2, 4F4CD(32h), then F0DAA
-//         di+1..di+9 three frames each and di+1 six frames (di = 0/9/12h/1Bh for
+//         di..di+8 three frames each and di+1 six frames (di = 0/9/12h/1Bh for
 //         west/east/south/north). The six frames shake the targets +5, -0Ah/+0Ah x3, -5.
 //     (3) [64h]=4, 5F9AE, 44D6E(0), 44D75, 11E04(caster), 12124(targets), damage
 //         (1D770/2CACA/45BFB/45ED2/287AF), 1FFCD, 103A0
@@ -962,7 +995,7 @@ void CombatII::battle_fx_34c48_anim(int unit_index) {
         shift_targets();
         for (int k = 0; k < 3 && !should_exit_; ++k) frame(7, -1, 0, 0);
     }
-    // (2) Tail: re-anchor to 10971+0Ch / 10988-2, then di+1..di+9 three frames each,
+    // (2) Tail: re-anchor to 10971+0Ch / 10988-2, then di..di+8 three frames each,
     //     then di+1 six more frames while the targets shake +5/-0Ah/+0Ah/-5.
     const int tx = (A.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X + 0x0C;
     const int ty = (A.y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y - 2;
@@ -984,13 +1017,17 @@ void CombatII::battle_fx_34c48_anim(int unit_index) {
     };
     const int tail_base = kTailBase[f];
     sfx(0x32);                                                            // 4F4CD(32h)
+    // loc_352BB: frame = di + var_10 (var_10 = 0..8, three draws each). There is no +1 here;
+    // the +1 belongs to the shake block below (`movsx eax, di / inc eax` at loc_35351).
     for (int j = 0; j < 9 && !should_exit_; ++j)
-        for (int k = 0; k < 3 && !should_exit_; ++k) tail(tail_base + 1 + j);
-    // loc_35332: +5, then three pairs of -0Ah/+0Ah, then -5.
+        for (int k = 0; k < 3 && !should_exit_; ++k) tail(tail_base + j);
+    // loc_35332: +5, then three pairs of -0Ah/+0Ah, then -5. loc_35351 draws with 5EE51
+    // *before* moving [65h], so the first frame of each pair uses the offsets left by the
+    // previous step (the +5 above for the first pair).
     shift_targets_x(5);
     for (int k = 0; k < 3 && !should_exit_; ++k) {
-        shift_targets_x(-0x0A); tail(tail_base + 1);
-        shift_targets_x(0x0A); tail(tail_base + 1);
+        tail(tail_base + 1); shift_targets_x(-0x0A);
+        tail(tail_base + 1); shift_targets_x(0x0A);
     }
     shift_targets_x(-5);
     // (3) [64h] = 4, then 12124 for every collected target.

@@ -8577,6 +8577,7 @@ void CombatII::battle_spell_pace_287af() {
     // The 12124 loop of 287AF (restore collected poses) already happens in each handler
     // through the final reset_unit_pose call.
     game_timer_set(0x24);                                 // sub_499DA(0x24)
+    wait_game_tick();                                     // 499DA falls through to 499E4
 }
 
 // sub_2016A: f_arrow.nsp projectile (Fire Arrow / Fire Ball, q1 0 d0 k0/k1).
@@ -9543,7 +9544,8 @@ void CombatII::battle_weapon_301bb(int unit_index, int weapon_idx, int is_leader
     reset_unit_pose(u); // sub_12124 (eax=esi, ebx=1)
     run_unit_hp_trigger(unit_index, -1, 1); // sub_53797(eax=esi, edx=0, ebx=1)
     if (should_exit_) return;
-    game_timer_set(0x24); // mov eax,24h; call sub_499DA (period only, no wait)
+    game_timer_set(0x24);
+    wait_game_tick();     // mov eax,24h; call sub_499DA -> falls through to 499E4
 }
 
 // sub_2F47F family (F1474 vector idx = si-1, sub_300A0 0..12). 1 on success, -1 on failure.
@@ -10813,10 +10815,14 @@ void CombatII::battle_damage_fx_prepare(int caster_index, int ti, int slot, int 
     d.sx0 = (T.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X;
     const int sy0 = (T.y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y;
     for (int k = 0; k < 5; k++) d.digit_y[k] = sy0 + 10;   // word_F9708
-    // sub_45BFB: idiv 64h; above 999 no number is shown, otherwise the digits are the display
-    // damage (fin/100), not the rounded HP difference.
+    // sub_45BFB: shown = fin / 100 (idiv 64h), the display damage, not the HP difference.
+    // No value is hidden: above 999 the width index is 0 and the same 4-cell window is
+    // filled left to right, and fin <= 0 leaves the buffer empty for the "miss" branch.
     const int shown = fin / 100;
-    if (fin > 0 && shown <= 999) d.ndig = snprintf(d.digits, sizeof(d.digits), "%d", shown);
+    if (fin > 0) {
+        d.ndig = snprintf(d.digits, sizeof(d.digits), "%d", shown);
+        if (d.ndig > 4) d.ndig = 4;          // 45CCB reads cells 0..3 only
+    }
     static constexpr uint8_t kDmgColor[8] = {0x04, 0x10, 0x31, 0x51, 0x20, 0x01, 0x00, 0x00};
     d.color = kDmgColor[std::min(std::max(battle_effective_army(T), 0), 7)];
     T.walk_off_x = T.walk_off_y = 0;                       // sub_45BFB prologue
@@ -10838,23 +10844,49 @@ void CombatII::battle_damage_fx_play(std::vector<BattleDamageFx>& fx,
             if (d.unit < 0 || (size_t)d.unit >= units_.size()) continue;
             auto& U = units_[(size_t)d.unit];
             apply_knockback_hit(U, d.slot, f);                 // sub_45F29(U, slot, frame)
-            // sub_45CCB: f<5 moves all rows up by 2, f>=20 moves all down by 2, otherwise the
-            // row selected by (f-5)/5 bounces.
-            if (f < 5) for (int k = 0; k < 5; k++) d.digit_y[k] -= 2;
-            else if (f >= 0x14) for (int k = 0; k < 5; k++) d.digit_y[k] += 2;
-            else { const int k = (f - 5) / 5; if (k < 5) d.digit_y[k] += 2; }
+            // sub_45CCB (loc_45D15..loc_45D66): only cell 0 (f<5), cell 3 (f>=14h) or a
+            // pair of adjacent cells moves; the 24-frame wave travels through the digits.
+            if (d.ndig <= 0) {
+                // loc_45E21: "miss" alternates between y[1] and y[0] - (14h-frame)/2.
+                if (f & 1) d.digit_y[0] = d.digit_y[1];
+                else d.digit_y[0] -= (0x14 - f) / 2;
+            } else if (f < 5) {
+                d.digit_y[0] -= 2;                             // sub word_F9708[ebx],2
+            } else if (f >= 0x14) {
+                d.digit_y[3] += 2;                             // add unk_F970E[ebx],2
+            } else {
+                const int k = (f - 5) / 5;                     // 0,1,2
+                d.digit_y[k] += 2;                             // add dx,2
+                d.digit_y[k + 1] -= 2;                         // sub cx,2
+            }
         }
         render_battle_frame();
         uint8_t* bb = video_.get_backbuffer();
         for (const BattleDamageFx& d : fx) {
-            if (d.ndig <= 0) continue;
-            const int x0 = d.sx0 + 12 - d.ndig * 3;
-            if (x0 - 16 < 0 || x0 - 16 >= 0x120) continue;
+            // loc_45D6E/loc_45E4D: one cull for the whole number (x-10h, y[0]-5).
+            if (d.sx0 - 16 < 0 || d.sx0 - 16 >= 0x120) continue;
+            const int y0 = d.digit_y[0];
+            if (y0 - 5 < 0 || y0 - 5 >= 0xB2) continue;
+            if (d.ndig <= 0) {
+                // loc_45E78: an empty buffer shows "miss" (shadow at +1,+1).
+                if (damage_small_font) {
+                    draw_small_text(d.sx0 + 1, y0 + 1, "miss", 0, 1);
+                    draw_small_text(d.sx0, y0, "miss", d.color, 1);
+                } else if (bb && font_.is_loaded()) {
+                    font_.set_text_mode(4, 0x0000, 0xFF);
+                    font_.draw_string(bb, SCREEN_W, SCREEN_H, d.sx0 + 1, y0 + 1, "miss");
+                    font_.set_text_mode(4, (uint16_t)(d.color << 8), 0xFF);
+                    font_.draw_string(bb, SCREEN_W, SCREEN_H, d.sx0, y0, "miss");
+                }
+                continue;
+            }
+            // loc_45DA2: four 6-px cells at sx0 + 6*i; the digits are right-aligned into
+            // cells 0..3 (width index 4-ndig in sub_45BFB).
+            const int first = 4 - d.ndig;
             char one[2] = {0, 0};
-            for (int k = 0; k < d.ndig && k < 4; k++) {
+            for (int k = 0; k < d.ndig; k++) {
                 one[0] = d.digits[k];
-                const int x = x0 + k * 6, y = d.digit_y[k];
-                if (y - 5 < 0 || y - 5 >= 0xB2) continue;
+                const int x = d.sx0 + 6 * (first + k), y = d.digit_y[first + k];
                 if (damage_small_font) {
                     draw_small_text(x + 1, y + 1, one, 0, 1);
                     draw_small_text(x, y, one, d.color, 1);
@@ -10877,6 +10909,7 @@ void CombatII::battle_damage_fx_play(std::vector<BattleDamageFx>& fx,
         }
     }
     game_timer_set(0x24);                                      // sub_499DA(0x24)
+    wait_game_tick();                                          // 499DA falls through to 499E4
 }
 
 // sub_1ED45(caster): a dead target runs sub_1DB1D and leaves F0648, a survivor gets
@@ -11121,12 +11154,14 @@ int CombatII::battle_weapon_37fa4(int unit_index) {
     // dim/305A2/30824/irus for 9 frames, (8) dash).
     battle_fx_37fa4_anim(unit_index);
     // (9) 10 hits (loc_383A2..loc_385E6). One turn of the original is
-    //     [A] 1 frame (pose 5) -> 4F4CD(1) -> [B] 5 frames (pose 6) -> var_C++ ->
+    //     [A] 1 frame (pose 5) -> 4F4CD(1) -> [B] 4 frames (pose 6) -> var_C++ ->
     //     [48h] -= var_20 -> 4F4CD(14h) -> [C] 2 frames (pose 7,8) -> 4F4CD(1) ->
-    //     [D] 5 frames (pose 9) -> shake (target [65h]/[66h] +/-1 along the facing) ->
+    //     [D] 4 frames (pose 9) -> shake (target [65h]/[66h] +/-1 along the facing) ->
     //     var_C++ -> [48h] -= var_20 -> repeat while [48h] >= 0,
     //   and var_C >= 0Ah jumps to loc_3860F before another A/B block.  So there are 10
-    //   damage applications and the frames are A1+B5 + C2+D5 = 13 per turn over 5 turns.
+    //   damage applications and the frames are A1+B4 + C2+D4 = 11 per turn over 5 turns.
+    //   B and D start their loop at di = 1 and run while di < 5 (loc_38426/loc_38546), i.e.
+    //   four frames, not five.
     //   The original computes var_20 once before the loop (38124: 1D770 + 1388h) and only
     //   recomputes it after a retarget (38715).  It subtracts [48h] directly: no 45BFB/
     //   45ED2 number animation and no per-hit 53797 trigger.
@@ -11138,6 +11173,9 @@ int CombatII::battle_weapon_37fa4(int unit_index) {
                                     units_[(size_t)unit_index].id, units_[(size_t)ti].id, base, hit_damage);
     };
     refresh_hit_damage();
+    // var_C: the hit counter compared at loc_383A2 and loc_3860F. It is incremented after
+    // block B and again after block D, before the damage of each pair is applied.
+    int hit = 0;
     // Returns 0 to stop the strike, 1 to continue the current block, 2 when the dead target was
     // replaced and the original jumps back to loc_381EF (dash + lightning) before loc_383A2.
     auto apply_hit = [&](int hit_no) -> int {           // [48h] -= var_20
@@ -11150,26 +11188,34 @@ int CombatII::battle_weapon_37fa4(int unit_index) {
         if (battle_trace_) fprintf(stderr, "COMBAT: 37fa4 unit=%d -> target=%d hit=%d dmg=%d hp_raw %d->%d\n",
                                     units_[(size_t)unit_index].id, T.id, hit_no, hit_damage, old_raw, new_raw);
         if (new_raw >= 0) return 1;                       // cmp [48h],0 / jge loc_383A2
-        // loc_3860F: 13F08 (grid mark), 1DB1D, then F0648 = 0.
+        // loc_3860F: 44D75, 44D89(caster), 13F08 (grid mark), 1DB1D, then F0648 = 0.
+        // 463FB adds the dying unit itself and removes it again (44D81), leaving the caster.
+        battle_highlight_clear();
+        battle_highlight_add(unit_index);
         play_unit_death(ti, unit_index);
         ti = -1;
-        if (should_exit_ || hit_no >= 0x0A) return 0;     // var_C >= 0Ah -> loc_3873C
+        if (should_exit_ || hit >= 0x0A) return 0;        // var_C >= 0Ah -> loc_3873C
         // loc_386A1..38715: rescan the seven-tile line; a new target recomputes var_20 and
-        // resumes at loc_381EF.
+        // resumes at loc_381EF. loc_38676 clears the list and rebuilds it as [caster, target]
+        // for facing 0 and [target, caster] otherwise, before the re-entry.
         if (battle_weapon_collect_line(unit_index, 7) <= 0) return 0;
         ti = battle_target_list_[0];
+        battle_highlight_clear();
+        const bool front_first = ((units_[(size_t)unit_index].facing & 3) == 0);
+        if (front_first) battle_highlight_add(unit_index);
+        battle_highlight_add(ti);
+        if (!front_first) battle_highlight_add(unit_index);
         refresh_hit_damage();
         if (battle_trace_) fprintf(stderr, "COMBAT: 37fa4 unit=%d retarget -> %d (hit %d)\n",
                                     units_[(size_t)unit_index].id, units_[(size_t)ti].id, hit_no);
         return 2;
     };
-    int hit = 0;                                        // var_C
     while (!should_exit_) {
         if (hit >= 0x0A) break;                           // cmp var_C,0Ah / jge loc_3860F
         const int ent = hit % 3;                         // [esp+12h]>>16 % 3 (F0DAA entry)
         fx_37fa4_hit_block(unit_index, ent, 5, 1);       // [A] 1 frame
         sfx(0x01);                                        // 4F4CD(1)
-        fx_37fa4_hit_block(unit_index, ent, 6, 5);       // [B] 5 frames
+        fx_37fa4_hit_block(unit_index, ent, 6, 4);       // [B] 4 frames (di=1..4)
         ++hit;                                             // var_C++
         int r = apply_hit(1);                              // damage 1
         if (r == 0) break;
@@ -11178,7 +11224,7 @@ int CombatII::battle_weapon_37fa4(int unit_index) {
         fx_37fa4_hit_block(unit_index, ent, 7, 1);       // [C] di=7
         fx_37fa4_hit_block(unit_index, ent, 8, 1);       // [C] di=8
         sfx(0x01);                                        // 4F4CD(1)
-        fx_37fa4_hit_block(unit_index, ent, 9, 5);       // [D] 5 frames
+        fx_37fa4_hit_block(unit_index, ent, 9, 4);       // [D] 4 frames (di=1..4)
         // Shake (loc_385C0..loc_385DE): shift the target [+65h]/[+66h] by +/-1 along the
         // caster facing.
         if (ti >= 0 && (size_t)ti < units_.size()) {

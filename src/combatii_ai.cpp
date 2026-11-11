@@ -3271,6 +3271,7 @@ bool CombatII::battle_ai_class_special_43cf0(int unit_index) {
             present_cutscene_frame();
             if (should_exit_) return true;
             game_timer_set(0x10);
+            wait_game_tick();                                        // 499DA falls through to 499E4
             units_[(size_t)unit_index].anim_frame = (uint8_t)(v + 6); // [64h]=6,7
         }
         camera_center_on(ax, ay);

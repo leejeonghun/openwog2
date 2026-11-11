@@ -102,8 +102,9 @@
 //     `[var_8+2]>>16` reads are stack aliases, not uninitialised values: the first is
 //     var_8 (vertical shift) and the second is var_4 (horizontal shift). Loop A copies
 //     source row y to viewport row y-var_8 starting at column var_4; loop B copies source
-//     row y to viewport row y+var_8 starting at column 320-count-var_4. The measured
-//     var_8 sequence is 0,0,5,10,15,20,25. The original's off-screen overhangs fall in
+//     row y to viewport row y+var_8 starting at column 320-count-var_4. loc_31145 reads
+//     var_4 through the [esp+6]>>16 alias, divides by 8 and multiplies by 5, so the loop A
+//     start rows are 0,5,10,15,20,25,30 (seven passes). The original's overhangs fall in
 //     its 480-wide row padding; the port clips them to the visible 320 columns. That
 //     diagonal split is reproduced as-is.
 //     61115 (release tint LUT) is a no-op because the port caches no LUT; the two palette
@@ -386,9 +387,9 @@ int CombatII::battle_fx_31283_anim(int unit_index) {
         else if (st == 1) { T->walk_off_x = (int8_t)(T->walk_off_x + 4); wob[(size_t)k] = 2; }
         else if (st == 2) { T->walk_off_x = (int8_t)(T->walk_off_x - 4); wob[(size_t)k] = 1; }
     };
-    // sub_30FD1(eax=&frame, edx=&target): entry [f] at the target, then a 12-step
-    // column of entry [f+1] at 10h spacing from by-19h down to by-C9h. There is no
-    // second blit of [f+1] at the target itself.
+    // sub_30FD1(eax=&frame, edx=&target): entry [f] at the target, then an 11-blit
+    // column of entry [f+1] at 10h spacing from by-19h down to by-B9h (the loop ends
+    // when the cursor reaches by-C9h). There is no second blit of [f+1] at the target itself.
     auto column_trail = [&](int k, int f) {
         const int bx = target_screen_x(k) + 0x0C;
         const int by = target_screen_y(k) + 0x0C;
@@ -396,7 +397,7 @@ int CombatII::battle_fx_31283_anim(int unit_index) {
         const MagicFxFrame& fr = magic_frames_[(size_t)f];
         const MagicFxFrame& fr2 = magic_frames_[(size_t)(f + 1)];
         battle_fx_blit_tinted(f, bx + fr.xo, by + fr.yo, 0x50);
-        for (int j = 0; j < 12; ++j) {
+        for (int j = 0; j < 11; ++j) {
             const int y = by - 0x19 - 0x10 * j;
             battle_fx_blit_tinted(f + 1, bx + fr2.xo, y + fr2.yo, 0x50);
         }
@@ -627,14 +628,15 @@ int CombatII::battle_fx_31283_anim(int unit_index) {
     //     - 7 passes: var_4 = 0, 8, 10h, 18h, 20h, 28h, 30h (cmp bx,32h).
     //     - Each pass memsets the canvas at +0BB80h with 17700h bytes (ebx = offset
     //       loc_17700 = 0x17700, exactly 200 rows x 480), then refills it from the snapshot.
-    //       var_8 is loop A's starting row; the measured sequence is 0,0,5,10,15,20,25.
+    //       var_8 is loop A's starting row; loc_31145 computes it as var_4/8*5, i.e.
+    //       0,5,10,15,20,25,30 across the seven passes.
     //     - Loop A (loc_31182): ebx = var_8..199, count = (200-ebx)*8/5. Source row
     //       ebx, destination viewport row ebx-var_8, both starting at column var_4.
     //     - Loop B (loc_311E4): ebx = 0..199-var_8, count = ebx*8/5. Source row ebx,
     //       destination viewport row ebx+var_8, starting at column 320-count-var_4.
     //       The opposite vertical shifts and horizontal offsets create the diagonal split.
-    //     - `[var_C+2]>>16` aliases var_8 and `[var_8+2]>>16` aliases var_4; measured
-    //       var_8 starts 0,0,5,10,15,20,25. The original's overhangs live in its 480-wide
+    //     - `[var_C+2]>>16` aliases var_8 and `[var_8+2]>>16` aliases var_4. var_8 is
+    //       var_4/8*5 (0,5,10,15,20,25,30). The original's overhangs live in its 480-wide
     //       row padding, so the port clips both runs to the visible 320 columns.
     //     - Each pass runs 5E9E8 (output) + 499E4 (wait).
     {
@@ -644,9 +646,9 @@ int CombatII::battle_fx_31283_anim(int unit_index) {
             std::memcpy(snap.data(), bb, snap.size());
             for (int pass = 0; pass < 7 && !should_exit_; ++pass) {
                 const int var4 = pass * 8;                       // horizontal offset
-                // The original's high-word alias makes var_8 lag one pass; the measured
-                // loop A start rows are 0,0,5,10,15,20,25.
-                const int var8 = (pass < 2) ? 0 : (pass - 1) * 5;
+                // loc_31145 reads var_4 ([esp+6]>>16), divides by 8 and multiplies by 5:
+                // loop A starts at rows 0,5,10,15,20,25,30.
+                const int var8 = pass * 5;
                 std::memset(bb, 0, (size_t)SCREEN_W * SCREEN_H);  // canvas+0BB80h, 17700h bytes
                 // Loop A: source row y -> viewport row y-var8, column var4.
                 // The original writes into the 480-wide canvas padding; clip to the
