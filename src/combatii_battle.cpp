@@ -2471,6 +2471,7 @@ bool CombatII::battle_quick_load_4fd25() {
     battle_used_bits_ = h.used_bits;
     battle_var24_action_end_ = h.var24;
     battle_free_wait_ = h.free_wait;
+    battle_free_cycle_ = 0; // the original cannot save inside the blocking 5580F loop
     battle_hostility_inverted_ = h.hostility;
     battle_simple_ring_ = h.simple_ring;
     fdf85_word_ = h.fdf85;
@@ -3252,6 +3253,7 @@ void CombatII::battle_reset() {
     battle_state_ = 0;
     battle_free_wait_ = false;
     battle_free_hover_ = -1;
+    battle_free_cycle_ = 0;
     battle_simple_ring_ = false;
     battle_move_var18_ = 10;
     battle_player_unit_ = -1;
@@ -4093,6 +4095,7 @@ int CombatII::battle_turn_scheduler() {
     battle_player_unit_ = -1; // free wait: sub_4D674 not entered yet (set once a unit is clicked)
     battle_free_wait_ = true;
     battle_free_hover_ = -1;
+    battle_free_cycle_ = 0; // loc_558E2: sub_19D53 returning 2 does `xor ecx,ecx`
     battle_attack_cancel();
     battle_move_cancel();
     sfx(0x1D); // mov eax,1Dh; call sub_4F4CD
@@ -4117,9 +4120,10 @@ int CombatII::battle_turn_scheduler() {
 // G = guard (10), D = defend 40 (9), F = defend 60 (12), N = info (11), V = weapon
 // (1..5), Esc = cancel. Returning true means Esc was consumed, so the module does not exit.
 bool CombatII::battle_player_input() {
-    if (battle_state_ != 1) return false;
-    // Free wait (5580F): ring closed - only hover, click, right click, info and Space.
+    // Free wait (5580F): the left-click branch checks no state; only the right-click cycle
+    // tests 19FA3()==1. Ring input is state 1 only.
     if (battle_free_wait_) return battle_free_input();
+    if (battle_state_ != 1) return false;
     if (battle_player_unit_ < 0 ||
         (size_t)battle_player_unit_ >= units_.size()) return false;
     CombatUnitPlacement& u = units_[(size_t)battle_player_unit_];
@@ -5108,11 +5112,13 @@ int CombatII::battle_move_again_threshold(int unit_index) const {
     return 10 + 30 * n; // esi = 0Ah + 1Eh per hostile unit
 }
 
-// loc_4D98E cost: consume = 10 + ((budget - E8[dest]) / 4) * 10.
-// (16834 returns the remaining E8[dest] in edx; b = [12h]>>16 = 10.)
+// loc_4D98E cost: consume = var_18 + ((budget - E8[dest]) / 4) * 10.
+// (16834 returns the remaining E8[dest] in eax; ebx = var_18 and ecx = 10 both survive the
+// calls. `sar eax,2` rounds down. var_18 is the 167C9 refresh (10 + 30 per adjacent hostile),
+// not the initial 10, so a re-move next to enemies costs more.)
 int CombatII::battle_move_tp_cost(int budget, int e8dest) const {
     const int diff = budget - e8dest;
-    return 10 + (diff / 4) * 10;
+    return battle_move_var18_ + (diff >> 2) * 10;
 }
 
 // The sub_1D124 gate lives in combatii_player.cpp (battle_player_can_attack -> g2range).
@@ -5211,16 +5217,15 @@ void CombatII::battle_player_show_menu(int unit_index, bool first_entry) {
     ring_open_anim(unit_index); // the sub_4B767/4B8EB ring open (sfx 0x1F + FDAEE=1 + layout)
 }
 
-// sub_4D582 (83023..83124): converts the sprite centre plus the 3 px facing offset back
-// to a tile. Original order: D66A8 (entry[4]/[5] + w/h/2 + 12/-2) -> store in
-// [ecx]/[push] -> 174CF (3 when wc is 5/0x0B, else 0) -> facing [63h] (0 south y+,
-// 1 west x-, 2 north y-, 3 east x+) to tile+-3 -> 10971/10988 (current cam) -> compose
-// the centre -> 109A3/109CE (current cam) -> tile -> 1124A. The +-3 is in tiles, so a
-// large wc5/0x0B sprite's centre can be several tiles off; the port works from the D66A8
-// raw table (entry[2..5]) instead. 1-7 are all wc1 1x1, so off = 0 and the result is the
-// unit tile or one tile north of it (the visual centre sits 3 px above the tile top and
-// crosses the boundary). Y follows the visual centre (sy-2, draw+half); the +2 of
-// unit_screen_center is relative to the trail (1E2EA) and 4 px lower.
+// sub_4D582 (83023..83124): converts the sprite centre plus the wc5/0x0B facing offset
+// back to a tile. Original order: D66A8 pose-0 entry (entry[4]/[5] + w/h/2 + 12/-2) -> store
+// in [ecx]/[arg] -> 174CF (ecx=3 when wc is 5/0x0B, else 0) -> facing [63h] (0 south y+,
+// 1 west x-, 2 north y-, 3 east x+) added to the *unit tile* -> 10971/10988 (current cam)
+// -> compose the centre -> 109A3/109CE (current cam) -> tile -> 1124A. The +-3 is in tiles.
+// 1-7 are all wc1 1x1, so off = 0 and the result is the unit tile or one tile north of it
+// (the visual centre sits 3 px above the tile top and crosses the boundary). Y follows the
+// visual centre (sy-2, draw+half); the +2 of unit_screen_center is relative to the trail
+// (1E2EA) and 4 px lower.
 static int floor_div_4d582(int a, int b) { return a >= 0 ? a / b : -((-a + b - 1) / b); }
 std::pair<int,int> CombatII::battle_4d582_tile(int unit_index) {
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return {cam_tile_x_ + 6, cam_tile_y_ + 6};
@@ -5243,24 +5248,26 @@ std::pair<int,int> CombatII::battle_4d582_tile(int unit_index) {
         (void)raw;
     }
     // Visual centre: X = sx+12+x_off+w/2, Y = sy-2+y_off+h/2 (draw(sx+12,sy-2) + half).
-    int cx = sx + 12 + (int)fr->x_off + fr->w / 2;
-    int cy = sy - 2 + (int)fr->y_off + fr->h / 2;
-    const int wc = weapon_class(u);
-    int off = (wc == 5 || wc == 0x0B) ? 3 : 0;
-    switch (u.facing & 3) {
-        case 0: cy += off; break; // south: y+
-        case 1: cx -= off; break; // west: x-
-        case 2: cy -= off; break; // north: y-
-        default: cx += off; break; // east: x+
-    }
+    const int cx = sx + 12 + (int)fr->x_off + fr->w / 2;
+    const int cy = sy - 2 + (int)fr->y_off + fr->h / 2;
     // Screen -> tile (sub_109A3/109CE, current cam, floor).
-    const int tx = cam_tile_x_ + floor_div_4d582(cx - cam_fine_x_ - TILE_ANCHOR_X, TOWN_TILE_W);
-    const int ty = cam_tile_y_ + floor_div_4d582(cy - cam_fine_y_ - TILE_ANCHOR_Y, TOWN_TILE_H);
+    int tx = cam_tile_x_ + floor_div_4d582(cx - cam_fine_x_ - TILE_ANCHOR_X, TOWN_TILE_W);
+    int ty = cam_tile_y_ + floor_div_4d582(cy - cam_fine_y_ - TILE_ANCHOR_Y, TOWN_TILE_H);
+    // 4D611..4D633: the wc 5/0Bh offset is added to the unit tile (bx/dx) and then fed through
+    // sub_10971/10988 (tile -> screen) before 109A3/109CE, so it is 3 *tiles*, not 3 pixels.
+    const int wc = weapon_class(u);
+    const int off = (wc == 5 || wc == 0x0B) ? 3 : 0;
+    switch (u.facing & 3) {
+        case 0: ty += off; break; // south: y+
+        case 1: tx -= off; break; // west: x-
+        case 2: ty -= off; break; // north: y-
+        default: tx += off; break; // east: x+
+    }
     if (battle_trace_) {
         // Log only wc5/0x0B, large sprites and tile changes (1-7 are wc1 1x1 and match
         // the unit tile).
         if (off != 0 || tx != u.x || ty != u.y)
-            fprintf(stderr, "COMBAT: 4D582 unit=%d tile=(%d,%d) center=(%d,%d) wc=%d off=%d->tile=(%d,%d)\n",
+            fprintf(stderr, "COMBAT: 4D582 unit=%d tile=(%d,%d) center=(%d,%d) wc=%d off=%d(tiles)->tile=(%d,%d)\n",
                     u.id, u.x, u.y, cx, cy, wc, off, tx, ty);
     }
     return {tx, ty};
@@ -5278,6 +5285,20 @@ bool CombatII::battle_player_enter_ring(int unit_index) {
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return false;
     CombatUnitPlacement& u = units_[(size_t)unit_index];
     if (!u.active || u.hp <= 0) return false;
+    // sub_4D674 prologue (83130..83155):
+    //   test byte [ebx+1Eh],10h -> loc_4DB76 (exit, no ring)
+    //   test byte [eax+14h],2   -> loc_4DB76
+    //   cmp byte [eax+83h],1 / jb -> 4D6B8; otherwise sub_4D06E(x,y) runs first and only a
+    //   return 1 continues into the ring.
+    if (u.combat_flags_1e & 0x10) {
+        if (battle_trace_) fprintf(stderr, "COMBAT: 4D674 reject unit=%d id=%d [1Eh]&10\n", unit_index, u.id);
+        return false;
+    }
+    if (u.combat_flags_14 & 2) {
+        if (battle_trace_) fprintf(stderr, "COMBAT: 4D674 reject unit=%d id=%d [14h]&2\n", unit_index, u.id);
+        return false;
+    }
+    const bool ai_screen_first = u.auto_battle >= 1; // [83h] >= 1
     // [56h] FDAF2 branch: ([56h] != FF) or ([56h] == FF and F042E == 3).
     const bool simple = (u.battle_gauge != 0xFF) || (u.battle_gauge == 0xFF && battle_state_ == 3);
     battle_simple_ring_ = simple;
@@ -5298,7 +5319,9 @@ bool CombatII::battle_player_enter_ring(int unit_index) {
     } else {
         battle_saved_gauge_ = u.battle_gauge;
     }
-    battle_used_bits_ = 0; // var_28 = 0 (4D7CE/4D7D5; the class gate is in the menu)
+    // var_28 (83198..83238): 2 when 73B59[class*9+0] == 1, else 0. It is ORed into [13h] on
+    // the 197AD exit and picks the pose branch ([64h]=0 vs sub_12124).
+    battle_used_bits_ = (battle_class_73b59((int)u.combat_class, 0) == 1) ? 2 : 0;
     battle_var24_action_end_ = false; // var_24=0
     battle_move_var18_ = 10; // var_18=0Ah (83243)
     battle_magic_select_ = false;
@@ -5318,6 +5341,14 @@ bool CombatII::battle_player_enter_ring(int unit_index) {
     // No diffusion in the ring phase; E8 is the 1CC09 range.
     battle_player_diffusion_.clear();
     battle_player_diffusion_valid_ = false;
+    if (ai_screen_first) {
+        // [83h] >= 1: sub_4D06E runs before the ring. Its only "return 1" is the 0Dh (AI off)
+        // choice, which resets [83h] and reopens the ring (the AI1 handler's 13 branch calls
+        // back_to_ring); cancel exits like sub_4D06E returning -1.
+        if (battle_trace_) fprintf(stderr, "COMBAT: 4D674 [83h]=%u -> sub_4D06E first\n", (unsigned)u.auto_battle);
+        ring_handle_ai_config(unit_index);
+        return true;
+    }
     battle_player_show_menu(unit_index, true); // 1CC09+4B0F5+4BD26+4AD69+1A0F0(2)+44D67(1)+4B767
     // sub_44D67(1): range shading on while the ring is shown - battle_range_mark lays it
     // down and the renderer draws it. sub_44DEC is turned off in the dispatch and back on
@@ -5325,16 +5356,21 @@ bool CombatII::battle_player_enter_ring(int unit_index) {
     return true;
 }
 
-// Ring cancel -1 -> free wait (sub_4B842 + 5580F): queue kept, [56h] restored, time still
-// stopped. end_turn(false) sets state 0 and lets time run, which is a different path.
+// Ring cancel -1 goes loc_4D96F -> loc_4DAAF (the same settlement as 4DA7B), not to a
+// separate free-wait path:
+//   TP changed (1A0AD == 1) -> 4D3BA heal when TP >= 40, 197AD (queue removed, [56h]=0),
+//   [13h] |= var_28 (plus class 30h -> bit 2) and the var_28 pose branch.
+//   TP unchanged -> loc_4DB44 restores [56h] and keeps the queue; only the 4DB4E tail runs
+//   (ring close, 1A0F0(1), free wait).
+// word_FDAF2 != 0 short-cuts to loc_4DB4E, which battle_player_end_turn already models.
 void CombatII::battle_ring_cancel_to_free(int unit_index) {
     if (unit_index >= 0 && (size_t)unit_index < units_.size()) {
-        auto& u = units_[(size_t)unit_index];
-        // Restore [56h] when TP did not change (4DB44); otherwise keep it (197AD is
-        // skipped, queue kept).
-        if (!battle_tp_changed()) {
-            u.battle_gauge = battle_saved_gauge_;
+        if (battle_tp_changed()) {
+            battle_player_unit_ = unit_index;
+            battle_player_end_turn(false);
+            return;
         }
+        units_[(size_t)unit_index].battle_gauge = battle_saved_gauge_;
     }
     // Ring close is a 9-frame hide (36 -> 0) from 4B9D7 right after a command; distinct
     // from the turn-end 4B842 (36 -> 276).
@@ -5736,16 +5772,18 @@ void CombatII::battle_render_free_hover() {
 // 19FA3 != 0 and 10392 == 1 does 19F9D(0) + 1038B + 44DEC(0). Returns true when the input
 // was consumed.
 bool CombatII::battle_free_input() {
-    if (!battle_free_wait_ || battle_state_ != 1) return false;
+    if (!battle_free_wait_) return false;
     const int mx = input_.get_mouse_x(), my = input_.get_mouse_y();
     // Esc in free wait is not consumed; the caller (the 5580F loop) opens the system menu
     // (4E0EE).
     if (input_.is_key_pressed(SDLK_ESCAPE)) return false;
-    // Screen -> tile: free wait uses y+8 (the sprite body); 1F19C does not add 8.
+    // Screen -> tile: sub_109A3(mouse x) uses `idiv 24` (truncate toward zero), while
+    // sub_109CE(mouse y + 8) uses `sar 4` (floor). Free wait maps y+8 (the sprite body);
+    // 1F19C does not add 8.
     auto free_tile = [&](int px, int py, int& tx, int& ty) {
-        int divx = px - cam_fine_x_ - TILE_ANCHOR_X;
-        int divy = (py + 8) - cam_fine_y_ - TILE_ANCHOR_Y;
-        tx = cam_tile_x_ + (divx >= 0 ? divx / TOWN_TILE_W : -((-divx + TOWN_TILE_W - 1) / TOWN_TILE_W));
+        const int divx = px - cam_fine_x_ - TILE_ANCHOR_X;
+        const int divy = (py + 8) - cam_fine_y_ - TILE_ANCHOR_Y;
+        tx = cam_tile_x_ + divx / TOWN_TILE_W;
         ty = cam_tile_y_ + (divy >= 0 ? divy / TOWN_TILE_H : -((-divy + TOWN_TILE_H - 1) / TOWN_TILE_H));
     };
     int htx = -1, hty = -1;
@@ -5759,54 +5797,43 @@ bool CombatII::battle_free_input() {
         hover = -1;
     }
     battle_free_hover_ = hover;
-    // Right click: 19FA3()==1 (state != 0, always true) -> 1979F next waiting unit, then 4D674.
+    // Right click: 19FA3()==1 -> sub_1979F(cx) + 4D674 (loc_55AC7). cx is the loop-local
+    // index into the ready list: pick entry cx, advance cx, and when cx runs past the end
+    // fall back to entry 0 and set cx=1 (sub_19779 walks dword_F041C and returns 0 at the
+    // end). The list order itself never changes; resetting to 0 belongs to the 19D53==2 path.
     const MouseState& mst = input_.get_mouse();
     if (mst.right_clicked) {
-        // sub_1979F: the queue tail (1979F(F0426-1)), the same pick as the scheduler; ignored
-        // when the queue is empty.
-        if (!battle_ready_queue_.empty()) {
-            int nxt = battle_ready_queue_.back();
-            // Rotate the queue (back to front) so the next right click picks the next unit -
-            // an approximation of the 1979F cycle.
-            if (battle_ready_queue_.size() > 1) {
-                std::rotate(battle_ready_queue_.begin(), battle_ready_queue_.begin() + 1, battle_ready_queue_.end());
-                nxt = battle_ready_queue_.back();
+        // 19FA3()==1 gate (only this branch tests the state).
+        if (battle_state_ != 1) return false;
+        const int n = (int)battle_ready_queue_.size();
+        if (n > 0) {
+            auto entry = [&](int idx) -> int {
+                if (idx < 0 || idx >= n) return -1;
+                const int v = battle_ready_queue_[(size_t)idx];
+                return (v >= 0 && (size_t)v < units_.size()) ? v : -1;
+            };
+            const int cx = battle_free_cycle_;
+            int nxt = entry(cx);
+            ++battle_free_cycle_;
+            if (nxt < 0) {
+                nxt = entry(0);
+                battle_free_cycle_ = 1;
             }
-            if (battle_trace_) fprintf(stderr, "COMBAT: free right-click -> unit=%d (1979F+4D674)\n", nxt);
-            battle_player_enter_ring(nxt);
+            if (battle_trace_)
+                fprintf(stderr, "COMBAT: free right-click cx=%d -> unit=%d (1979F+4D674)\n", cx, nxt);
+            if (nxt >= 0) battle_player_enter_ring(nxt);
             return false;
         }
         return false;
     }
-    // Left click: with a unit, [0Eh]==1 -> 4D674, else 493A3; empty tiles are ignored.
-    // The original only looks at y+8, but the port accepts both a tile-centre click
-    // (scripts, manual play) and a body click (the original): both tiles are checked and an
-    // ally wins (the tile centre wins when overlapping a southern neighbour).
+    // Left click (loc_55A6F): sub_109A3(mouse x) + sub_109CE(mouse y + 8) is the only
+    // candidate tile, the same one the hover pass uses. sub_11DB2 returns 0 outside its guard
+    // or on an empty tile, so those clicks are ignored; otherwise [0Eh]==1 -> 4D674, else
+    // 493A3.
     if (input_.was_left_clicked()) {
         if (mx < 0 || my < 0) return false;
-        auto fdiv = [](int a, int b) { return a >= 0 ? a / b : -((-a + b - 1) / b); };
-        int tx8 = htx, ty8 = hty, occ8 = -1;
-        if (tx8 >= 2 && ty8 >= 4 && tx8 < (int)map_w_ - 2 && ty8 < (int)map_h_ - 4)
-            occ8 = battle_unit_index_at(tx8, ty8);
-        int fxc = cam_tile_x_ + fdiv(mx - cam_fine_x_ - TILE_ANCHOR_X, TOWN_TILE_W);
-        int fyc = cam_tile_y_ + fdiv(my - cam_fine_y_ - TILE_ANCHOR_Y, TOWN_TILE_H);
-        int occ0 = -1;
-        if (fxc >= 2 && fyc >= 4 && fxc < (int)map_w_ - 2 && fyc < (int)map_h_ - 4)
-            occ0 = battle_unit_index_at(fxc, fyc);
-        // Ally first: prefer whichever of the tile-centre / y+8 candidates has eff == 1.
-        int tx = -1, ty = -1, occ = -1;
-        auto is_ally = [&](int idx) {
-            return idx >= 0 && (size_t)idx < units_.size() &&
-                battle_effective_army(units_[(size_t)idx]) == 1;
-        };
-        if (is_ally(occ0)) { tx = fxc; ty = fyc; occ = occ0; }
-        else if (is_ally(occ8)) { tx = tx8; ty = ty8; occ = occ8; }
-        else if (occ0 >= 0) { tx = fxc; ty = fyc; occ = occ0; }
-        else if (occ8 >= 0) { tx = tx8; ty = ty8; occ = occ8; }
-        else {
-            // Empty tile: ignored (as in the original), including outside the guard.
-            return false;
-        }
+        const int occ = hover;
+        if (occ < 0) return false;
         const auto& u = units_[(size_t)occ];
         const int eff = battle_effective_army(u);
         if (eff == 1) {
@@ -5871,19 +5898,25 @@ void CombatII::battle_show_info(int unit_index) {
 
 // sub_4D674 loc_4DAAF: turn end (4B842 36 -> 276 fly-out over 15 frames + 4AD69 +
 // 197AD/restore + 1A0F0(1) + 19FA3/19792/19F9D).
-// action_end (var_24, the -4/-2 path): short exit (queue removed, gauge 0).
-// Otherwise: unchanged TP restores [56h] and keeps the unit queued (a pass); changed TP
-// behaves like 197AD (queue removed, gauge 0).
-// The 4D3BA end-of-turn heal is done by the caller under its own test
-// (var_24 == 0 && FDAF2 == 0 && 1A0AD == 1 && TP >= 40).
+// action_end (var_24 != 0) jumps straight to loc_4DB4E: the action routine already removed
+// the unit and zeroed the gauge, so 197AD, [13h], the pose branch and the heal are skipped.
+// word_FDAF2 != 0 (compact ring) takes the same short exit.
+// Otherwise 1A0AD decides: unchanged TP restores [56h] and keeps the unit queued (loc_4DB44);
+// changed TP heals (4D3BA when TP >= 40) and settles through 197AD, [13h] |= var_28 and the
+// var_28 pose branch.
 // When the queue empties afterwards time resumes (state 0, 19F9D); otherwise the port stays
 // in free wait (state 1, 4DB71).
 void CombatII::battle_player_end_turn(bool action_end) {
     const int ui = battle_player_unit_;
     if (ui >= 0 && (size_t)ui < units_.size() && units_[(size_t)ui].active) {
         auto& u = units_[(size_t)ui];
-        if (!action_end && !battle_tp_changed()) {
-            // loc_4DB44: unchanged gauge restores the saved value and skips 197AD (queue kept).
+        if (action_end || battle_simple_ring_) {
+            // loc_4DAAF: var_24 != 0 or word_FDAF2 != 0 -> loc_4DB4E without the settlement.
+            if (battle_trace_)
+                fprintf(stderr, "COMBAT: end-turn short exit unit=%d (var24=%d FDAF2=%d)\n",
+                        u.id, action_end ? 1 : 0, battle_simple_ring_ ? 1 : 0);
+        } else if (!battle_tp_changed()) {
+            // loc_4DB44: unchanged TP restores [56h] and skips 197AD (queue kept).
             u.battle_gauge = battle_saved_gauge_;
             // sub_1A0F0(1) runs exactly once on every exit, because loc_4DB44 falls through to
             // loc_4DB4E; the common call after the ring close (4DB4E) handles it, so it is not
@@ -5892,13 +5925,17 @@ void CombatII::battle_player_end_turn(bool action_end) {
                 fprintf(stderr, "COMBAT: end-turn pass unit=%d (gauge restored %u, stays queued)\n",
                         u.id, (unsigned)u.battle_gauge);
         } else {
+            // 4DAAF -> 1A0AD == 1: sub_4D3BA(unit, TP) when TP >= 40 (before 197AD).
+            if (battle_tp() >= 0x28) battle_wait_heal(ui);
             // sub_197AD: remove from the queue and clear [56h].
             battle_ready_queue_.erase(std::remove(battle_ready_queue_.begin(),
                                                   battle_ready_queue_.end(), ui),
                                       battle_ready_queue_.end());
             u.battle_gauge = 0;
+            // [13h] |= var_28, then the class 30h bit (4DB0A..4DB29).
+            u.combat_flags_13 = (uint8_t)(u.combat_flags_13 | (battle_used_bits_ & 0xFF));
+            if (u.combat_class == 0x30) u.combat_flags_13 = (uint8_t)(u.combat_flags_13 | 4);
             if (battle_used_bits_ != 0) {
-                u.combat_flags_13 = (uint8_t)(u.combat_flags_13 | (battle_used_bits_ & 0xFF));
                 u.anim_frame = 0; // var_28 != 0 -> [64h] = 0
             } else {
                 reset_unit_pose(u); // var_28 == 0 -> sub_12124

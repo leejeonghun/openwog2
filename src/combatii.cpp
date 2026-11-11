@@ -701,8 +701,12 @@ void CombatII::battle_script_poll() {
     } else if (ops == "CLICK_TILE") {
         if (sscanf(arg, "%d,%d", &cx, &cy) == 2 ||
             sscanf(line.c_str(), "AT %u CLICK_TILE %d %d", &tick, &cx, &cy) >= 3) {
+            // Aim at the upper part of the tile (anchor + 4): the free-wait click reads
+            // sub_109CE(mouse y + 8) while the move/attack cursors read y directly, so +4 is
+            // inside tile <cy> for both. The tile-centre +8 would land one row south of the
+            // free-wait body click (loc_55A6F).
             const int mx = (cx - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X + TOWN_TILE_W / 2;
-            const int my = (cy - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y + TOWN_TILE_H / 2;
+            const int my = (cy - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y + TOWN_TILE_H / 4;
             input_.test_inject_click(mx, my);
             fprintf(stderr, "COMBAT: script CLICK_TILE (%d,%d)->(%d,%d) @tick %u\n", cx, cy, mx, my, battle_time_);
         } else {

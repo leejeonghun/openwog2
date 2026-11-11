@@ -1911,6 +1911,7 @@ private:
     // left click on an ally -> 4D674, on a non-ally -> 493A3, right click -> 1979F + 4D674.
     bool battle_free_wait_ = false;
     int battle_free_hover_ = -1;             // hovered unit in the free wait (49FE1 equivalent, -1 = none)
+    int battle_free_cycle_ = 0;              // sub_5580F ecx: sub_1979F right-click index (reset to 0 when 19D53 returns 2)
     // word_FDAEA (instant-move option from game.cfg / 4E0EE): 0 = smooth (11003), non-zero =
     // instant (111BE).
     bool battle_instant_camera_ = false;     // word_FDAEA equivalent (default 0)
