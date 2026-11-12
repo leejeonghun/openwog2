@@ -1944,11 +1944,13 @@ private:
     int ring_hover_pos_ = -1;  // layout index, -1 = none (sub_4AC8A [ecx+5] equivalent)
     int ring_hover_frame_ = 0; // [desc+4] equivalent: only the hovered descriptor cycles 0..3, the rest stay 0
     double ring_hover_last_us_ = 0.0; // gate for the 30-tick (171 ms) sub_4AD6F timer
+    double ring_hover_scan_us_ = 0.0; // gate for the sub_4AC8A hover scan (sub_102FF tick in 4BA7F)
     bool ring_open_ = false;   // dword_FDAEE equivalent (0 = closed, 1 = open)
     bool ring_opened_this_turn_ = false; // whether 4B767 (276 -> 36) already ran this turn; 4D674 uses 4B767 on the first show only, later loops use 4B8EB
     bool ring_load_icons();                       // sub_4B0A7 equivalent
     void ring_compute_layout(int unit_index);     // final layout of sub_4B0FB
     void ring_compute_layout_at(int unit_index, double radius, double start_angle); // intermediate layout of 4AEE5
+    void ring_unit_center(const CombatUnitPlacement& u, int& cx, int& cy) const; // sub_4D582 visual centre (y - 2, not sub_135EB's +2)
     int ring_hit_test(int mx, int my) const;      // sub_4AC8A equivalent; layout index or -1
     void ring_open_anim(int unit_index);          // 4B767 (first open 276 -> 36) / 4B8EB (show 0 -> 36)
     void ring_close_anim();                       // 4B842 (close 36 -> 276) / 4B9D7 (hide 36 -> 0)
@@ -1989,6 +1991,7 @@ private:
     int ring_sub_hover_ = -1;
     int ring_sub_hover_frame_ = 0; // frame of the hovered sub-ring descriptor (sub_4AD6F equivalent)
     double ring_sub_hover_last_us_ = 0.0;
+    double ring_sub_hover_scan_us_ = 0.0; // sub_4AC8A hover-scan gate for the sub-ring
     bool ring_sub_open_ = false;
     int ring_sub_magic_g_ = -1;   // group 0..6 (sub_4BFCA id - 1) chosen at level 1
     int ring_sub_magic_d_ = -1;   // b 0..7 chosen at level 2 (-2 = level-2 stage active)

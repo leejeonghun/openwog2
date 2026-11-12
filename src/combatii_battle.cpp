@@ -4161,6 +4161,17 @@ bool CombatII::battle_player_input() {
         }
         battle_player_show_menu(ui); // 1CC09 + redraw the ring (4D7EA)
     };
+    // sub_4BA7F calls sub_4AC8A only when sub_102FF fires (30 ticks, 171 ms); a click
+    // still runs it immediately. Gate the per-frame hover scan with the same cadence.
+    auto hover_scan_due = [&](double& last_us) {
+        const double now = timer_now_us();
+        if (auto_advance_) { last_us = now; return true; }
+        static constexpr double kStepUs = 30.0 * 1e6 / (1193182.0 / 1700.0 / 4.0);
+        if (last_us == 0.0) { last_us = now; return false; }
+        if (now - last_us < kStepUs) return false;
+        last_us = now;
+        return true;
+    };
 
     // Attack target phase (cursor loop of sub_1F738): Esc, right click and left click are
     // all handled here.
@@ -4188,8 +4199,38 @@ bool CombatII::battle_player_input() {
         ring_sub_compute_layout(ui);
         {
             const int hx = input_.get_mouse_x(), hy = input_.get_mouse_y();
-            if (hx >= 0 && hy >= 0) ring_sub_set_hover(ring_sub_hit_test(hx, hy));
+            if (hover_scan_due(ring_sub_hover_scan_us_) && hx >= 0 && hy >= 0)
+                ring_sub_set_hover(ring_sub_hit_test(hx, hy));
         }
+        // sub_4D06E loc_4D3A6 (AI stage-1 cancel: -1 from right click/Esc, or -2 from an
+        // in-box miss): sub_19718 removes the unit from the ready queue and 4D06E returns
+        // -1. [83h] stays 1, so clicking the unit again re-enters the AI screen.
+        auto cancel_ai1 = [&]() {
+            if (battle_trace_)
+                fprintf(stderr, "COMBAT: AI1 cancel (equivalent to sub_4D06E loc_4D3A6)\n");
+            const bool direct = battle_ai_config_direct_;
+            battle_ai_config_direct_ = false;
+            ring_sub_close();
+            // loc_4D3A6: every -1 runs sub_19718 here, before sub_4D06E returns.
+            // On the dispatcher path 4DAAF only runs afterwards, and its TP test
+            // decides whether [56h] is restored, not whether the queue is edited.
+            battle_ready_queue_.erase(
+                std::remove(battle_ready_queue_.begin(), battle_ready_queue_.end(), ui),
+                battle_ready_queue_.end());
+            if (direct) {
+                // 4D674 prologue path: the -1 return exits at loc_4DB76 with no
+                // 4B842/197AD/1A0F0 settlement; back to the 5580F loop.
+                battle_player_unit_ = -1;
+                battle_free_wait_ = (battle_state_ == 1);
+                battle_free_hover_ = -1;
+                if (battle_trace_)
+                    fprintf(stderr, "COMBAT: 4D674 prologue AI cancel -> 19718 exit (no settlement)\n");
+            } else {
+                // Dispatcher path (4D442 case 13): -1 goes through 4D96F -> 4DAAF,
+                // where the TP test decides queue removal vs gauge restore.
+                battle_ring_cancel_to_free(ui);
+            }
+        };
         const MouseState& mst0 = input_.get_mouse();
         const bool esc0 = input_.is_key_pressed(SDLK_ESCAPE);
         // Right click/Esc: back (sub_4BA7F -1; per-level meaning below).
@@ -4221,33 +4262,7 @@ bool CombatII::battle_player_input() {
                     return true;
                 }
                 case SubRingKind::AI1: {
-                    // Level-1 cancel (<0) -> loc_4D3A6: sub_19718 removes the unit from the
-                    // ready queue only and sub_4D06E returns -1. [83h] stays 1, so clicking
-                    // the unit again re-enters the AI screen.
-                    if (battle_trace_)
-                        fprintf(stderr, "COMBAT: AI1 cancel (equivalent to sub_4D06E loc_4D3A6)\n");
-                    const bool direct = battle_ai_config_direct_;
-                    battle_ai_config_direct_ = false;
-                    ring_sub_close();
-                    // loc_4D3A6: every -1 runs sub_19718 here, before sub_4D06E returns.
-                    // On the dispatcher path 4DAAF only runs afterwards, and its TP test
-                    // decides whether [56h] is restored, not whether the queue is edited.
-                    battle_ready_queue_.erase(
-                        std::remove(battle_ready_queue_.begin(), battle_ready_queue_.end(), ui),
-                        battle_ready_queue_.end());
-                    if (direct) {
-                        // 4D674 prologue path: the -1 return exits at loc_4DB76 with no
-                        // 4B842/197AD/1A0F0 settlement; back to the 5580F loop.
-                        battle_player_unit_ = -1;
-                        battle_free_wait_ = (battle_state_ == 1);
-                        battle_free_hover_ = -1;
-                        if (battle_trace_)
-                            fprintf(stderr, "COMBAT: 4D674 prologue AI cancel -> 19718 exit (no settlement)\n");
-                    } else {
-                        // Dispatcher path (4D442 case 13): -1 goes through 4D96F -> 4DAAF,
-                        // where the TP test decides queue removal vs gauge restore.
-                        battle_ring_cancel_to_free(ui);
-                    }
+                    cancel_ai1();
                     return true;
                 }
                 case SubRingKind::AI2: {
@@ -4290,13 +4305,27 @@ bool CombatII::battle_player_input() {
             int opt = -1;
             const bool hit = ring_sub_handle_click(ui, mx, my, opt);
             if (!hit) {
-                // Missed left click: the 4BA7F proximity/FDAF2 gate. The port backs out
-                // unconditionally. MagicG level-1 miss -> main (-2), later levels -> back,
-                // AI2 -> level 1.
+                // sub_4BA7F (80698..80725): a missed left click only returns -2 (back /
+                // one stage back) when it is inside the +/-12 px box around the ring centre
+                // and word_FDAF2 == 0. Every other miss is ignored and the input loop keeps
+                // running, so a far click must not close or step back the sub ring.
+                if (battle_simple_ring_ ||
+                    mx < ring_sub_center_x_ - 12 || mx > ring_sub_center_x_ + 12 ||
+                    my < ring_sub_center_y_ - 12 || my > ring_sub_center_y_ + 12) {
+                    if (battle_trace_)
+                        fprintf(stderr, "COMBAT: sub-ring miss outside +/-12px ignored (4BA7F, kind=%d)\n",
+                                (int)ring_subkind_);
+                    return false;
+                }
+                // Inside the box: MagicG level-1 miss -> main (-2), later levels -> back,
+                // AI2 -> level 1, AI1 -> the same loc_4D3A6 cancel as a right click.
                 if (battle_trace_)
                     fprintf(stderr, "COMBAT: miss click kind=%d (equivalent to a sub_4BA7F miss)\n",
                             (int)ring_subkind_);
                 switch (ring_subkind_) {
+                    case SubRingKind::AI1:
+                        cancel_ai1();
+                        return true;
                     case SubRingKind::MagicG:
                         battle_magic_select_ = false;
                         back_to_ring();
@@ -4367,15 +4396,19 @@ bool CombatII::battle_player_input() {
                     const int g = ring_sub_magic_g_, b = ring_sub_magic_d_;
                     const int c = (opt == 0) ? 7 : opt - 15;
                     const int v = battle_magic_ring_value(g, b, c);
-                    const int kind = (v != 0) ? battle_spell_kind(u, (v - 1) / 21) : -1;
-                    const int r = (v != 0) ? (v - 1) + kind : -1;
+                    // 4C926..4C968: check (v-1) % 3 first; v == 0 makes (v-1) == -1, which
+                    // also fails. R is then (v-1) + sub_28429(unit, (v-1)/21). The old
+                    // post-check kind(R/21) != R%3 changed the group at boundaries.
+                    const int vm1 = v - 1;
+                    const int kind = (vm1 % 3 == 0) ? battle_spell_kind(u, vm1 / 21) : -1;
+                    const int r = (vm1 % 3 == 0) ? vm1 + kind : -1;
                     if (battle_trace_)
                         fprintf(stderr, "COMBAT: magic g=%d b=%d c=%d v=%d kind=%d R=%d (4C72A level 3)\n",
                                 g, b, c, v, kind, r);
-                    // Empty/non-base slot: sub_4C72A returns -1 and sub_4D442 passes it to
+                    // Invalid slot: sub_4C72A returns -1 and sub_4D442 passes it to
                     // sub_4C605 (Wrong Spell). For a valid slot, run 4C605's kind gate now;
                     // the cursor opens only when it passes.
-                    if (v == 0 || r < 0 || battle_spell_kind(u, r / 21) != r % 3) {
+                    if (r < 0) {
                         battle_cast_magic(ui, -1, -1, -1);
                         back_to_ring();
                         return false;
@@ -4565,7 +4598,8 @@ bool CombatII::battle_player_input() {
         battle_hud_panel_relocate(input_.get_mouse_x(), input_.get_mouse_y());
         ring_compute_layout(ui);
         const int hx = input_.get_mouse_x(), hy = input_.get_mouse_y();
-        if (hx >= 0 && hy >= 0) ring_set_hover(ring_hit_test(hx, hy));
+        if (hover_scan_due(ring_hover_scan_us_) && hx >= 0 && hy >= 0)
+            ring_set_hover(ring_hit_test(hx, hy));
     }
 
     // Right click is also a ring cancel (-1) (sub_4BA7F: 3/0x1B -> 0xFFFFFFFF) -> free wait,
@@ -4641,8 +4675,9 @@ bool CombatII::battle_player_input() {
                 if (battle_trace_) fprintf(stderr, "COMBAT: miss click ignored (FDAF2=1)\n");
                 return false;
             }
-            int ucx = 0, ucy = 0;
-            unit_screen_center(u, ucx, ucy);
+            // sub_4BA7F receives the same 4D582 centre as the ring layout (var_14/var_10),
+            // not sub_135EB's +2 centre.
+            const int ucx = ring_center_x_, ucy = ring_center_y_;
             if (mx < ucx - 12 || mx > ucx + 12 || my < ucy - 12 || my > ucy + 12) {
                 if (battle_trace_) fprintf(stderr, "COMBAT: miss click outside +/-12px ignored (4BA7F)\n");
                 return false;
@@ -9404,7 +9439,8 @@ std::vector<int> CombatII::battle_item_menu_ids(int unit_index) {
     if (u.code_b >= 0x0F && u.code_b <= 0x16) { ids.push_back(16); return ids; }
     // HP: item 0 only while max/10 < cur (x100 raw) (`cmp eax,[48h]; jge skip`).
     if (battle_max_hp_raw(u) / 10 < battle_hp_raw(u)) ids.push_back(0);
-    if (cap(0)) ids.push_back(5);
+    // sub_4C19D compares every table gate with `cmp ...,1`; a value of 2 does not count.
+    if (cap(0) == 1) ids.push_back(5);
     // With byte_BA84E == 0, id/[5Bh]/word_FD8Bx == 0 adds 16 (one-shot summon).
     if (sce_map_kind_ == 0 &&
         ((u.id == 2 && u.combat_type_5b == 0x20 && battle_fd8bc_ == 0) ||
@@ -9418,23 +9454,23 @@ std::vector<int> CombatII::battle_item_menu_ids(int unit_index) {
         if (attr > 0x64) attr -= 0x64;
         if ((attr & 0xF) != 8 && !(cls == 0x26 && u.unit_kind_0d != 1)) ids.push_back(1);
     }
-    if (cap(2)) ids.push_back(3);
-    if (cap(3)) ids.push_back(6);
-    if (cap(4)) ids.push_back(4);
-    if (cap(5)) {
+    if (cap(2) == 1) ids.push_back(3);
+    if (cap(3) == 1) ids.push_back(6);
+    if (cap(4) == 1) ids.push_back(4);
+    if (cap(5) == 1) {
         const size_t ti = (size_t)(int8_t)u.y * map_w_ + (size_t)(int8_t)u.x;
         int attr = (!tile_attr_.empty() && ti < tile_attr_.size()) ? (int)tile_attr_[ti] : 0;
         if (attr > 0x64 && (((attr - 0x64) & 0xF) == 2 || ((attr - 0x64) & 0xF) == 3)) ids.push_back(2);
     }
-    if (cap(6)) ids.push_back(7);
-    if (cap(7)) ids.push_back(8);
+    if (cap(6) == 1) ids.push_back(7);
+    if (cap(7) == 1) ids.push_back(8);
     if (cap(8) != 0) ids.push_back(9);                        // unk_731B4 != 0 (cmp ..,0; jz)
-    if (cap(9) && !(u.flags_84 & 2)) ids.push_back(0x0A);  // unk_731B5==1 && !([84h]&2)
-    if (cap(10)) ids.push_back(0x0B);
-    if (cap(11)) ids.push_back(0x0C);
-    if (cap(12)) ids.push_back(0x0D);
-    if (battle_class_capflat(cls, 13) && !(u.flags_84 & 4)) ids.push_back(0x0E);
-    if (battle_class_capflat(cls, 14)) ids.push_back(0x0F);
+    if (cap(9) == 1 && !(u.flags_84 & 2)) ids.push_back(0x0A);  // unk_731B5==1 && !([84h]&2)
+    if (cap(10) == 1) ids.push_back(0x0B);
+    if (cap(11) == 1) ids.push_back(0x0C);
+    if (cap(12) == 1) ids.push_back(0x0D);
+    if (battle_class_capflat(cls, 13) == 1 && !(u.flags_84 & 4)) ids.push_back(0x0E);
+    if (battle_class_capflat(cls, 14) == 1) ids.push_back(0x0F);
     if (u.combat_value_43 > 0x32) ids.push_back(0x11);
     return ids;
 }

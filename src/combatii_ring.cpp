@@ -80,7 +80,6 @@
 //     the per-stage text ("MP %d" etc.) is kept as a bottom overlay.
 //   - The debug hotkeys (A/M/I/W/G/D/F/N/V/C/digits) are kept as verification
 //     shortcuts; the original only uses the mouse ring.
-//   - A map click far from the ring enters move mode; the original ignores it.
 //   - sub_4CE1F's arrow-key cursor movement is replaced by clicks. Esc cancel matches
 //     the original because sub_4CE1F reads 1Bh via getch_; the facing step sub_16357
 //     does not read the keyboard, so the port ignores Esc there (see combatii_moveui).
@@ -142,13 +141,31 @@ bool CombatII::ring_load_icons() {
 // computes x = r*cos, y = r*sin*0.83, so the final 90 deg sits at the top.
 // The final layout is r=36 at 90 deg; ring_animate_radius draws the intermediate
 // frames through this same function. No logging here: it runs every frame.
+// sub_4D674 stores the centre from sub_4D582 (83194..83203), not sub_135EB: the y is
+// `y_off - 2 + h/2` while unit_screen_center uses `+2`, a 4 px difference that would
+// shift every icon and the +/-12 px miss box (4BA7F).
+void CombatII::ring_unit_center(const CombatUnitPlacement& u, int& cx, int& cy) const {
+    const int sx = (u.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X;
+    const int sy = (u.y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y;
+    const NC2Frame* f = nc2_frame_for(u.sprite_type, u.facing & 3, 0);
+    if (f) { cx = sx + 12 + (int)f->x_off + f->w / 2; cy = sy - 2 + (int)f->y_off + f->h / 2; }
+    else   { cx = sx + 12;                           cy = sy - 2 + 6; }
+}
+
+// sub_4AEE5 truncates each offset separately (__CHP + fistp) before sub_4B0FB adds it to
+// the centre; rounding the summed coordinate instead can move an icon by 1 px.
+static void ring_ellipse_offset(double radius, double ang, int& ox, int& oy) {
+    ox = (int)(radius * std::cos(ang));
+    oy = (int)(radius * 0.83 * std::sin(ang));
+}
+
 void CombatII::ring_compute_layout_at(int unit_index, double radius, double start_angle) {
     ring_layout_.clear();
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return;
     if (battle_menu_ids_.empty()) return;
     const auto& u = units_[(size_t)unit_index];
     int cx = 0, cy = 0;
-    unit_screen_center(u, cx, cy);
+    ring_unit_center(u, cx, cy);
     ring_center_x_ = cx;
     ring_center_y_ = cy;
     const size_t n = battle_menu_ids_.size();
@@ -156,9 +173,9 @@ void CombatII::ring_compute_layout_at(int unit_index, double radius, double star
     for (size_t i = 0; i < n; ++i) {
         // sub_4AEE5: x = r*cos(a), y = r*sin(a)*0.83 (dbl_77E48); sub_4B0FB subtracts y.
         const double ang = start_angle + kStep * (double)i;
-        const int x = (int)std::lround((double)cx + radius * std::cos(ang));
-        const int y = (int)std::lround((double)cy - radius * 0.83 * std::sin(ang));
-        ring_layout_.push_back({battle_menu_ids_[i], x, y});
+        int ox = 0, oy = 0;
+        ring_ellipse_offset(radius, ang, ox, oy);
+        ring_layout_.push_back({battle_menu_ids_[i], cx + ox, cy - oy});
     }
 }
 
@@ -308,9 +325,9 @@ void CombatII::ring_close_anim() {
             ring_layout_.clear();
             for (size_t i = 0; i < n; ++i) {
                 const double ang = a + kStep * (double)i;
-                const int x = (int)std::lround((double)cx + r * std::cos(ang));
-                const int y = (int)std::lround((double)cy - r * 0.83 * std::sin(ang));
-                ring_layout_.push_back({ids[i], x, y});
+                int ox = 0, oy = 0;
+                ring_ellipse_offset(r, ang, ox, oy);
+                ring_layout_.push_back({ids[i], cx + ox, cy - oy});
             }
             render_battle_frame();
             render_overlay();
@@ -353,9 +370,9 @@ void CombatII::ring_close_anim_full() {
             ring_layout_.clear();
             for (size_t i = 0; i < n; ++i) {
                 const double ang = a + kStep * (double)i;
-                const int x = (int)std::lround((double)cx + r * std::cos(ang));
-                const int y = (int)std::lround((double)cy - r * 0.83 * std::sin(ang));
-                ring_layout_.push_back({ids[i], x, y});
+                int ox = 0, oy = 0;
+                ring_ellipse_offset(r, ang, ox, oy);
+                ring_layout_.push_back({ids[i], cx + ox, cy - oy});
             }
             render_battle_frame();
             render_overlay();
@@ -391,6 +408,8 @@ void CombatII::render_ring() {
         if (!sp || !sp->pixel_data) continue;
         const int bx = ring_layout_[i].x + (int)sp->x_offset;
         const int by = ring_layout_[i].y + (int)sp->y_offset;
+        // sub_4AA42: skip the icon when its origin leaves 0..0x12F / 0..0xC3.
+        if (bx < 0 || bx > 0x12F || by < 0 || by > 0xC3) continue;
         blit_sprite_rle(bx, by, sp->pixel_data);
     }
 }
@@ -491,19 +510,19 @@ void CombatII::ring_sub_compute_layout_at(int unit_index, double radius, double 
         default:
             return;
     }
-    if (opts.empty()) return;
     const auto& u = units_[(size_t)unit_index];
     int cx = 0, cy = 0;
-    unit_screen_center(u, cx, cy);
+    ring_unit_center(u, cx, cy);
     ring_sub_center_x_ = cx;
     ring_sub_center_y_ = cy;
+    if (opts.empty()) return;
     const size_t n = opts.size();
     const double kStep = (n == 0) ? 0.0 : (2.0 * M_PI / (double)n);
     for (size_t i = 0; i < n; ++i) {
         const double ang = start_angle + kStep * (double)i;
-        const int x = (int)std::lround((double)cx + radius * std::cos(ang));
-        const int y = (int)std::lround((double)cy - radius * 0.83 * std::sin(ang));
-        ring_sub_layout_.push_back({opts[i], x, y});
+        int ox = 0, oy = 0;
+        ring_ellipse_offset(radius, ang, ox, oy);
+        ring_sub_layout_.push_back({opts[i], cx + ox, cy - oy});
     }
 }
 
@@ -629,9 +648,9 @@ void CombatII::ring_sub_close() {
                 ring_sub_layout_.clear();
                 for (size_t i = 0; i < n; ++i) {
                     const double ang = a + kStep * (double)i;
-                    const int x = (int)std::lround((double)cx + r * std::cos(ang));
-                    const int y = (int)std::lround((double)cy - r * 0.83 * std::sin(ang));
-                    ring_sub_layout_.push_back({ids[i], x, y});
+                    int ox = 0, oy = 0;
+                    ring_ellipse_offset(r, ang, ox, oy);
+                    ring_sub_layout_.push_back({ids[i], cx + ox, cy - oy});
                 }
                 render_battle_frame();
                 render_overlay();
@@ -673,6 +692,8 @@ void CombatII::render_sub_ring() {
         if (!sp || !sp->pixel_data) continue;
         const int bx = ring_sub_layout_[i].x + (int)sp->x_offset;
         const int by = ring_sub_layout_[i].y + (int)sp->y_offset;
+        // sub_4AA42: skip the icon when its origin leaves 0..0x12F / 0..0xC3.
+        if (bx < 0 || bx > 0x12F || by < 0 || by > 0xC3) continue;
         blit_sprite_rle(bx, by, sp->pixel_data);
     }
     // The sub ring's hover is also just the 4-frame icon cycle (same 4AA42/4AB72 path).
@@ -922,8 +943,9 @@ bool CombatII::battle_ring_dispatch(int unit_index, int menu_id) {
             return true;
         }
         case 6: { // loc_4D4B1: sub_4C72A -> sub_4C605
-            auto groups = battle_magic_group_options(ui);
-            if (groups.empty()) return true;
+            // sub_4C72A always shows the seven group icons (sub_4BFCA stage 0); whether a
+            // group is learned is decided by 4C605 after the third stage (Wrong Spell),
+            // not by an empty-list early return here.
             // Enter the sub_4C72A three-stage ring at the group stage.
             battle_magic_select_ = true;
             battle_magic_pending_r_ = -1;
@@ -937,8 +959,9 @@ bool CombatII::battle_ring_dispatch(int unit_index, int menu_id) {
             return true;
         }
         case 7: { // loc_4D4CF: sub_4CDBD -> sub_4CB5E
+            // sub_4CDBD has no empty-list branch: it opens the ring with the 4C19D list
+            // (possibly empty) and only right click/Esc leaves it.
             battle_item_full_options_ = battle_item_menu_ids(ui);
-            if (battle_item_full_options_.empty()) return true;
             battle_item_options_ = battle_item_full_options_;
             battle_item_page_ = 0;
             battle_item_select_ = true;
