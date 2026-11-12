@@ -4228,12 +4228,15 @@ bool CombatII::battle_player_input() {
                     const bool direct = battle_ai_config_direct_;
                     battle_ai_config_direct_ = false;
                     ring_sub_close();
+                    // loc_4D3A6: every -1 runs sub_19718 here, before sub_4D06E returns.
+                    // On the dispatcher path 4DAAF only runs afterwards, and its TP test
+                    // decides whether [56h] is restored, not whether the queue is edited.
+                    battle_ready_queue_.erase(
+                        std::remove(battle_ready_queue_.begin(), battle_ready_queue_.end(), ui),
+                        battle_ready_queue_.end());
                     if (direct) {
                         // 4D674 prologue path: the -1 return exits at loc_4DB76 with no
                         // 4B842/197AD/1A0F0 settlement; back to the 5580F loop.
-                        battle_ready_queue_.erase(
-                            std::remove(battle_ready_queue_.begin(), battle_ready_queue_.end(), ui),
-                            battle_ready_queue_.end());
                         battle_player_unit_ = -1;
                         battle_free_wait_ = (battle_state_ == 1);
                         battle_free_hover_ = -1;
@@ -5345,6 +5348,13 @@ bool CombatII::battle_player_enter_ring(int unit_index) {
     if (u.auto_battle >= 1) {
         if (battle_trace_)
             fprintf(stderr, "COMBAT: 4D674 [83h]=%u -> sub_4D06E first\n", (unsigned)u.auto_battle);
+        // sub_4D06E blocks in its own input loop before 4D674 publishes any ring state. The
+        // port's loop is the shared sub-ring state machine, so the current unit must be
+        // published before ring_handle_ai_config opens the sub-ring. None of the later
+        // 4D674 state (FDAF2, [56h], 19FAB, var_28) is touched here.
+        battle_player_unit_ = unit_index;
+        battle_free_wait_ = false;
+        battle_free_hover_ = -1;
         battle_ai_config_direct_ = true;
         ring_handle_ai_config(unit_index);
         return true;
@@ -5439,11 +5449,16 @@ void CombatII::battle_ring_cancel_to_free(int unit_index) {
     battle_ai_config_direct_ = false;
     // loc_4DB4E: 19792()==0 and 19FA3==1 -> 19F9D(0); otherwise the state is untouched.
     // A ring opened by a click while time ran (19FA3==0) therefore resumes time on cancel.
-    if (battle_state_ == 1) {
+    if (battle_state_ == 1 && !battle_ready_queue_.empty()) {
         battle_free_wait_ = true; // enter free wait (F042E stays 1, time frozen)
         battle_overlay_mode_ = 1; // keep the banner on (44DEC(1))
     } else {
         battle_free_wait_ = false;
+        if (battle_state_ == 1) {
+            // loc_4DB4E: 19FA3==1 and 19792()==0 (queue empty) -> 19F9D(0) resumes time.
+            battle_state_ = 0;
+            battle_overlay_mode_ = 0;
+        }
     }
     if (battle_trace_)
         fprintf(stderr, "COMBAT: ring cancel -> %s (4B842+5580F)\n",
@@ -5822,9 +5837,9 @@ void CombatII::battle_render_free_hover() {
 // 19FA3 != 0 and 10392 == 1 does 19F9D(0) + 1038B + 44DEC(0). Returns true when the input
 // was consumed.
 bool CombatII::battle_free_input() {
-    // 5580F's hover/left-click pass runs while time advances too (state 0, 19FA3==0); only
-    // the right-click cycle and Space test 19FA3.
-    if (!battle_free_wait_ && battle_state_ != 0) return false;
+    // 5580F's hover/left-click pass checks no state at all (0 running, 1 free wait, 2/3
+    // paused); only the right-click cycle and Space test 19FA3. 4D674's compact-ring test
+    // ([56h] == FF and 19FA3 == 3) relies on clicks reaching it while paused.
     const int mx = input_.get_mouse_x(), my = input_.get_mouse_y();
     // Esc in free wait is not consumed; the caller (the 5580F loop) opens the system menu
     // (4E0EE).
