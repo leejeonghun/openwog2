@@ -4127,10 +4127,11 @@ bool CombatII::battle_player_input() {
     // by such a click freezes time because 4D674 blocks inside 5580F, so the port keeps
     // handling ring/action input whenever battle_player_unit_ is set, state 0 or 1.
     if (battle_free_wait_) return battle_free_input();
-    if (battle_state_ != 1 && battle_player_unit_ < 0) {
-        if (battle_state_ == 0) return battle_free_input(); // time running, no ring open
-        return false;
-    }
+    // sub_5580F's hover/left-click pass runs in every state; only a blocking 4D674
+    // (battle_player_unit_ >= 0) skips it. State 2/3 must reach the same branch so a click
+    // can open 4D674 with 19FA3 == 3 (the compact-ring test); right-click and Space keep
+    // their 19FA3 tests inside battle_free_input/run.
+    if (battle_state_ != 1 && battle_player_unit_ < 0) return battle_free_input();
     if (battle_player_unit_ < 0 ||
         (size_t)battle_player_unit_ >= units_.size()) return false;
     CombatUnitPlacement& u = units_[(size_t)battle_player_unit_];
@@ -5826,7 +5827,10 @@ void CombatII::battle_panel_ai_4b4ca(int unit_index) {
 // Free-wait hover box + HP (49FE1 + 4A106; 5580F 94296..94310, 94333..94340). Draws the
 // box and HP for the unit on the mouse tile (y+8), ally or enemy.
 void CombatII::battle_render_free_hover() {
-    if (!battle_free_wait_ || battle_state_ != 1) return;
+    // The 5580F hover pass is not state dependent; it only stops while 4D674 blocks
+    // (battle_player_unit_ >= 0). battle_free_hover_ is computed by battle_free_input and
+    // reset to -1 when a ring opens, so no stale box is drawn during a ring or a turn end.
+    if (battle_player_unit_ >= 0) return;
     if (battle_free_hover_ < 0 || (size_t)battle_free_hover_ >= units_.size()) return;
     draw_speaker_frame(battle_free_hover_); // the 49FE1 + 4A106 + 13498 box and HP
 }

@@ -1275,13 +1275,14 @@ int CombatII::run(const std::string& scenario_param){
         // With F042E != 0 (paused or waiting for input) the original also returns 1 immediately, so
         // it is called without a gate. Otherwise the port's pacing (battle_tick_due) sets the rate.
         int bret = 1;
-        if (battle_state_ != 0) {
+        if (battle_player_unit_ >= 0) {
+            // 4D674 blocks inside 5580F in the original, so 19D53 (battle_update) is not
+            // called until the ring closes, in any state. In particular a ring opened while
+            // paused (state 2) must not let 19D53 advance 2 -> 3.
+            battle_tick_next_us_ = 0.0;
+        } else if (battle_state_ != 0) {
             battle_tick_next_us_ = 0.0;                    // do not accumulate missed ticks after resuming
             bret = battle_update();
-        } else if (battle_player_unit_ >= 0) {
-            // A ring opened by a click while time ran blocks inside 5580F in the original,
-            // so 19D53 (battle_update) is not called until the ring closes.
-            battle_tick_next_us_ = 0.0;
         } else if (battle_tick_due()) {
             bret = battle_update();
         }
