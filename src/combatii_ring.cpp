@@ -189,14 +189,19 @@ void CombatII::ring_compute_layout(int unit_index) {
         ring_hover_pos_ = -1;
 }
 
-// sub_4AC8A: +/-12px box around each icon centre; first hit's layout index, else -1.
+// sub_4AC8A: walk the descriptors in ascending icon id (skipping the ids absent
+// from this menu via [ring+id+0x38] != 0), take the open +/-12px box around each
+// centre, and require the descriptor x to be > 0. Returns the layout index of the
+// lowest-id hit, else -1.
 int CombatII::ring_hit_test(int mx, int my) const {
+    int best = -1;
     for (size_t i = 0; i < ring_layout_.size(); ++i) {
-        const int dx = mx - ring_layout_[i].x;
-        const int dy = my - ring_layout_[i].y;
-        if (dx > -12 && dx < 12 && dy > -12 && dy < 12) return (int)i;
+        const RingIconPos& e = ring_layout_[i];
+        if (e.x <= 0) continue; // cmp word ptr [eax], 0; jle (79387)
+        if (best >= 0 && e.id >= ring_layout_[(size_t)best].id) continue;
+        if (mx > e.x - 12 && mx < e.x + 12 && my > e.y - 12 && my < e.y + 12) best = (int)i;
     }
-    return -1;
+    return best;
 }
 
 // sub_4AC8A hover update: resets the old and new descriptor frames to 0 on a switch.
@@ -542,13 +547,16 @@ void CombatII::ring_sub_compute_layout(int unit_index) {
         ring_sub_hover_ = -1;
 }
 
+// Same sub_4AC8A path for the sub ring: ascending icon id and desc.x > 0.
 int CombatII::ring_sub_hit_test(int mx, int my) const {
+    int best = -1;
     for (size_t i = 0; i < ring_sub_layout_.size(); ++i) {
-        const int dx = mx - ring_sub_layout_[i].x;
-        const int dy = my - ring_sub_layout_[i].y;
-        if (dx > -12 && dx < 12 && dy > -12 && dy < 12) return (int)i;
+        const RingIconPos& e = ring_sub_layout_[i];
+        if (e.x <= 0) continue;
+        if (best >= 0 && e.id >= ring_sub_layout_[(size_t)best].id) continue;
+        if (mx > e.x - 12 && mx < e.x + 12 && my > e.y - 12 && my < e.y + 12) best = (int)i;
     }
-    return -1;
+    return best;
 }
 
 void CombatII::ring_sub_set_hover(int pos) {

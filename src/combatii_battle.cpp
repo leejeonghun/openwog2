@@ -4407,11 +4407,35 @@ bool CombatII::battle_player_input() {
                     // (kind == -1) still yields R >= 0 from 4C72A, so this second
                     // check is what rejects it.
                     const bool wrong_spell = (r < 0) || (battle_spell_kind(u, r / 21) != r % 3);
+                    // 4C72A already hid the level-3 sub-ring (4B9D7) before returning R;
+                    // 4C605's failures return through 4D442 (0) to 4D674, which reopens
+                    // the main ring. So every failure here goes back to the main ring.
                     if (battle_trace_)
                         fprintf(stderr, "COMBAT: magic g=%d b=%d c=%d v=%d kind=%d R=%d wrong=%d (4C72A level 3 / 4C605)\n",
                                 g, b, c, v, kind, r, wrong_spell ? 1 : 0);
                     if (wrong_spell) {
                         battle_cast_magic(ui, -1, -1, -1);
+                        back_to_ring();
+                        return false;
+                    }
+                    // sub_4C605 continues with the cost gates before the spell handler
+                    // (sub_28883 / F13B0) opens the target cursor: d = (R/3)%7 for the
+                    // sub_28480 threshold and word_753B6, then No TP! / No MP!.
+                    const int d = (r / 3) % 7;
+                    const int thr = battle_spell_thr(u, d);
+                    if ((int)u.combat_acc57 + battle_tp() < thr) {
+                        battle_unit_label(ui, "No TP!");
+                        if (battle_trace_)
+                            fprintf(stderr, "COMBAT: magic No TP! unit=%d R=%d d=%d thr=%d tp=%d acc=%d (4C605 before cursor)\n",
+                                    u.id, r, d, thr, battle_tp(), (int)u.combat_acc57);
+                        back_to_ring();
+                        return false;
+                    }
+                    if ((int)u.combat_mp_50 < (int)kSpellCost[d]) {
+                        battle_unit_label(ui, "No MP!");
+                        if (battle_trace_)
+                            fprintf(stderr, "COMBAT: magic No MP! unit=%d R=%d d=%d mp=%d cost=%d (4C605 before cursor)\n",
+                                    u.id, r, d, (int)u.combat_mp_50, (int)kSpellCost[d]);
                         back_to_ring();
                         return false;
                     }

@@ -1926,7 +1926,8 @@ private:
     //   [ring+pos+6] = id -> table+id*37 -> [desc+4] = frame -> pixels at [desc+frame*4+15h]).
     //   MAINRING has 56 files = 14 logical icons, MAGIC 88 = 22, SPECIAL 104 = 26, SKILL 72 = 18,
     //   AI_CTRL 56 = 14. Menu ids 0..13 map straight onto logical 0..13.
-    //   Hit test is centre +/-12 px (sub_4AC8A). Only the hovered ([ecx+5]) descriptor cycles
+    //   Hit test is centre +/-12 px (sub_4AC8A), scanning the descriptors in ascending icon id
+    //   (skipping empty [ring+id+0x38]) and ignoring icons whose x is <= 0. Only the hovered ([ecx+5]) descriptor cycles
     //   frames 0..3 (sub_4AD6F every 30 ticks = 171 ms; sub_4AC8A resets both sides to frame 0).
     //   Open (4B767) 276 -> 36 at -16, 15 frames (300 deg + 15*10); show (4B8EB) 0 -> 36 at +4,
     //   9 frames (2*pi + 9*10 deg); close (4B842) 36 -> 276 at +16, 15 frames; hide (4B9D7)
