@@ -408,9 +408,12 @@ void CombatII::render_ring() {
         if (!sp || !sp->pixel_data) continue;
         const int bx = ring_layout_[i].x + (int)sp->x_offset;
         const int by = ring_layout_[i].y + (int)sp->y_offset;
-        // sub_4AA42: skip the icon when its origin leaves 0..0x12F / 0..0xC3.
-        if (bx < 0 || bx > 0x12F || by < 0 || by > 0xC3) continue;
-        blit_sprite_rle(bx, by, sp->pixel_data);
+        // sub_4AA42: skip only an icon that is entirely off screen
+        // (x_left+w < 0, x_left > 0x12F, y_top+h < 0, y_top > 0xC3). A partially
+        // visible icon is still drawn, and the blit clips it.
+        if (bx + (int)(sp->word0 & 0xFF) < 0 || bx > 0x12F) continue;
+        if (by + (int)(sp->word2 & 0xFF) < 0 || by > 0xC3) continue;
+        blit_sprite_rle(bx, by + 1, sp->pixel_data); // sub_4AB72: y_top + 1
     }
 }
 
@@ -692,9 +695,11 @@ void CombatII::render_sub_ring() {
         if (!sp || !sp->pixel_data) continue;
         const int bx = ring_sub_layout_[i].x + (int)sp->x_offset;
         const int by = ring_sub_layout_[i].y + (int)sp->y_offset;
-        // sub_4AA42: skip the icon when its origin leaves 0..0x12F / 0..0xC3.
-        if (bx < 0 || bx > 0x12F || by < 0 || by > 0xC3) continue;
-        blit_sprite_rle(bx, by, sp->pixel_data);
+        // sub_4AA42: skip only an icon that is entirely off screen
+        // (x_left+w < 0, x_left > 0x12F, y_top+h < 0, y_top > 0xC3).
+        if (bx + (int)(sp->word0 & 0xFF) < 0 || bx > 0x12F) continue;
+        if (by + (int)(sp->word2 & 0xFF) < 0 || by > 0xC3) continue;
+        blit_sprite_rle(bx, by + 1, sp->pixel_data); // sub_4AB72: y_top + 1
     }
     // The sub ring's hover is also just the 4-frame icon cycle (same 4AA42/4AB72 path).
 }

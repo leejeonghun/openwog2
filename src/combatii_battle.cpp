@@ -4402,13 +4402,15 @@ bool CombatII::battle_player_input() {
                     const int vm1 = v - 1;
                     const int kind = (vm1 % 3 == 0) ? battle_spell_kind(u, vm1 / 21) : -1;
                     const int r = (vm1 % 3 == 0) ? vm1 + kind : -1;
+                    // sub_4C605, before the target cursor opens: Wrong Spell when
+                    // R == -1 or sub_28429(unit, R/21) != R%3. An unlearned group
+                    // (kind == -1) still yields R >= 0 from 4C72A, so this second
+                    // check is what rejects it.
+                    const bool wrong_spell = (r < 0) || (battle_spell_kind(u, r / 21) != r % 3);
                     if (battle_trace_)
-                        fprintf(stderr, "COMBAT: magic g=%d b=%d c=%d v=%d kind=%d R=%d (4C72A level 3)\n",
-                                g, b, c, v, kind, r);
-                    // Invalid slot: sub_4C72A returns -1 and sub_4D442 passes it to
-                    // sub_4C605 (Wrong Spell). For a valid slot, run 4C605's kind gate now;
-                    // the cursor opens only when it passes.
-                    if (r < 0) {
+                        fprintf(stderr, "COMBAT: magic g=%d b=%d c=%d v=%d kind=%d R=%d wrong=%d (4C72A level 3 / 4C605)\n",
+                                g, b, c, v, kind, r, wrong_spell ? 1 : 0);
+                    if (wrong_spell) {
                         battle_cast_magic(ui, -1, -1, -1);
                         back_to_ring();
                         return false;
