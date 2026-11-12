@@ -854,13 +854,14 @@ bool CombatII::battle_ai_target_input(int unit_index) {
     return true;
 }
 
-// sub_4D06E entry (loc_4D559 plus the sub_4D06E prologue): set [83h]=1, centre the
-// camera with 1124A, then show the sub_4C4F9 stage-1 ring. The input loop handles
-// cancel and exit.
+// sub_4D06E entry: centre the camera with 4D582 + 1124A, then show the sub_4C4F9
+// stage-1 ring. sub_4D06E itself never writes [83h]; the dispatcher's case 13
+// (loc_4D559) sets it to 1 before calling, and the 4D674 prologue path calls with the
+// value already >= 1. 4C4F9 omits id 13 only when [83h] == 2, so the caller's value must
+// reach the ring as-is.
 void CombatII::ring_handle_ai_config(int unit_index) {
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return;
     auto& u = units_[(size_t)unit_index];
-    u.auto_battle = 1; // loc_4D559: mov byte ptr [eax+83h],1
     battle_4d582_center(unit_index); // sub_4D582 + 1124A 1x1 in the sub_4D06E prologue
     if (should_exit_) return;
     ring_sub_magic_g_ = -1;
@@ -871,8 +872,8 @@ void CombatII::ring_handle_ai_config(int unit_index) {
     battle_item_select_ = false;
     battle_weapon_select_ = false;
     if (battle_trace_)
-        fprintf(stderr, "COMBAT: ai-config unit=%d id=%d [83h]=1 (sub_4D06E level-2 ring entry)\n",
-                unit_index, u.id);
+        fprintf(stderr, "COMBAT: ai-config unit=%d id=%d [83h]=%u direct=%d (sub_4D06E entry)\n",
+                unit_index, u.id, (unsigned)u.auto_battle, battle_ai_config_direct_ ? 1 : 0);
 }
 
 // sub_4D442 dispatch. Returns true when this frame's input was consumed; hotkeys and
@@ -991,6 +992,8 @@ bool CombatII::battle_ring_dispatch(int unit_index, int menu_id) {
             return true;
         }
         case 13: // loc_4D559: [83h]=1 -> 4D06E
+            u.auto_battle = 1; // mov byte ptr [eax+83h],1
+            battle_ai_config_direct_ = false; // dispatcher path: -1 settles through 4DAAF
             ring_handle_ai_config(ui);
             return true;
         default:

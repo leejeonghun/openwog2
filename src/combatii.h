@@ -1993,6 +1993,10 @@ private:
     int ring_sub_magic_g_ = -1;   // group 0..6 (sub_4BFCA id - 1) chosen at level 1
     int ring_sub_magic_d_ = -1;   // b 0..7 chosen at level 2 (-2 = level-2 stage active)
     int ring_sub_ai_first_ = -1;  // id chosen at AI level 1 (selects the level-2 options)
+    // sub_4D06E entry source: true when called from the sub_4D674 prologue ([83h] >= 1),
+    // false when called by the dispatcher's id 13 (loc_4D559). A cancel (-1) exits 4D674
+    // with no settlement only on the prologue path; id 13 restarts the full entry there.
+    bool battle_ai_config_direct_ = false;
     const SPRParser* ring_sub_icons() const; // ICO per kind (MAGIC/SPECIAL/SKILL/AI_CTRL)
     SPRParser* ring_sub_icons_mut();
     void ring_sub_compute_layout(int unit_index); // final sub-ring layout of sub_4B0FB
@@ -2096,7 +2100,7 @@ private:
     std::pair<int,int> battle_4d582_tile(int unit_index); // sub_4D582 (D66A8 visual centre + wc5/0x0B facing 3 px -> tile)
     void battle_4d582_center(int unit_index); // sub_4D582+1124A (large units use the raw footprint)
     bool battle_free_input();                    // sub_5580F free wait (hover, click, right click, info, Space)
-    void battle_ring_cancel_to_free(int unit_index); // ring cancel -1 -> free wait (queue kept, gauge restored)
+    void battle_ring_cancel_to_free(int unit_index); // ring cancel -1 -> 4DAAF (4B842 + 197AD/gauge restore)
     void battle_show_info_modal(int unit_index); // sub_493A3 equivalent (banner off + dim + blocking 499EF(4B0h) wait)
     void battle_draw_unit_info_panel(int unit_index); // sub_48734 equivalent (portrait, name, MENUSTAT #36, small-font values)
     void draw_small_text_outlined(int x, int y, const char* s, uint8_t color); // sub_4868A (4-way outline in colour 6 plus the body colour)

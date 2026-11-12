@@ -2472,6 +2472,7 @@ bool CombatII::battle_quick_load_4fd25() {
     battle_var24_action_end_ = h.var24;
     battle_free_wait_ = h.free_wait;
     battle_free_cycle_ = 0; // the original cannot save inside the blocking 5580F loop
+    battle_ai_config_direct_ = false; // no 4D06E call survives the load
     battle_hostility_inverted_ = h.hostility;
     battle_simple_ring_ = h.simple_ring;
     fdf85_word_ = h.fdf85;
@@ -3254,6 +3255,7 @@ void CombatII::battle_reset() {
     battle_free_wait_ = false;
     battle_free_hover_ = -1;
     battle_free_cycle_ = 0;
+    battle_ai_config_direct_ = false;
     battle_simple_ring_ = false;
     battle_move_var18_ = 10;
     battle_player_unit_ = -1;
@@ -4120,10 +4122,15 @@ int CombatII::battle_turn_scheduler() {
 // G = guard (10), D = defend 40 (9), F = defend 60 (12), N = info (11), V = weapon
 // (1..5), Esc = cancel. Returning true means Esc was consumed, so the module does not exit.
 bool CombatII::battle_player_input() {
-    // Free wait (5580F): the left-click branch checks no state; only the right-click cycle
-    // tests 19FA3()==1. Ring input is state 1 only.
+    // sub_5580F runs every battle-viewer iteration and calls 19D53 itself; its left-click
+    // branch checks no state (only the right-click cycle tests 19FA3()==1). A ring opened
+    // by such a click freezes time because 4D674 blocks inside 5580F, so the port keeps
+    // handling ring/action input whenever battle_player_unit_ is set, state 0 or 1.
     if (battle_free_wait_) return battle_free_input();
-    if (battle_state_ != 1) return false;
+    if (battle_state_ != 1 && battle_player_unit_ < 0) {
+        if (battle_state_ == 0) return battle_free_input(); // time running, no ring open
+        return false;
+    }
     if (battle_player_unit_ < 0 ||
         (size_t)battle_player_unit_ >= units_.size()) return false;
     CombatUnitPlacement& u = units_[(size_t)battle_player_unit_];
@@ -4213,13 +4220,30 @@ bool CombatII::battle_player_input() {
                     return true;
                 }
                 case SubRingKind::AI1: {
-                    // Level-1 cancel (<0) -> -1 after 19718 (pass ends). [83h] stays 1.
-                    // loc_4D3A6: end_turn removes the unit from the queue.
+                    // Level-1 cancel (<0) -> loc_4D3A6: sub_19718 removes the unit from the
+                    // ready queue only and sub_4D06E returns -1. [83h] stays 1, so clicking
+                    // the unit again re-enters the AI screen.
                     if (battle_trace_)
-                        fprintf(stderr, "COMBAT: AI1 cancel -> pass (equivalent to sub_4D06E -1)\n");
+                        fprintf(stderr, "COMBAT: AI1 cancel (equivalent to sub_4D06E loc_4D3A6)\n");
+                    const bool direct = battle_ai_config_direct_;
+                    battle_ai_config_direct_ = false;
                     ring_sub_close();
-                    ring_close_anim();
-                    battle_player_end_turn(false);
+                    if (direct) {
+                        // 4D674 prologue path: the -1 return exits at loc_4DB76 with no
+                        // 4B842/197AD/1A0F0 settlement; back to the 5580F loop.
+                        battle_ready_queue_.erase(
+                            std::remove(battle_ready_queue_.begin(), battle_ready_queue_.end(), ui),
+                            battle_ready_queue_.end());
+                        battle_player_unit_ = -1;
+                        battle_free_wait_ = (battle_state_ == 1);
+                        battle_free_hover_ = -1;
+                        if (battle_trace_)
+                            fprintf(stderr, "COMBAT: 4D674 prologue AI cancel -> 19718 exit (no settlement)\n");
+                    } else {
+                        // Dispatcher path (4D442 case 13): -1 goes through 4D96F -> 4DAAF,
+                        // where the TP test decides queue removal vs gauge restore.
+                        battle_ring_cancel_to_free(ui);
+                    }
                     return true;
                 }
                 case SubRingKind::AI2: {
@@ -4402,18 +4426,31 @@ bool CombatII::battle_player_input() {
                 case SubRingKind::AI1: {
                     if (battle_trace_) fprintf(stderr, "COMBAT: AI1 pick id=%d\n", opt);
                     if (opt == 13) {
-                        // loc_4D20F (var_8==0x0D): [83h]=0; on [56h]==FF call 196D0; return 1 ->
-                        // manual.
+                        // loc_4D20F (var_8==0x0D): [83h]=0; on [56h]==FF call 196D0;
+                        // return 1 -> manual.
                         u.auto_battle = 0;
-                        if (battle_saved_gauge_ == 0xFF) {
-                            if (std::find(battle_ready_queue_.begin(), battle_ready_queue_.end(), ui) ==
+                        // sub_196D0 appends the unit to the ready queue when [56h]==FF and
+                        // [0Eh]==1 (ally). [56h] is the live gauge here: the 4D674 prologue
+                        // path has not saved/cleared it yet.
+                        if (u.battle_gauge == 0xFF && battle_effective_army(u) == 1 &&
+                            std::find(battle_ready_queue_.begin(), battle_ready_queue_.end(), ui) ==
                                 battle_ready_queue_.end())
-                                battle_ready_queue_.push_back(ui);
-                        }
+                            battle_ready_queue_.push_back(ui);
+                        const bool direct = battle_ai_config_direct_;
+                        battle_ai_config_direct_ = false;
                         if (battle_trace_)
-                            fprintf(stderr, "COMBAT: first=13 [83h]=0 -> manual (equivalent to sub_4D06E returning 1)\n");
-                        battle_used_bits_ = (uint16_t)(battle_used_bits_ | 0x01); // var_28 |= 1
+                            fprintf(stderr, "COMBAT: first=13 [83h]=0 -> manual (%s)\n",
+                                    direct ? "4D674 prologue: full entry restarts"
+                                           : "4D442 returns 1: var_28 |= 1");
                         ring_sub_close();
+                        if (direct) {
+                            // 4D06E returns 1 -> 4D674 continues at loc_4D6B8 and runs the
+                            // FDAF2/[56h]/19FAB/4B767 entry again from the top. var_28 is
+                            // re-initialised there, so bit 0 must not be set here.
+                            battle_player_enter_ring(ui);
+                            return false;
+                        }
+                        battle_used_bits_ = (uint16_t)(battle_used_bits_ | 0x01); // var_28 |= 1
                         back_to_ring();
                         return false;
                     }
@@ -5226,6 +5263,8 @@ void CombatII::battle_player_show_menu(int unit_index, bool first_entry) {
 // (the visual centre sits 3 px above the tile top and crosses the boundary). Y follows the
 // visual centre (sy-2, draw+half); the +2 of unit_screen_center is relative to the trail
 // (1E2EA) and 4 px lower.
+// sub_109A3 uses `idiv` (truncate toward zero); sub_109CE uses `sar` (floor).
+static int trunc_div_4d582(int a, int b) { return a / b; }
 static int floor_div_4d582(int a, int b) { return a >= 0 ? a / b : -((-a + b - 1) / b); }
 std::pair<int,int> CombatII::battle_4d582_tile(int unit_index) {
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return {cam_tile_x_ + 6, cam_tile_y_ + 6};
@@ -5250,8 +5289,9 @@ std::pair<int,int> CombatII::battle_4d582_tile(int unit_index) {
     // Visual centre: X = sx+12+x_off+w/2, Y = sy-2+y_off+h/2 (draw(sx+12,sy-2) + half).
     const int cx = sx + 12 + (int)fr->x_off + fr->w / 2;
     const int cy = sy - 2 + (int)fr->y_off + fr->h / 2;
-    // Screen -> tile (sub_109A3/109CE, current cam, floor).
-    int tx = cam_tile_x_ + floor_div_4d582(cx - cam_fine_x_ - TILE_ANCHOR_X, TOWN_TILE_W);
+    // Screen -> tile: sub_109A3 (x) uses `idiv` (truncate toward zero), sub_109CE (y)
+    // uses `sar` (floor). Only x differs for negative off-screen pixels.
+    int tx = cam_tile_x_ + trunc_div_4d582(cx - cam_fine_x_ - TILE_ANCHOR_X, TOWN_TILE_W);
     int ty = cam_tile_y_ + floor_div_4d582(cy - cam_fine_y_ - TILE_ANCHOR_Y, TOWN_TILE_H);
     // 4D611..4D633: the wc 5/0Bh offset is added to the unit tile (bx/dx) and then fed through
     // sub_10971/10988 (tile -> screen) before 109A3/109CE, so it is 3 *tiles*, not 3 pixels.
@@ -5298,7 +5338,17 @@ bool CombatII::battle_player_enter_ring(int unit_index) {
         if (battle_trace_) fprintf(stderr, "COMBAT: 4D674 reject unit=%d id=%d [14h]&2\n", unit_index, u.id);
         return false;
     }
-    const bool ai_screen_first = u.auto_battle >= 1; // [83h] >= 1
+    // sub_4D674 prologue (83151..83157): [83h] >= 1 runs sub_4D06E *before* the FDAF2
+    // branch and before 19FAB initialises the TP baseline. sub_4D06E returns 1 only for
+    // the id 13 (AI off) pick, which clears [83h] and restarts this whole entry
+    // (loc_4D6B8); a -1 cancel exits 4D674 at loc_4DB76 without any settlement.
+    if (u.auto_battle >= 1) {
+        if (battle_trace_)
+            fprintf(stderr, "COMBAT: 4D674 [83h]=%u -> sub_4D06E first\n", (unsigned)u.auto_battle);
+        battle_ai_config_direct_ = true;
+        ring_handle_ai_config(unit_index);
+        return true;
+    }
     // [56h] FDAF2 branch: ([56h] != FF) or ([56h] == FF and F042E == 3).
     const bool simple = (u.battle_gauge != 0xFF) || (u.battle_gauge == 0xFF && battle_state_ == 3);
     battle_simple_ring_ = simple;
@@ -5341,14 +5391,6 @@ bool CombatII::battle_player_enter_ring(int unit_index) {
     // No diffusion in the ring phase; E8 is the 1CC09 range.
     battle_player_diffusion_.clear();
     battle_player_diffusion_valid_ = false;
-    if (ai_screen_first) {
-        // [83h] >= 1: sub_4D06E runs before the ring. Its only "return 1" is the 0Dh (AI off)
-        // choice, which resets [83h] and reopens the ring (the AI1 handler's 13 branch calls
-        // back_to_ring); cancel exits like sub_4D06E returning -1.
-        if (battle_trace_) fprintf(stderr, "COMBAT: 4D674 [83h]=%u -> sub_4D06E first\n", (unsigned)u.auto_battle);
-        ring_handle_ai_config(unit_index);
-        return true;
-    }
     battle_player_show_menu(unit_index, true); // 1CC09+4B0F5+4BD26+4AD69+1A0F0(2)+44D67(1)+4B767
     // sub_44D67(1): range shading on while the ring is shown - battle_range_mark lays it
     // down and the renderer draws it. sub_44DEC is turned off in the dispatch and back on
@@ -5372,9 +5414,9 @@ void CombatII::battle_ring_cancel_to_free(int unit_index) {
         }
         units_[(size_t)unit_index].battle_gauge = battle_saved_gauge_;
     }
-    // Ring close is a 9-frame hide (36 -> 0) from 4B9D7 right after a command; distinct
-    // from the turn-end 4B842 (36 -> 276).
-    ring_close_anim();
+    // loc_4D96F -> loc_4DAAF: a cancel runs the same 4B842 fly-out (36 -> 276, 15 frames)
+    // as a turn end. The 9-frame 4B9D7 hide is only the between-selection close.
+    ring_close_anim_full();
     ring_sub_close();
     battle_attack_cancel();
     battle_move_cancel();
@@ -5394,10 +5436,18 @@ void CombatII::battle_ring_cancel_to_free(int unit_index) {
     // sub_1A0F0(1).
     battle_set_420f(1);
     battle_player_unit_ = -1;
-    battle_free_wait_ = true; // enter free wait (F042E stays 1, time frozen)
-    battle_state_ = 1;
-    battle_overlay_mode_ = 1; // keep the banner on (44DEC(1))
-    if (battle_trace_) fprintf(stderr, "COMBAT: ring cancel -> free wait (4B842+5580F)\n");
+    battle_ai_config_direct_ = false;
+    // loc_4DB4E: 19792()==0 and 19FA3==1 -> 19F9D(0); otherwise the state is untouched.
+    // A ring opened by a click while time ran (19FA3==0) therefore resumes time on cancel.
+    if (battle_state_ == 1) {
+        battle_free_wait_ = true; // enter free wait (F042E stays 1, time frozen)
+        battle_overlay_mode_ = 1; // keep the banner on (44DEC(1))
+    } else {
+        battle_free_wait_ = false;
+    }
+    if (battle_trace_)
+        fprintf(stderr, "COMBAT: ring cancel -> %s (4B842+5580F)\n",
+                battle_state_ == 1 ? "free wait" : "time resumes");
 }
 
 // MENUSTAT.SYB (sub_4E448: loads 0x37 sprites from `.\\menustat.syb` with sub_4F25F, then
@@ -5772,7 +5822,9 @@ void CombatII::battle_render_free_hover() {
 // 19FA3 != 0 and 10392 == 1 does 19F9D(0) + 1038B + 44DEC(0). Returns true when the input
 // was consumed.
 bool CombatII::battle_free_input() {
-    if (!battle_free_wait_) return false;
+    // 5580F's hover/left-click pass runs while time advances too (state 0, 19FA3==0); only
+    // the right-click cycle and Space test 19FA3.
+    if (!battle_free_wait_ && battle_state_ != 0) return false;
     const int mx = input_.get_mouse_x(), my = input_.get_mouse_y();
     // Esc in free wait is not consumed; the caller (the 5580F loop) opens the system menu
     // (4E0EE).
@@ -5978,10 +6030,15 @@ void CombatII::battle_player_end_turn(bool action_end) {
     battle_range_e8_.clear();
     battle_simple_ring_ = false;
     battle_set_420f(1); // mov eax,1; call sub_1A0F0 (4DB4E)
+    battle_ai_config_direct_ = false;
     // loc_4DB71: 19FA3==1 and 19792()==0 (empty queue) -> 19F9D(0) resumes time; a
     // non-empty queue stays in free wait. 19792 returns 1 when dword_F041C != 0 (the ready
-    // queue is non-empty).
-    if (battle_state_ == 1 && battle_ready_queue_.empty()) {
+    // queue is non-empty). With 19FA3 != 1 (a ring opened while time ran) the tail does
+    // nothing, so the running state is preserved.
+    if (battle_state_ != 1) {
+        battle_free_wait_ = false;
+        if (battle_trace_) fprintf(stderr, "COMBAT: end-turn (19FA3=0) -> time resumes\n");
+    } else if (battle_ready_queue_.empty()) {
         battle_state_ = 0; // call sub_19F9D(0)
         battle_overlay_mode_ = 0; // time resumes: the original only calls 19F9D; the next tick runs 44DEC(0)
         battle_free_wait_ = false;

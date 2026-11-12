@@ -1278,6 +1278,10 @@ int CombatII::run(const std::string& scenario_param){
         if (battle_state_ != 0) {
             battle_tick_next_us_ = 0.0;                    // do not accumulate missed ticks after resuming
             bret = battle_update();
+        } else if (battle_player_unit_ >= 0) {
+            // A ring opened by a click while time ran blocks inside 5580F in the original,
+            // so 19D53 (battle_update) is not called until the ring closes.
+            battle_tick_next_us_ = 0.0;
         } else if (battle_tick_due()) {
             bret = battle_update();
         }
