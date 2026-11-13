@@ -469,11 +469,41 @@ int CombatII::combat_rand(int n) {
     return (int)((combat_rng_ >> 16) % (uint32_t)n);
 }
 
-// sub_4F4CD(id) -> sub_5CB97(0x0A, id+1, 1): plays the sample at dword_1124AC[(id+1)*8].
-// The sample table (.SSP loading) is not ported, so this only logs.
+// sub_4F4CD(id) -> sub_5CB97(0x0A, id+1, 1): starts the sample that 4F460 loaded into slot
+// id+1. Only word_FDAE6 == 1 (system-menu SFX on) produces sound.
 void CombatII::sfx(int id) {
     if (!battle_sfx_on_) return;                 // word_FDAE6 (system menu SFX toggle)
-    if (script_trace_) fprintf(stderr, "COMBAT: sfx %d (sub_4F4CD, sample table not ported)\n", id);
+    const int slot = id + 1;
+    if (slot >= 0 && (size_t)slot < battle_ssp_slot_path_.size() &&
+        !battle_ssp_slot_path_[(size_t)slot].empty()) {
+        if (script_trace_) fprintf(stderr, "COMBAT: sfx %d -> slot %d (sub_4F4CD)\n", id, slot);
+        Audio::play_cached(battle_ssp_slot_path_[(size_t)slot]);
+    } else if (script_trace_) {
+        fprintf(stderr, "COMBAT: sfx %d (sub_4F4CD, slot %d empty)\n", id, slot);
+    }
+}
+
+// 4F460's id argument per SSP name (the load sites pass 32h/33h/34h). Kept as a name table
+// because the port's effect drivers call battle_ssp_play with the file name only.
+static int battle_ssp_slot_id_for_name(const char* name) {
+    struct Ent { const char* name; int id; };
+    static const Ent kMap[] = {
+        {"f-arrow.ssp", 0x32}, {"f-wave.ssp", 0x33}, {"f-blast.ssp", 0x32},
+        {"f-meteo1.ssp", 0x32}, {"f-meteo2.ssp", 0x33}, {"promi-1.ssp", 0x32},
+        {"promi-2.ssp", 0x33}, {"cure.ssp", 0x33}, {"i-star.ssp", 0x33},
+        {"regen.ssp", 0x32}, {"i-fist.ssp", 0x33}, {"thunder3.ssp", 0x32},
+        {"bolt1.ssp", 0x33}, {"elect.ssp", 0x34}, {"thunder1.ssp", 0x34},
+        {"heal.ssp", 0x32}, {"sun1.ssp", 0x32}, {"sun2.ssp", 0x33},
+        {"sun.ssp", 0x34}, {"enchant.ssp", 0x32}, {"f-field.ssp", 0x32},
+        {"m-wind.ssp", 0x32}, {"i-shoot.ssp", 0x32}, {"i-piece.ssp", 0x32},
+        {"pierce.ssp", 0x33}, {"fire.ssp", 0x32}, {"death1.ssp", 0x32},
+        {"bomb.ssp", 0x33}, {"assist-u.ssp", 0x32}, {"assist-d.ssp", 0x32},
+        {"poison.ssp", 0x32}, {"b-hole.ssp", 0x32}, {"atomic.ssp", 0x32},
+        {"dragon.ssp", 0x32}, {"summon.ssp", 0x33}, {"recall.ssp", 0x32},
+    };
+    if (!name) return 0x32;
+    for (const Ent& e : kMap) if (strcmp(e.name, name) == 0) return e.id;
+    return 0x32;
 }
 
 // sub_135EB: screen centre of a unit's (facing, pose 0) frame.
@@ -1649,6 +1679,56 @@ void CombatII::battle_crit_19168(int attacker_index, const std::vector<int>& tar
         }
         default:
             break;
+    }
+}
+
+// sub_45BFB/45CCB: prepare and draw the floating damage digits. Split out of play_hp_change
+// so sub_287AF can animate every target of a multi-target spell in the same 24-frame loop.
+void CombatII::battle_queue_spell_hit(int caster_index, int target_index, int dmg) {
+    if (target_index < 0 || (size_t)target_index >= units_.size()) return;
+    auto& U = units_[(size_t)target_index];
+    SpellHitPending p;
+    p.target = target_index;
+    p.tidx = (int)battle_spell_hits_.size();   // 45BFB/45F29 slot, not the units_ index
+    p.dmg = dmg;
+    U.walk_off_x = U.walk_off_y = 0;                       // sub_45BFB prologue: [65h] = [66h] = 0
+    snprintf(p.digits, sizeof(p.digits), "%d", dmg);
+    p.ndig = (int)strlen(p.digits);
+    p.sx0 = (U.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X;
+    const int sy0 = (U.y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y;
+    for (int k = 0; k < 5; k++) p.digit_y[k] = sy0 + 10;   // word_F9708[i*10+k*2]
+    setup_knockback_hit(U, units_[(size_t)caster_index].facing);           // sub_45ED2
+    static constexpr uint8_t kDmgColor[8] = {0x04, 0x10, 0x31, 0x51, 0x20, 0x01, 0x00, 0x00};
+    const int dmg_idx = std::min(std::max(battle_effective_army(U), 0), 7); // unk_70A5F[army]
+    p.color = kDmgColor[(size_t)dmg_idx];
+    if (!small_font_tried_) load_small_font();
+    p.small_font = small_font_loaded_;                     // sub_608E6 -> TEXT.CHR
+    battle_spell_hits_.push_back(p);
+}
+
+// sub_45CCB: digit y animation (f<5 moves all digits by -2, 5..19 bounces one digit by +2,
+// f>=20 moves all by +2). The caller mutates SpellHitPending::digit_y each frame.
+void CombatII::battle_draw_hp_digits(const SpellHitPending& p) {
+    if (p.ndig <= 0) return;
+    const int x0 = p.sx0 + 12 - p.ndig * 3;
+    if (x0 - 16 < 0 || x0 - 16 >= 0x120) return;
+    uint8_t* bb = video_.get_backbuffer();
+    char one[2] = {0, 0};
+    for (int k = 0; k < p.ndig && k < 4; k++) {
+        one[0] = p.digits[k];
+        const int x = x0 + k * 6, y = p.digit_y[k];
+        if (y - 5 < 0 || y - 5 >= 0xB2) continue;
+        if (p.small_font) {
+            // sub_45CCB -> sub_60944 -> sub_608E6: shadow and body both use TEXT.CHR.
+            draw_small_text(x + 1, y + 1, one, 0, 1);
+            draw_small_text(x, y, one, p.color, 1);
+        } else if (bb && font_.is_loaded()) {
+            // Fallback to the dialogue font only when TEXT.CHR is unavailable.
+            font_.set_text_mode(4, 0x0000, 0xFF);
+            font_.draw_string(bb, SCREEN_W, SCREEN_H, x + 1, y + 1, one);
+            font_.set_text_mode(4, (uint16_t)(p.color << 8), 0xFF);
+            font_.draw_string(bb, SCREEN_W, SCREEN_H, x, y, one);
+        }
     }
 }
 
@@ -4439,6 +4519,21 @@ bool CombatII::battle_player_input() {
                         back_to_ring();
                         return false;
                     }
+                    // The 2A75A family (Meteor, Star Tearer, Mega Thunder, Heal Wind, Sun
+                    // Light) has no 28982/4A483 target cursor in the original: 4C605 calls
+                    // the handler immediately. Cast here instead of waiting for a click.
+                    const int q1_direct = r / 3;
+                    if (q1_direct == 6 || q1_direct == 13 || q1_direct == 20 ||
+                        q1_direct == 25 || q1_direct == 27) {
+                        battle_magic_select_ = false;
+                        battle_magic_pending_r_ = -1;
+                        ring_sub_close();
+                        battle_cast_magic(ui, r, -1, -1);
+                        if (battle_tp_changed() && (size_t)ui < units_.size())
+                            units_[(size_t)ui].combat_acc57 = 0;
+                        back_to_ring();
+                        return false;
+                    }
                     battle_magic_pending_r_ = r;
                     // After R is fixed, wait for the target click: close the sub-ring and
                     // let the map click path take over (the original's 4C605 opens the
@@ -4939,6 +5034,17 @@ bool CombatII::battle_player_input() {
             battle_magic_pending_r_ = battle_magic_options_[(size_t)k];
             const int r = battle_magic_pending_r_;
             if (battle_trace_) fprintf(stderr, "COMBAT: magic pick unit=%d R=%d %s\n", u.id, r, kSpellNames[r]);
+            // 2A75A spells take no target cursor: fire immediately (see the MagicK case).
+            const int q1_direct = r / 3;
+            if (q1_direct == 6 || q1_direct == 13 || q1_direct == 20 ||
+                q1_direct == 25 || q1_direct == 27) {
+                battle_magic_select_ = false;
+                battle_magic_pending_r_ = -1;
+                battle_cast_magic(ui, r, -1, -1);
+                if (battle_tp_changed() && (size_t)ui < units_.size())
+                    units_[(size_t)ui].combat_acc57 = 0;
+                back_to_ring();
+            }
             return false;
         }
         if (battle_item_select_ && (size_t)k < battle_item_options_.size()) {
@@ -6920,11 +7026,12 @@ void CombatII::battle_thunder_sweep_2a5be(int caster_index, const std::vector<in
     }
 }
 
-// sub_28728 equivalent: apply spell_damage to every list member (subtracting x100 raw), then
-// post-process death / mode 1. The 45BFB popup and 45ED2 knockback are presentation and are
-// skipped, with a trace line instead.
+// sub_28728: for every F0648 member 285E4 -> 45BFB (digits) -> HP -= dmg -> 45ED2 (knockback
+// tail). No animation and no death handling happen here; the handler runs 12124/287AF and
+// then 1ED45/1ED90. defer=true reproduces that split, non-defer keeps the scripted-event path
+// where the port used play_hp_change as the whole presentation.
 void CombatII::battle_apply_spell_hit(int caster_index, const std::vector<int>& targets,
-                                      int base, int p1, int p2) {
+                                      int base, int p1, int p2, bool defer, bool defer_hp) {
     if (caster_index < 0 || (size_t)caster_index >= units_.size()) return;
     const auto& caster = units_[(size_t)caster_index];
     for (int ti : targets) {
@@ -6935,19 +7042,32 @@ void CombatII::battle_apply_spell_hit(int caster_index, const std::vector<int>& 
         const int new_raw = battle_hp_raw(tgt) - dmg;
         const int new_hp = new_raw <= 0 ? 0 : (new_raw + 99) / 100;
         const int delta = new_hp - tgt.hp;
-        tgt.hp_deficit = new_hp > 0 ? new_hp * 100 - new_raw : 0;
+        const int deficit = new_hp > 0 ? new_hp * 100 - new_raw : 0;
+        // 28ED6/29514/2A1C6 call 28728 after their NSP driver, so defer the HP update too;
+        // finish_pending applies it before 12124/287AF. Other deferred handlers already call
+        // 28728 after their driver and apply the HP here.
+        if (defer && defer_hp) battle_spell_hp_pending_.push_back({ti, new_hp, deficit});
+        else {
+            tgt.hp_deficit = deficit;
+            if (defer) tgt.hp = new_hp;         // play_hp_change does this on the non-defer path
+        }
         if (battle_trace_)
-            fprintf(stderr, "COMBAT: spell unit=%d target=%d base=%d dmg_x100=%d hp -> %d\n",
-                    caster.id, tgt.id, base, dmg, new_hp);
+            fprintf(stderr, "COMBAT: spell unit=%d target=%d base=%d dmg_x100=%d hp -> %d%s\n",
+                    caster.id, tgt.id, base, dmg, new_hp, defer ? " (deferred 45BFB/45ED2)" : "");
         if (delta != 0) {
-            VmEvent hp; hp.type = VmEventType::Hp; hp.hp_unit = ti;
-            hp.hp_delta = delta;
-            hp.hp_dir = caster.facing;
-            hp.hp_killer = caster_index;
-            play_hp_change(hp);
+            if (defer) {
+                battle_queue_spell_hit(caster_index, ti, -delta);   // 45BFB + 45ED2 only
+            } else {
+                VmEvent hp; hp.type = VmEventType::Hp; hp.hp_unit = ti;
+                hp.hp_delta = delta;
+                hp.hp_dir = caster.facing;
+                hp.hp_killer = caster_index;
+                play_hp_change(hp);
+            }
         }
         if (should_exit_) return;
     }
+    if (defer) return;
     for (int ti : targets) {
         if (ti < 0 || (size_t)ti >= units_.size()) continue;
         if (units_[(size_t)ti].active && units_[(size_t)ti].hp > 0)
@@ -7087,6 +7207,72 @@ std::vector<int> CombatII::battle_spell_2a500_extras(int caster_index, const std
     return extra;
 }
 
+// sub_1ED45: walks the prepared F0648 list; HP <= 0 runs sub_1DB1D (death) and removes the
+// unit from the list, a survivor gets sub_53797(victim, caster, 1). Called after 287AF.
+void CombatII::battle_spell_1ed45_targets(int caster_index, const std::vector<int>& targets) {
+    for (int ti : targets) {
+        if (ti < 0 || (size_t)ti >= units_.size()) continue;
+        if (!units_[(size_t)ti].active) continue;
+        if (units_[(size_t)ti].hp <= 0) play_unit_death(ti, caster_index);   // sub_1DB1D
+        else run_unit_hp_trigger(ti, caster_index, 1);                      // sub_53797
+        if (should_exit_) return;
+    }
+}
+
+void CombatII::battle_spell_defer_settle(int caster_index, const std::vector<int>& targets) {
+    battle_spell_pending_caster_ = caster_index;
+    battle_spell_settle_targets_ = targets;
+}
+
+void CombatII::battle_spell_defer_status(const std::vector<int>& targets, int status, int chance, int edi) {
+    battle_spell_status_targets_ = targets;
+    battle_spell_pending_status_ = status;
+    battle_spell_pending_chance_ = chance;
+    battle_spell_pending_edi_ = edi;
+}
+
+void CombatII::battle_spell_clear_pending() {
+    battle_spell_pending_caster_ = -1;
+    battle_spell_pending_status_ = -1;
+    battle_spell_settle_targets_.clear();
+    battle_spell_status_targets_.clear();
+    battle_spell_hp_pending_.clear();
+    battle_spell_hits_.clear();
+}
+
+// 28ED6/29514/2A1C6 run 28728 in the handler, then their NSP driver + 12124 + 287AF +
+// 29437 + 1ED45 in battle_magic_fx. This applies the queued post-287AF work in that order.
+void CombatII::battle_spell_finish_pending() {
+    const int caster = battle_spell_pending_caster_;
+    const bool has_caster = caster >= 0 && (size_t)caster < units_.size();
+    const bool has_settle = has_caster && !battle_spell_settle_targets_.empty();
+    const bool has_status = has_caster && battle_spell_pending_status_ >= 0;
+    if (should_exit_) {
+        battle_spell_clear_pending();
+        return;
+    }
+    // 28728's HP update, queued until after the driver.
+    for (const auto& h : battle_spell_hp_pending_) {
+        if (h.target < 0 || (size_t)h.target >= units_.size() || !units_[(size_t)h.target].active)
+            continue;
+        units_[(size_t)h.target].hp = h.hp;
+        units_[(size_t)h.target].hp_deficit = h.deficit;
+    }
+    battle_spell_hp_pending_.clear();
+    if (has_caster) reset_unit_pose(units_[(size_t)caster]);  // sub_12124 before 287AF
+    battle_spell_pace_287af();                               // sub_287AF
+    if (!should_exit_ && has_status)
+        battle_spell_status_29437(caster, battle_spell_status_targets_,
+                                  battle_spell_pending_status_, battle_spell_pending_chance_,
+                                  battle_spell_pending_edi_); // sub_29437 after 287AF
+    if (!should_exit_ && has_settle)
+        battle_spell_1ed45_targets(caster, battle_spell_settle_targets_); // sub_1ED45 after 287AF
+    battle_spell_pending_caster_ = -1;
+    battle_spell_pending_status_ = -1;
+    battle_spell_settle_targets_.clear();
+    battle_spell_status_targets_.clear();
+}
+
 // sub_1ED90 (off-list settlement): HP <= 0 -> sub_1DB1D (death), otherwise sub_53797 (hit
 // trigger, mode 1).
 void CombatII::battle_spell_1ed90_settle(int caster_index, const std::vector<int>& units) {
@@ -7099,27 +7285,27 @@ void CombatII::battle_spell_1ed90_settle(int caster_index, const std::vector<int
 }
 
 // sub_2A75A (rows 0..2 d6 / row 3 d4,d6 / 3BDC7,3C12D): 13x13 area effect.
-//   eax = unit, edx = k (low level), ebx = kind (0 Meteor / 1 Star Tearer / 2 Mega Thunder /
+//   eax = unit, edx = k (level 0..2), ebx = kind (0 Meteor / 1 Star Tearer / 2 Mega Thunder /
 //   3 Heal Wind / 4 Sun Light).
-//   kind 0..2: centre = sub_2A6C0 (per-army highest [43h]) or the caster -> 13x13 hostile
-//     list -> 28728(dword_283FE[kind], 70, kind) -> 29437/2A5BE (status 1<<kind, 30,
-//     edi = k) -> 2A500 (off-list) -> 1ED90. With k >= 1 an allied heal follows
-//     (base = dword_283FE[kind], 50).
+//   dword_283FE (ASM 33364) holds exactly three dwords {2000,4000,7000}; every damage and
+//   heal below indexes it by k, not by kind.
+//   kind 0..2: centre = sub_2A6C0 (highest [43h] in the armies not skipped for the caster's
+//     side) or the caster -> 13x13 hostile list -> 28728(table[k], 70, kind) -> 29437/2A5BE
+//     (status 1<<kind, 30, edi = k) -> 2A500 (off-list) -> 1ED90. No allied heal.
 //   kind 3: allies (armies 1 and 2 when the caster's army < 3, otherwise its own side) with
-//     [0Dh] != 2 -> 2ACCB(5000, 50).
+//     [0Dh] != 2 -> 2ACCB(table[k], 50).
 //   kind 4: 13x13 hostile list -> 28728(9000, 70, -1) -> 2A500 -> 1ED90; with k >= 1 an
-//     allied heal of 8000.
-//   dword_283FE sits next to dword_2840A, so [3] = 0x1388 (5000) and [4] = 0x1F40 (8000)
-//   (ASM 33364).
+//     allied heal of table[k-1].
 void CombatII::battle_item_2a75a(int unit_index, int kind, int sub) {
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return;
+    static constexpr int kSpellBase[3] = {2000, 4000, 7000};               // dword_283FE
+    const int k = (sub < 0) ? 0 : (sub > 2 ? 2 : sub);
     const int caster_army = battle_effective_army(units_[(size_t)unit_index]);
     auto addable = [&](const CombatUnitPlacement& o) { // sub_28596 gate
         return o.active && !(o.combat_flags_15 & 0x80) && o.code_b < 7;
     };
     battle_spell_announce(unit_index, battle_spell_name_);                 // sub_28889
     if (should_exit_ || (size_t)unit_index >= units_.size()) return;
-    const int k = sub;
     auto heal_own_side = [&](int base, int p1) {
         std::vector<int> list;
         for (size_t i = 0; i < units_.size(); ++i) {
@@ -7133,10 +7319,13 @@ void CombatII::battle_item_2a75a(int unit_index, int kind, int sub) {
         battle_spell_heal_2accb(unit_index, list, base, p1);
     };
     if (kind == 3) {
-        // The 25DFE wide-heal presentation is skipped; only the healing.
-        heal_own_side(5000, 0x32);                                         // dword_283FE[3]
-        if (!should_exit_ && (size_t)unit_index < units_.size())
-            reset_unit_pose(units_[(size_t)unit_index]);
+        // loc_2AB7A: 25DFE presentation -> 12124 -> 2ACCB(dword_283FE[k], 0x32).
+        battle_item_2a75a_fx(unit_index, 3, k,
+                             (int)(int8_t)units_[(size_t)unit_index].x,
+                             (int)(int8_t)units_[(size_t)unit_index].y);
+        if (should_exit_) return;
+        reset_unit_pose(units_[(size_t)unit_index]);                        // sub_12124
+        heal_own_side(kSpellBase[k], 0x32);                                 // 2ACCB(dword_283FE[k], 50)
         return;
     }
     if (kind == 4) {
@@ -7161,36 +7350,40 @@ void CombatII::battle_item_2a75a(int unit_index, int kind, int sub) {
                 if (std::find(victims.begin(), victims.end(), oi) == victims.end()) victims.push_back(oi);
             }
         }
-        battle_apply_spell_hit(unit_index, victims, 9000, 70, -1);         // sub_28728
+        // loc_2AB8E: 5A267/5A566 -> 12124 -> 28728 -> 287AF -> 2A500 -> 1ED90.
+        battle_item_2a75a_fx(unit_index, 4, k, x0 + 6, y0 + 6);
+        if (should_exit_) return;
+        battle_apply_spell_hit(unit_index, victims, 9000, 70, -1, true);   // sub_28728 (deferred)
+        if (should_exit_) return;
+        reset_unit_pose(units_[(size_t)unit_index]);                       // sub_12124
+        battle_spell_pace_287af();                                         // sub_287AF
         if (should_exit_) return;
         const std::vector<int> extra = battle_spell_2a500_extras(unit_index, victims, 9000, 70, -1);
-        battle_spell_1ed90_settle(unit_index, extra);
+        std::vector<int> settle = victims;                                  // sub_1ED90 list + off-list
+        settle.insert(settle.end(), extra.begin(), extra.end());
+        battle_spell_1ed90_settle(unit_index, settle);
         if (should_exit_) return;
-        if (sub < 1) {
-            reset_unit_pose(units_[(size_t)unit_index]);
-            return;
-        }
-        heal_own_side(8000, 0x32);                                         // dword_283FE[4]
-        if (!should_exit_ && (size_t)unit_index < units_.size())
-            reset_unit_pose(units_[(size_t)unit_index]);
+        if (k >= 1) heal_own_side(kSpellBase[k - 1], 0x32);                // 2ACCB(dword_283FE[k-1])
         return;
     }
-    // Kind 0..2: the centre chosen by sub_2A6C0 - kind 0 sees all four armies, 1/2 see
-    // armies 3 and 4, kind 3 excludes army 3 and kind 4 excludes army 4. Hostility is not
-    // checked, as in the ASM.
+    // sub_2A6C0(&x, &y, caster army): walks the four CC968 army chains and keeps the unit
+    // with the largest [43h]. The caster's own side is skipped (army 1/2 -> lists 0/1, army
+    // 3 -> list 2, army 4 -> list 3). `movsx edi,bl` / `movzx esi,[+43h]` makes the running
+    // best signed, so a value >= 0x80 leaves best negative (F-08).
     int cx = (int)(int8_t)units_[(size_t)unit_index].x;
     int cy = (int)(int8_t)units_[(size_t)unit_index].y;
     {
-        int best = -1;
-        for (const auto& o : units_) {
-            if (!o.active || o.hp <= 0) continue;
-            const int ea = battle_effective_army(o);
-            if (ea < 1 || ea > 4) continue;
-            if ((kind == 1 || kind == 2) && ea < 3) continue;
-            if (kind == 3 && ea == 3) continue;
-            if (kind == 4 && ea == 4) continue;
-            if ((int)o.combat_value_43 > best) {
-                best = (int)o.combat_value_43;
+        int8_t best = -1;
+        for (int army = 1; army <= 4; ++army) {
+            if ((caster_army == 1 || caster_army == 2) && army < 3) continue;
+            if (caster_army == 3 && army == 3) continue;
+            if (caster_army == 4 && army == 4) continue;
+            for (const auto& o : units_) {
+                if (!o.active || o.hp <= 0) continue;
+                if (battle_effective_army(o) != army) continue;
+                const int v = (int)o.combat_value_43;                  // movzx esi,[+43h]
+                if ((int)best >= v) continue;                          // jge (signed best)
+                best = (int8_t)v;                                      // mov bl,[+43h]
                 cx = (int)(int8_t)o.x; cy = (int)(int8_t)o.y;
             }
         }
@@ -7202,6 +7395,8 @@ void CombatII::battle_item_2a75a(int unit_index, int kind, int sub) {
     if (y0 > (int)map_h_ - 12) y0 = (int)map_h_ - 12;
     if (x0 < 0) x0 = 0;
     if (y0 < 0) y0 = 0;
+    const int fx_cx = x0 + 6, fx_cy = y0 + 6;                              // loc_2A89F add 6
+    battle_2a75a_fx_x_ = fx_cx; battle_2a75a_fx_y_ = fx_cy;
     std::vector<int> victims;
     for (int y = y0; y < y0 + 13; ++y) {
         for (int x = x0; x < x0 + 13; ++x) {
@@ -7215,8 +7410,14 @@ void CombatII::battle_item_2a75a(int unit_index, int kind, int sub) {
             if (std::find(victims.begin(), victims.end(), oi) == victims.end()) victims.push_back(oi);
         }
     }
-    const int base = (kind == 0) ? 2000 : (kind == 1 ? 4000 : 7000);       // dword_283FE[kind]
-    battle_apply_spell_hit(unit_index, victims, base, 70, kind);           // sub_28728
+    const int base = kSpellBase[k];                                        // dword_283FE[k]
+    // loc_2A938/2A9C1/2AAC8: 4F460 + the NSP driver -> 28728 -> 12124 -> 287AF.
+    battle_item_2a75a_fx(unit_index, kind, k, fx_cx, fx_cy);
+    if (should_exit_) return;
+    battle_apply_spell_hit(unit_index, victims, base, 70, kind, true);     // sub_28728 (deferred)
+    if (should_exit_) return;
+    reset_unit_pose(units_[(size_t)unit_index]);                           // sub_12124
+    battle_spell_pace_287af();                                             // sub_287AF
     if (should_exit_) return;
     // 29437 + 2A5BE: status 1<<kind, chance 30, duration index = k.
     battle_spell_status_29437(unit_index, victims, 1 << kind, 30, k);
@@ -7224,10 +7425,9 @@ void CombatII::battle_item_2a75a(int unit_index, int kind, int sub) {
     if (should_exit_) return;
     // 2A500: the same damage to every off-list hostile unit, then 1ED90 settles.
     const std::vector<int> extra = battle_spell_2a500_extras(unit_index, victims, base, 70, kind);
-    battle_spell_1ed90_settle(unit_index, extra);
-    if (should_exit_) return;
-    reset_unit_pose(units_[(size_t)unit_index]);
-    if (k >= 1) heal_own_side(base, 0x32);
+    std::vector<int> settle = victims;                                      // sub_1ED90 list + off-list
+    settle.insert(settle.end(), extra.begin(), extra.end());
+    battle_spell_1ed90_settle(unit_index, settle);
 }
 // sub_3BDC7 (dx 8): heal / Sun Light / MP +20. Pose 8, delay 0x5A, then it fires when
 // rand(10) < (5 for class 0x25, else 3). rand(10) >= 4 gives "MP +20!" (MP += 20, clamped to
@@ -7249,9 +7449,7 @@ void CombatII::battle_item_3bdc7(int unit_index) {
             // sub_4F460 is skipped because the effect sprite engine is not ported.)
             battle_spell_name_ = (kind == 4) ? "Sun Light!" : "Heal Wind!";   // sub_28883
             battle_item_2a75a(unit_index, kind, 0);                           // sub_2A75A(edx=0, ebx=kind)
-            if (!should_exit_) battle_item_2a75a_fx(unit_index, kind, 0,
-                                                    (int)(int8_t)units_[(size_t)unit_index].x,
-                                                    (int)(int8_t)units_[(size_t)unit_index].y);
+            // 2A75A now runs its own 4F460 + NSP driver and 287AF pace.
             battle_spell_auto_ = auto_saved;             // sub_28422(0)
             if (should_exit_ || (size_t)unit_index >= units_.size()) return;
         } else {
@@ -7731,16 +7929,19 @@ void CombatII::battle_item_3c3a5(int unit_index) {
         // none of the three arguments).
         battle_fx_22d18(unit_index, 0, 0, 0);
         if (should_exit_) return;
-        battle_apply_spell_hit(unit_index, victims, 6000, 50, 1); // sub_28728 (list damage)
+        battle_apply_spell_hit(unit_index, victims, 6000, 50, 1, true); // sub_28728 (deferred)
         if (should_exit_) return;
-        // sub_2A500(ecx=1, ebx=0x32, edx=0x1770): the same damage to every off-list hostile
-        // unit, walking the N=1..4 army chains.
-        const std::vector<int> extra = battle_spell_2a500_extras(unit_index, victims, 6000, 50, 1);
-        reset_unit_pose(units_[(size_t)unit_index]);                        // sub_12124
-        // The sub_287AF 25-frame hit flash and pose restore are presentation and skipped.
+        reset_unit_pose(units_[(size_t)unit_index]);                        // sub_12124 before 287AF
+        battle_spell_pace_287af();                                          // sub_287AF
+        if (should_exit_) return;
         battle_spell_status_29437(unit_index, victims, 2, 30, 2);           // sub_29437(edx=2, ebx=0x1E, ecx=2): freeze
         battle_thunder_sweep_2a5be(unit_index, victims, 2, 30, 2);          // sub_2A5BE(edx=2, ebx=0x1E, ecx=2)
-        battle_spell_1ed90_settle(unit_index, extra);                       // sub_1ED90: settle (HP <= 0 dies, otherwise 53797)
+        // sub_2A500(ecx=1, ebx=0x32, edx=0x1770): the same damage to every off-list hostile
+        // unit, walking the N=1..4 army chains. ASM runs it after 2A5BE, then 1ED90.
+        const std::vector<int> extra = battle_spell_2a500_extras(unit_index, victims, 6000, 50, 1);
+        std::vector<int> settle = victims;                                  // sub_1ED90 list + off-list
+        settle.insert(settle.end(), extra.begin(), extra.end());
+        battle_spell_1ed90_settle(unit_index, settle);
 }
 
 // VM 0x09 (sub_51FF7): centres the camera on the unit, then runs subcommands 0..6:
@@ -7759,9 +7960,7 @@ void CombatII::play_unit_effect(const VmEvent& ev) {
             battle_spell_name_ = "Oh! My Lord!";                         // sub_28883(eax = "Oh! My Lord!"); the announcement is sub_28889 in 2A75A
             const int kind = combat_rand(2) != 0 ? 3 : 4;
             battle_item_2a75a(ui, kind, 0);                              // sub_2A75A(edx=0, ebx=kind)
-            if (!should_exit_) battle_item_2a75a_fx(ui, kind, 0,
-                                                    (int)(int8_t)units_[(size_t)ui].x,
-                                                    (int)(int8_t)units_[(size_t)ui].y);
+            // 2A75A now runs its own 4F460 + NSP driver and 287AF pace.
             battle_spell_auto_ = auto_saved;                             // sub_28422(0)
             break;
         }
@@ -7940,10 +8139,10 @@ int CombatII::battle_spell_28ed6(int unit_index, int row, int k, int tx, int ty)
     battle_spell_announce(unit_index, battle_spell_name_);       // 28982 -> 28889
     if (should_exit_) return 0;
     battle_apply_spell_hit(unit_index, std::vector<int>{target}, 3000 + 1500 * k, 20,
-                           (row == 2) ? 2 : 0);
+                           (row == 2) ? 2 : 0, true, true);      // sub_28728 (deferred until driver)
     if (should_exit_) return 0;
-    reset_unit_pose(units_[(size_t)unit_index]);                 // sub_12124
-    run_unit_hp_trigger(unit_index, -1, 1);                      // sub_1ED45
+    // 12124 + 287AF + 1ED45 run in battle_magic_fx after the driver's NSP playback.
+    battle_spell_defer_settle(unit_index, std::vector<int>{target}); // sub_1ED45 after 287AF
     return 0;
 }
 
@@ -8021,9 +8220,9 @@ int CombatII::battle_spell_2a1c6(int unit_index, int kind, int k) {
     battle_spell_announce(unit_index, battle_spell_name_);       // sub_28889
     if (should_exit_) return 0;
     switch (kind) {
-        case 0: battle_apply_spell_hit(unit_index, targets, 25000, 50, 0); break;
-        case 1: battle_apply_spell_hit(unit_index, targets, 20000, 50, 1); break;
-        case 2: battle_apply_spell_hit(unit_index, targets, 24000 + 2000 * k, 50, 2); break;
+        case 0: battle_apply_spell_hit(unit_index, targets, 25000, 50, 0, true, true); break;
+        case 1: battle_apply_spell_hit(unit_index, targets, 20000, 50, 1, true, true); break;
+        case 2: battle_apply_spell_hit(unit_index, targets, 24000 + 2000 * k, 50, 2, true, true); break;
         case 3: {                                                // Turn Undead
             const int caster_eff = battle_effective_army(u);
             for (int ti : targets) {
@@ -8051,15 +8250,15 @@ int CombatII::battle_spell_2a1c6(int unit_index, int kind, int k) {
             if ((size_t)unit_index < units_.size()) reset_unit_pose(units_[(size_t)unit_index]);
             return 0;
         }
-        default: battle_apply_spell_hit(unit_index, targets, 30000, 70, 3); break;
+        default: battle_apply_spell_hit(unit_index, targets, 30000, 70, 3, true, true); break;
     }
     if (should_exit_) return 0;
-    reset_unit_pose(units_[(size_t)unit_index]);                 // sub_12124
+    // 12124 + 287AF + 29437 + 1ED45 run in battle_magic_fx after the driver's NSP playback.
+    battle_spell_defer_settle(unit_index, targets);              // sub_1ED45 after 287AF
     if (kind < 3) {
         const int status = (kind == 2) ? 4 : (kind + 1);
-        battle_spell_status_29437(unit_index, targets, status, 30, k); // sub_29437
+        battle_spell_defer_status(targets, status, 30, k);       // sub_29437 after 287AF
     }
-    if (!should_exit_) run_unit_hp_trigger(unit_index, -1, 1);   // sub_1ED45
     return 0;
 }
 
@@ -8520,10 +8719,10 @@ int CombatII::battle_spell_field(int unit_index, int g, int k, int tx, int ty) {
     }
     battle_spell_announce(unit_index, battle_spell_name_);        // 29514 -> sub_28889
     // loc_2963E(7D0h) / loc_296A1(3E8h) - only Ice Fog (bx == 1) uses 1000.
-    battle_apply_spell_hit(unit_index, victims, bx == 1 ? 1000 : 2000, 0x1E, bx);
-    battle_spell_status_29437(unit_index, victims, sel, 0x32, k);
-    if (!should_exit_ && (size_t)unit_index < units_.size())
-        reset_unit_pose(units_[(size_t)unit_index]);              // sub_12124
+    battle_apply_spell_hit(unit_index, victims, bx == 1 ? 1000 : 2000, 0x1E, bx, true, true);
+    // 12124 + 287AF + 29437 + 1ED45 run in battle_magic_fx after the driver's NSP playback.
+    battle_spell_defer_settle(unit_index, victims);              // sub_1ED45 after 287AF
+    battle_spell_defer_status(victims, sel, 0x32, k);            // sub_29437 after 287AF
     if (battle_trace_) fprintf(stderr, "COMBAT: field done unit=%d victims=%zu\n",
                                 units_[(size_t)unit_index].id, victims.size());
     return 0;
@@ -8592,12 +8791,14 @@ int CombatII::battle_spell_wave(int unit_index, int g, int k, int tx, int ty,
         if (should_exit_) return 0;
     }
     static constexpr int kWaveDamage[3] = { 15000, 10000, 12000 };
-    battle_apply_spell_hit(unit_index, victims, kWaveDamage[bx < 0 ? 0 : (bx > 2 ? 2 : bx)], 0x1E, bx);
+    battle_apply_spell_hit(unit_index, victims, kWaveDamage[bx < 0 ? 0 : (bx > 2 ? 2 : bx)], 0x1E, bx,
+                           play_visual);
     if (should_exit_) return 0;
+    if ((size_t)unit_index < units_.size())
+        reset_unit_pose(units_[(size_t)unit_index]);             // sub_12124 before 287AF
     if (play_visual) battle_spell_pace_287af();                  // 287AF before 29437
     battle_spell_status_29437(unit_index, victims, sel, 0x1E, k);
-    if (!should_exit_ && (size_t)unit_index < units_.size())
-        reset_unit_pose(units_[(size_t)unit_index]);
+    battle_spell_1ed45_targets(unit_index, victims);             // sub_1ED45
     if (battle_trace_) fprintf(stderr, "COMBAT: wave done unit=%d victims=%zu\n",
                                 units_[(size_t)unit_index].id, victims.size());
     return 0;
@@ -8672,16 +8873,17 @@ void CombatII::battle_nsp_release() {
     magic_fx_frame_ = -1;
 }
 
-// sub_4F460(name, slot): loads MAGICSPR\<name> into the sound slot and plays it. The
-//   original clears slots 2..7 with 5CD0D, loads the file with 5CA62(slot+1, path) and the
-//   driver stops it with 4F4CD(0x32). Audio is single-channel here (play_voc stops before
-//   playing), which covers that stop. 35 of the files carry a VOC header and the rest are
-//   raw PCM behind a 0x40 header, so Audio::play_voc's three branches (VOC/WAV/raw) apply.
+// sub_4F460(name, id): clears sample slots 2..7 with 5CD0D and loads MAGICSPR\<name> into
+// slot id+1 with 5CA62. It does NOT play; the effect driver later calls 4F4CD(id) at the
+// collision/impact point, which is the call that actually starts the sample.
 void CombatII::battle_ssp_play(const char* name) {
     if (!name || !*name) return;
     const std::string path = game_path((std::string("MAGICSPR/") + name).c_str());
-    if (battle_trace_) fprintf(stderr, "COMBAT: ssp '%s'\n", name);
-    Audio::play_voc(path);
+    const int id = battle_ssp_slot_id_for_name(name);
+    const int slot = id + 1;
+    if (slot >= 0 && (size_t)slot < battle_ssp_slot_path_.size())
+        battle_ssp_slot_path_[(size_t)slot] = path;
+    if (battle_trace_) fprintf(stderr, "COMBAT: ssp load '%s' slot %d (4F460)\n", name, slot);
 }
 
 // SSP name loaded by the handler through 4F460 (q1 = g*7+d; k variants are picked here).
@@ -8738,18 +8940,34 @@ const char* CombatII::battle_spell_nsp(int r_code) const {
     }
 }
 
-// sub_287AF: hit pacing after damage and status are applied.
-//   Drops the period to 3 (1033B(3,1)) and runs 24 times
-//   { draw each unit with 45F29/45CCB -> 454B3+5E9E8 -> 499E4 }, then stands the collected
-//   units up with 12124 and restores the period with 499DA(0x24).
+// sub_287AF: hit pacing after 28728 prepared the damage.
+//   1033B(3,1); 24 times { 454B3 -> for every F0648 member 45F29(45ccb) -> 5E9E8 -> 499E4 };
+//   then 12124 on every member and 499DA(0x24). The numbers therefore animate at the same
+//   time for every target instead of one target at a time.
 void CombatII::battle_spell_pace_287af() {
     game_timer_set(3);                                    // sub_1033B(3, 1)
-    for (int i = 1; i <= 0x18 && !should_exit_; ++i) {
-        present_cutscene_frame();                         // sub_454B3 + sub_5E9E8
+    for (int f = 1; f <= 0x18 && !should_exit_; ++f) {
+        // 45F29 + 45CCB for every prepared target, then 454B3/5E9E8/499E4.
+        for (auto& p : battle_spell_hits_) {
+            if (p.target < 0 || (size_t)p.target >= units_.size()) continue;
+            auto& U = units_[(size_t)p.target];
+            apply_knockback_hit(U, p.tidx, f);            // sub_45F29
+            // 45CCB: f<5 -> first digit -2; f>=20 -> fourth digit +2; otherwise one
+            // digit +2 and its neighbour -2.
+            if (f < 5) p.digit_y[0] -= 2;
+            else if (f >= 0x14) p.digit_y[3] += 2;
+            else { const int k = (f - 5) / 5; if (k < 4) { p.digit_y[k] += 2; p.digit_y[k + 1] -= 2; } }
+        }
+        render_battle_frame();                            // sub_454B3
+        for (const auto& p : battle_spell_hits_) battle_draw_hp_digits(p); // sub_45CCB
+        render_overlay();
+        video_.present();                                 // sub_5E9E8
         wait_game_tick();                                 // sub_499E4
     }
-    // The 12124 loop of 287AF (restore collected poses) already happens in each handler
-    // through the final reset_unit_pose call.
+    for (const auto& p : battle_spell_hits_)
+        if (p.target >= 0 && (size_t)p.target < units_.size())
+            reset_unit_pose(units_[(size_t)p.target]);    // 12124 loop
+    battle_spell_hits_.clear();
     game_timer_set(0x24);                                 // sub_499DA(0x24)
     wait_game_tick();                                     // 499DA falls through to 499E4
 }
@@ -8917,16 +9135,16 @@ bool CombatII::battle_item_2a75a_fx(int unit_index, int kind, int k, int tx, int
             battle_ssp_play("i-fist.ssp");
             return battle_fx_58619(unit_index, tx, ty, lv) != 0;        // sub_58619
         case 2:
+            // ASM 36808..36861: thunder3.ssp (32h) and bolt1.ssp (33h) are loaded for every
+            // level; only the third sample depends on k.
             battle_ssp_play("thunder3.ssp");                            // 4F460(32h)
-            if (lv == 0) {
-                battle_ssp_play("bolt1.ssp");                           // 4F460(33h)
-                return battle_fx_58c87(unit_index, tx, ty, lv) != 0;    // sub_58C87
-            }
+            battle_ssp_play("bolt1.ssp");                               // 4F460(33h)
+            if (lv == 0) return battle_fx_58c87(unit_index, tx, ty, lv) != 0;  // sub_58C87
             if (lv == 1) {
                 battle_ssp_play("elect.ssp");                           // 4F460(34h)
                 return battle_fx_58e95(unit_index, tx, ty, lv) != 0;    // sub_58E95
             }
-            battle_ssp_play("thunder1.ssp");
+            battle_ssp_play("thunder1.ssp");                            // 4F460(34h)
             return battle_fx_592b0(unit_index, tx, ty, lv) != 0;        // sub_592B0
         case 3:
             battle_ssp_play("heal.ssp");                                // 2BC05: 4F460(32h)
@@ -9093,13 +9311,13 @@ void CombatII::battle_magic_fx(int r_code, int unit_index, int tx, int ty) {
     const int q1 = r_code / 3, k = r_code % 3;
     auto pace = [&]() {
         switch (q1) {
-            // Routines that call 287AF: 28ED6(d0)/29514(d2)/29722(d3)/2A1C6(d5)/2A75A(d6).
-            case 0: case 2: case 3: case 5: case 6:
-            case 7: case 9: case 10: case 12: case 13:
-            case 14: case 16: case 17: case 19: case 20:
-            case 24: case 33: case 48:                    // 2A1C6: Turn Undead / Barrier / Dark Zone
-            case 25: case 27:                            // 2A75A: Heal Wind / Sun Light
-                battle_spell_pace_287af();                // sub_287AF
+            // Routines that call 287AF: 28ED6(d0)/29514(d2)/29722(d3)/2A1C6(d5). The 2A75A
+            // family and the 29722 wave handler run the driver and the pace inside the handler.
+            case 0: case 2: case 3: case 5:
+            case 7: case 9: case 10: case 12:
+            case 14: case 16: case 17: case 19:
+            case 48:                                      // 2A1C6 kind 5: Dark Zone
+                battle_spell_finish_pending();            // 12124 -> 287AF -> 29437 -> 1ED45
                 break;
             default: break;
         }
@@ -9342,6 +9560,7 @@ int CombatII::battle_cast_magic(int unit_index, int r_code, int tx, int ty) {
     }
     const int g = r_code / 21, q1 = r_code / 3, d = q1 % 7, k = r_code % 3;
     if (g < 0 || g > 6 || d < 0 || d > 6 || k < 0 || k > 2) return 4;
+    battle_spell_clear_pending();   // a previous aborted cast must not settle in this one
     // dword_74492 == 1 (sub_28422 AI auto target): the caller sub_432A0 handles the gates
     // and the MP/TP cost.
     const bool ai = battle_spell_auto_;
@@ -9372,7 +9591,7 @@ int CombatII::battle_cast_magic(int unit_index, int r_code, int tx, int ty) {
         case 0: rc = battle_spell_28ed6(unit_index, 0, k, tx, ty); break;
         case 1: rc = battle_spell_29273(unit_index, 0x01, k, tx, ty); break;
         case 2: rc = battle_spell_field(unit_index, 0, k, tx, ty); break;
-        case 3: rc = battle_spell_wave(unit_index, 0, k, tx, ty); break;
+        case 3: rc = battle_spell_wave(unit_index, 0, k, tx, ty, true); break;
         case 4: rc = battle_spell_summon(unit_index, k, 7, 0x17A, 0x5A); break;   // Salamanda
         case 5: rc = battle_spell_2a1c6(unit_index, 0, k); break;           // Explosion
         case 6: battle_item_2a75a(unit_index, 0, k); rc = 0; break;         // Meteor
@@ -9380,7 +9599,7 @@ int CombatII::battle_cast_magic(int unit_index, int r_code, int tx, int ty) {
         case 7:  rc = battle_spell_28ed6(unit_index, 1, k, tx, ty); break;
         case 8:  rc = battle_spell_29273(unit_index, 0x02, k, tx, ty); break;
         case 9:  rc = battle_spell_field(unit_index, 1, k, tx, ty); break;
-        case 10: rc = battle_spell_wave(unit_index, 1, k, tx, ty); break;
+        case 10: rc = battle_spell_wave(unit_index, 1, k, tx, ty, true); break;
         case 11: rc = battle_spell_summon(unit_index, k, 8, 0x176, 0x59); break;  // Marid
         case 12: rc = battle_spell_2a1c6(unit_index, 1, k); break;          // Leopard
         case 13: battle_item_2a75a(unit_index, 1, k); rc = 0; break;        // Star Tearer
@@ -9388,7 +9607,7 @@ int CombatII::battle_cast_magic(int unit_index, int r_code, int tx, int ty) {
         case 14: rc = battle_spell_28ed6(unit_index, 2, k, tx, ty); break;
         case 15: rc = battle_spell_29273(unit_index, 0x04, k, tx, ty); break;
         case 16: rc = battle_spell_field(unit_index, 2, k, tx, ty); break;
-        case 17: rc = battle_spell_wave(unit_index, 2, k, tx, ty); break;
+        case 17: rc = battle_spell_wave(unit_index, 2, k, tx, ty, true); break;
         case 18: rc = battle_spell_summon(unit_index, k, 9, 0x16E, 0x58); break;  // Djinni
         case 19: rc = battle_spell_2a1c6(unit_index, 2, k); break;          // P.Lighting
         case 20: battle_item_2a75a(unit_index, 2, k); rc = 0; break;        // Mega/Giga/Pow Thunder
@@ -9439,9 +9658,17 @@ int CombatII::battle_cast_magic(int unit_index, int r_code, int tx, int ty) {
         return rc;
     }
     if (should_exit_ || (size_t)unit_index >= units_.size()) return 0;
-    // SSP + NSP frames + 287AF hit pacing (the original runs these inside the handler).
-    battle_magic_fx(r_code, unit_index, fx_tx, fx_ty);
-    if (should_exit_ || (size_t)unit_index >= units_.size()) return 0;
+    // The 2A75A family (off_2A746) and the 29722 wave handler (q1 3/10/17) load their SSP,
+    // run the NSP driver and 287AF inside the handler; every other handler leaves the
+    // presentation to battle_magic_fx here.
+    const int q1_fx = r_code / 3;
+    const bool fx_inside_handler =
+        (q1_fx == 3 || q1_fx == 6 || q1_fx == 10 || q1_fx == 13 || q1_fx == 17 ||
+         q1_fx == 20 || q1_fx == 25 || q1_fx == 27);
+    if (!fx_inside_handler) {
+        battle_magic_fx(r_code, unit_index, fx_tx, fx_ty);
+        if (should_exit_ || (size_t)unit_index >= units_.size()) return 0;
+    }
     auto& uc = units_[(size_t)unit_index];
     if (!ai) { // MP/TP cost (tail of 4C605); AI (sub_432A0) is settled by the caller.
         uc.combat_mp_50 = (uint16_t)((int)uc.combat_mp_50 - (int)kSpellCost[d]);

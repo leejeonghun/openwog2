@@ -1,4 +1,4 @@
-// Spell effect drivers: Mega Thunder (sub_570A1), spear fall (sub_2DA5E), summon (sub_21944)
+// Spell effect drivers: Meteor 3rd stage (sub_570A1), spear fall (sub_2DA5E), summon (sub_21944)
 //
 // These three NSP/SSP effects follow the conventions of combatii_fx_support.cpp and
 // combatii_fx_fire.cpp:
@@ -85,19 +85,21 @@ void pro_kill(int idx) {
 
 // ---- sub_21944 (dasm 25067..25288): shared summon/appear effect ----
 // eax = screen x, edx = screen y, ebx = unit image slot ([unit+0x60]).
-// Reads [0] = tile width and [3] = height h from the D66A8 entry (572 * slot):
+// Reads [0] = tile width, [3] = height h, [4]/[5] = sprite offsets and [9] = the unit's
+// span stream from the D66A8 entry:
 //   (1) game_timer_set(7), then for 9 frames raise table frames 0..8 at
 //       (x + (tile_w > 1 ? 0x0C : 0), y)
-//   (2) sfx(0x32), then an h-row loop: per row present (sub_454B3) and blit the main frame, the
-//       secondary frame and the 8-fold plume through the unclipped tinted path (sub_5F29D)
+//   (2) sfx(0x32), then an h-row loop: per row present (sub_454B3), blit the main frame
+//       (last row = entry 7 = unk_F0DFE), draw the summon body with sub_5F4AF (ecx = r+1 rows),
+//       and only when this is not the last row the secondary frame and the 8-fold plume.
 //   (3) game_timer_set(0x1E), one wait, sfx(0x33), sub_284A3 (white palette flash: 49A3E
 //       step 2 in, 100h back = one hold frame), then 44D6E(0). The caller releases the table.
-// The port reads battle_d66a8_raw with the unit's sprite_type instead of a slot and derives
-// x/y from unit_screen_center + 0x0C.
+// Coordinates: sub_10971/10988 already include the +4 tile anchor and the callers add 0Ch to
+// both axes, so the port uses those raw values instead of unit_screen_center's sprite centre.
 int CombatII::battle_fx_21944(int unit_index, int tx, int ty, int k) {
     (void)k;
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return 0;
-    const CombatUnitPlacement& u = units_[(size_t)unit_index];
+    auto& u = units_[(size_t)unit_index];
     uint8_t raw[13] = {};
     if (!battle_d66a8_raw(u.sprite_type, (int)u.facing & 3, 0, raw)) return 0;
     const int tile_w = raw[0];                       // [edx]
@@ -105,26 +107,38 @@ int CombatII::battle_fx_21944(int unit_index, int tx, int ty, int k) {
     // sub_21944 never loads an NSP itself: the caller (299DA/3C548/4426D) has already loaded
     // the table (unk_F0DAA), so the port reuses the current magic_frames_.
     if (magic_frames_.empty()) return 0;
+    // The raised frames use the D66A8 sprite stream directly (sub_5F4AF).
+    const NC2Frame* body = nc2_frame_for(u.sprite_type, (int)u.facing & 3, 0);
     // sub_21944+1B..+2B: sub_44D6E(1, [60h]); the matching sub_44D6E(0) is at the tail.
-    // battle_dim_row0_ is the port's row-0 approximation used by the other drivers; the
-    // guard also restores it on an early should_exit_ return.
     struct DimGuard {
         bool& dim;
         explicit DimGuard(bool& d) : dim(d) { dim = true; }
         ~DimGuard() { dim = false; }
     } dim_guard(battle_dim_row0_);
 
+    // 1134F puts the unit in the army list before 21944, but the occupancy registration
+    // (11E04) runs after it. The unit is therefore not visible during the effect.
+    const bool was_active = u.active;
+    u.active = false;
+    struct ActiveGuard {
+        bool& a; bool v;
+        ActiveGuard(bool& a_, bool v_) : a(a_), v(v_) {}
+        ~ActiveGuard() { a = v; }
+    } active_guard(u.active, was_active);
+
     camera_center_on(tx, ty);                        // camera already set by 299DA/3C548/4426D
-    int sx = 0, sy = 0;
-    unit_screen_center(u, sx, sy);                    // sub_135EB
-    sy += 0x0C;                                      // 10988 + 0Ch
+    // sub_10971: (x - camX) * 18h + camFineX + 4; sub_10988: (y - camY) * 10h + camFineY + 4.
+    const int raw_x = ((int)(int8_t)u.x - cam_tile_x_) * 24 + cam_fine_x_ + 4 + 0x0C;
+    const int raw_y = ((int)(int8_t)u.y - cam_tile_y_) * 16 + cam_fine_y_ + 4 + 0x0C;
     const int dx0 = (tile_w > 1) ? 0x0C : 0;         // `cmp dl,1; jbe` -> var_18 = 0Ch
+    const int X = raw_x + dx0;
+    const int Y = raw_y;
 
     game_timer_set(7);                               // sub_1033B(7)
     for (int f = 0; f < 9 && !should_exit_; ++f) {   // `cmp cx,9; jl`
         if (f < (int)magic_frames_.size()) {
             const MagicFxFrame& fr = magic_frames_[(size_t)f];
-            battle_fx_blit(f, sx + dx0 + fr.xo, sy + fr.yo);   // sub_1FFFE
+            battle_fx_blit(f, X + fr.xo, Y + fr.yo);   // sub_1FFFE
         }
         battle_fx_present();                         // 454B3 + 5E9E8
         wait_game_tick();                            // 499E4
@@ -138,15 +152,28 @@ int CombatII::battle_fx_21944(int unit_index, int tx, int ty, int k) {
         const MagicFxFrame& fr = magic_frames_[(size_t)f];
         battle_fx_blit_tinted_unclipped(f, x + fr.xo, y + fr.yo, pct);
     };
+    // Tint: 611AA(1 colour, shade = 1Eh) -> brightness weight 100-30 = 70 (0x46).
+    game_timer_set(3);                               // 21944 runs at period 3 during the rows
     for (int r = 0; r < h && !should_exit_; ++r) {   // loc_21BAC: var_14 < [edx+3]
         const int p = r % 5;                         // remainder of `idiv 5`
-        // Main frame = 9 + (r%5); the last row uses the fixed unk_F0DFE = 9. Secondary = 0x0E +
-        // (r%5).
-        blit_t((r == h - 1) ? 9 : 9 + p, sx + dx0, sy, 0x28);
-        if (r != h - 1) blit_t(0x0E + p, sx + dx0, sy, 0x28);
-        // 8-fold plume: frame 0x13 + (r%5) stacked upward at 16px intervals (loc_21B3B)
-        for (int c = 0; c < 8; ++c)
-            blit_t(0x13 + p, sx + dx0, sy - 8 - c * 0x10, 0x28);
+        const bool last = (r == h - 1);
+        // Main frame = 9 + (r%5); the last row uses unk_F0DFE = F0DAA + 0x54 = entry 7.
+        blit_t(last ? 7 : 9 + p, X, Y, 0x46);
+        // sub_5F4AF: body rising from the ground, drawing only the first r+1 scanlines.
+        if (body)
+            blit_nc2_frame_clipped(raw_x + (int)(int8_t)raw[4],
+                                   (int)(int8_t)raw[5] + (raw_y - 0x0C) + h - (r + 1),
+                                   *body, r + 1);
+        if (!last) {
+            blit_t(0x0E + p, X, Y, 0x46);            // secondary frame
+            // Plume start = Y + secondary frame's yo - 8, then each sprite adds its own yo
+            // and -16 per step (loc_21B3B). blit_t adds the per-frame yo.
+            const int sec = 0x0E + p;
+            const int plume_y = (sec < nframes) ? (Y + magic_frames_[(size_t)sec].yo - 8)
+                                                : (Y - 8);
+            for (int c = 0; c < 8; ++c)
+                blit_t(0x13 + p, X, plume_y - c * 0x10, 0x46);
+        }
         battle_fx_present();                         // 454B3 + 5E9E8 (flush the queue over the map)
         wait_game_tick();                            // 499E4
     }
@@ -271,7 +298,7 @@ int CombatII::battle_fx_2da5e(int unit_index, int tx, int ty, int k) {
     return 1;
 }
 
-// ---- sub_570A1 (dasm 96212..96730): Mega Thunder (pro.nsp + explosio.nsp) ----
+// ---- sub_570A1 (dasm 96212..96730): Meteor k=2 (pro.nsp + explosio.nsp) ----
 // eax = screen x, edx = screen y.
 //   (0) sub_1FEA4("pro.nsp") + sub_1FEA4("explosio.nsp"), sub_1124A, sub_56129, sub_135EB.
 //   (1) sub_56178(0x4E, x=0,     y=0x64, base=0x53, cycle=7, state=1)

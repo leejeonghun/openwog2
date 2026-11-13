@@ -5,6 +5,8 @@
 // deactivates it. Slot layout, with the original offsets:
 //   +00 x(i16)  +02 y(i16)  +04 state(1 = active)  +06 age  +08 NSP start frame
 //   +0A period (frames)  +0C frame within period  +0E unused  +12 vx  +14 vy
+//   The draw code reads dword [+06]>>16 (= base at +08) and dword [+0A]>>16 (= frame at +0C),
+//   so the drawn index is base + frame, not age + period.
 // Each tick an active slot draws frame = start frame + frame-in-period at (0x1FFFE + x, y) and is
 // killed when frame-in-period reaches the period. Empty slots spawn particles with rand%N.
 //
@@ -165,7 +167,7 @@ int CombatII::battle_fx_5666e(int unit_index, int tx, int ty, int k) {
                 }
                 continue;
             }
-            // loc_567B7: draw frame [08] + [0Ch] at (x, y)
+            // loc_567B7: dword [+06]>>16 = base(+08); dword [+0A]>>16 = frame(+0C)
             battle_fx_blit(p.base + p.frame, p.x, p.y);
             ++p.frame;
             if (p.frame == p.cycle) {                // period over -> kill the slot
@@ -255,8 +257,9 @@ int CombatII::battle_fx_56896(int unit_index, int tx, int ty, int k) {
 //       (x=0, y=0xAA, start frame 0x14, period 3, state 1); slot index = 0x5A + frame/15.
 //   (2) Those three slots draw the same frame at (x, y), (x+0x78, y) and (x+0xF0, y) every tick,
 //       are killed once age > 0x28, and otherwise advance the period frame and rise with y -= 6.
-//   (3) The other 0x64 slots spawn sparks by the 56896 group-A rule (500 killed in total).
-//   Every 5 frames 4F4CD(0x32) plays, and 0x33 when rand%10==0.
+//   (3) Slots 0..0x4F spawn by the 56896 group-A rule; slots 0x50..0x59 spawn by the group-B
+//       rule (rand%4==1, base 0x0D, period 7, drift right). 500 killed ends the effect.
+//   Every 5 frames 4F4CD(0x32/0x34 by rand%2) plays, and 0x33 when rand%10==0.
 int CombatII::battle_fx_56bd4(int unit_index, int tx, int ty, int k) {
     (void)unit_index; (void)k;
     battle_nsp_release();
@@ -267,11 +270,11 @@ int CombatII::battle_fx_56bd4(int unit_index, int tx, int ty, int k) {
     fx_particles_init();
     game_timer_set(0x14);                            // sub_1033B(14h)
     pal_ramp_set_width(0x14);            // sub_5623E (word_11233C ramp width)
-    int spawned = 0, ticks = 0, frames = 0;
+    int spawned = 0, ticks = 0, frames = -1;
     bool done = false;
     for (int guard = 0; guard < 0x4000 && !should_exit_ && !done; ++guard) {
         pal_ramp_step(0x4B, 0x32);                 // sub_562C1 (3% ramp per frame)
-        ++frames;
+        ++frames;                                  // ASM var_14 starts at -1
         // (1) light slots 0x5A..0x5C every 15 frames while the frame counter is < 0x28
         if (frames % 0x0F == 0 && frames < 0x28) {
             const int slot = 0x5A + frames / 0x0F;
@@ -291,8 +294,8 @@ int CombatII::battle_fx_56bd4(int unit_index, int tx, int ty, int k) {
             if (p.frame == p.cycle) p.frame = 0;
             p.y = (int16_t)(p.y - 6);
         }
-        // (3) sparks in the 0x64 slots (same as 56896 group A)
-        for (int i = 0; i < 0x64 && !should_exit_; ++i) {
+        // (3a) slots 0..0x4F: 56896 group-A rule
+        for (int i = 0; i < 0x50 && !should_exit_; ++i) {
             FxParticle& p = fx_slot[i];
             if (p.state == 0) {
                 const int r = fx_rand_mod(4);
@@ -308,7 +311,24 @@ int CombatII::battle_fx_56bd4(int unit_index, int tx, int ty, int k) {
             }
         }
         if (done) break;
-        if (ticks % 5 == 0) sfx(0x32);
+        // (3b) slots 0x50..0x59: rand%4==1, base 0x0D, period 7, drift right
+        for (int i = 0x50; i < 0x5A && !should_exit_; ++i) {
+            FxParticle& p = fx_slot[i];
+            if (p.state == 0) {
+                if (fx_rand_mod(4) == 1)
+                    fx_spawn(i, fx_rand_mod(320), fx_rand_mod(200), 0x0D, 7, 1);
+                continue;
+            }
+            battle_fx_blit(p.base + p.frame, p.x, p.y);
+            p.x = (int16_t)(p.x + 2);
+            ++p.frame;
+            if (p.frame == p.cycle) {
+                fx_kill(i);
+                if (++spawned > 0x1F4) { done = true; break; }
+            }
+        }
+        if (done) break;
+        if (ticks % 5 == 0) sfx(0x32 + 2 * fx_rand_mod(2));  // 499BD(2) -> 32h/34h
         if (fx_rand_mod(10) == 0) sfx(0x33);
         ++ticks;
         battle_fx_present();
@@ -326,15 +346,16 @@ int CombatII::battle_fx_56bd4(int unit_index, int tx, int ty, int k) {
 //   Slots 0..9 are born somewhere on screen and move with vx/vy (5..24, each negated with 50%
 //   probability) for at most 11 frames, dying when they leave (0..320, 20..0x104). Once more than
 //   0x1E have died no more spawn (var_4 = 1), and the effect ends when no particle is alive.
-//   Each slot leaves a trail as long as its age: off_56099 = {0Ah,0Ch,0Dh,0Dh,0Ch,0Dh} frames are
-//   drawn at (x, y - 10*n) with 56102, the blitter that adds the frame's xo/yo.
+//   Each slot leaves a trail as long as its age: the 11 words of off_56099
+//   (0A,0B,0C,0D,0D,0C,0D,0D,0C,0D,0D) are drawn at (x, y - 10*n) with 56102, the blitter that
+//   adds the frame's xo/yo.
 //   Period 3; 4F4CD(0x32) every 6 frames.
 int CombatII::battle_fx_57766(int unit_index, int tx, int ty, int k) {
     (void)unit_index; (void)k;
     battle_nsp_release();
     if (fx_append_nsp(game_path("MAGICSPR/leopard.nsp").c_str(), magic_frames_) <= 0) return 0;
-    // 11 entries, matching the 22-byte (11-word) copy of off_56099; age cap 0x0B indexes 0..10.
-    static const int kTrail[11] = {0x0A, 0x0C, 0x0D, 0x0D, 0x0C, 0x0D, 0x0D, 0x0B, 0x0C, 0x0D, 0x0D};
+    // 11 words copied from off_56099: 0A,0B,0C,0D,0D,0C,0D,0D,0C,0D,0D.
+    static const int kTrail[11] = {0x0A, 0x0B, 0x0C, 0x0D, 0x0D, 0x0C, 0x0D, 0x0D, 0x0C, 0x0D, 0x0D};
     camera_center_on(tx, ty);                        // sub_1124A
     fx_particles_init();                             // sub_56129
     fx_spawn(0x0A, 0, 0, 0, 3, 1);                   // 57766: slots 0Ah/0Bh/0Ch/0Dh, base 0/3/6/9
@@ -342,7 +363,7 @@ int CombatII::battle_fx_57766(int unit_index, int tx, int ty, int k) {
     fx_spawn(0x0C, 0, 0, 6, 3, 1);
     fx_spawn(0x0D, 0, 0, 9, 3, 1);
     game_timer_set(3);                               // sub_1033B(3)
-    int dead = 0, ticks = 0;
+    int dead = 0, ticks = 3;                         // ASM var_8 starts at 3 -> 32h at frame 2
     bool no_more = false;
     auto draw_off = [&](int frame, int x, int y) {    // sub_56102 (adds the frame xo/yo)
         if (frame < 0 || (size_t)frame >= magic_frames_.size()) return;
@@ -399,17 +420,18 @@ int CombatII::battle_fx_57766(int unit_index, int tx, int ty, int k) {
 }
 
 // sub_57AC4: Ice Storm (leopard.nsp + icestorm.nsp).
-//   Same trail part as 57766 (slots 0x0A..0x0D, trail slots 0..9), plus a 100-pass walk over slots
-//   0x50..0x63 that spawns a snow particle from rand%4 (base 0x0C = first icestorm frame, period 7)
-//   and drifts it right with x += 2. The trail uses off_560AF = {0Ah,0Ch,0Dh,0Dh,0Ch,0Dh,0Bh,0Dh,
-//   0Ch,0Dh}. 4F4CD(0x32) every 6 frames, and 0x33 when rand%10==0.
+//   Same trail part as 57766 (slots 0x0A..0x0D, trail slots 0..9), plus one pass over slots
+//   0x50..0x63 that spawns a snow particle with state = rand%4 (base 0x0C = first icestorm frame,
+//   period 7) and drifts it right with x += 2. off_560AF is the same 11-word table as off_56099:
+//   {0Ah,0Bh,0Ch,0Dh,0Dh,0Ch,0Dh,0Dh,0Ch,0Dh,0Dh}. 4F4CD(0x32) every 6 frames, and 0x33 when
+//   rand%10==0.
 int CombatII::battle_fx_57ac4(int unit_index, int tx, int ty, int k) {
     (void)unit_index; (void)k;
     battle_nsp_release();
     if (fx_append_nsp(game_path("MAGICSPR/leopard.nsp").c_str(), magic_frames_) <= 0) return 0;
     fx_append_nsp(game_path("MAGICSPR/icestorm.nsp").c_str(), magic_frames_);
-    // off_560AF (22-byte copy = 11 entries); the age cap is 0x0B.
-    static const int kTrail[11] = {0x0A, 0x0C, 0x0D, 0x0D, 0x0C, 0x0D, 0x0D, 0x0B, 0x0C, 0x0D, 0x0D};
+    // off_560AF (22-byte copy = 11 words, same sequence as off_56099); age cap 0x0B.
+    static const int kTrail[11] = {0x0A, 0x0B, 0x0C, 0x0D, 0x0D, 0x0C, 0x0D, 0x0D, 0x0C, 0x0D, 0x0D};
     camera_center_on(tx, ty);
     fx_particles_init();
     fx_spawn(0x0A, 0, 0, 0, 3, 1);
@@ -417,7 +439,7 @@ int CombatII::battle_fx_57ac4(int unit_index, int tx, int ty, int k) {
     fx_spawn(0x0C, 0, 0, 6, 3, 1);
     fx_spawn(0x0D, 0, 0, 9, 3, 1);
     game_timer_set(3);                               // sub_1033B(3)
-    int dead = 0, ticks = 0;
+    int dead = 0, ticks = 3;                         // ASM var_8 starts at 3 -> 32h at frame 2
     bool no_more = false;
     auto draw_off = [&](int frame, int x, int y) {    // sub_56102
         if (frame < 0 || (size_t)frame >= magic_frames_.size()) return;
@@ -458,22 +480,18 @@ int CombatII::battle_fx_57ac4(int unit_index, int tx, int ty, int k) {
                 draw_off(t.base + t.frame, p.x, p.y - c * 0x0A);
             }
         }
-        // Snow: 100 passes over slots 0x50..0x63
-        for (int pass = 0; pass < 0x64 && !should_exit_; ++pass) {
-            const int i = 0x50 + (pass % 0x14);
+        // Snow: one pass over slots 0x50..0x63 (ASM var_10 = 0x50..0x63).
+        for (int i = 0x50; i < 0x64 && !should_exit_; ++i) {
             FxParticle& p = fx_slot[i];
             if (p.state != 1) {
-                if (fx_rand_mod(4) == 0)
-                    fx_spawn(i, fx_rand_mod(320), fx_rand_mod(200), 0x0C, 7, 1);
+                const int state = fx_rand_mod(4);          // 56178 state = rand%4
+                fx_spawn(i, fx_rand_mod(320), fx_rand_mod(200), 0x0C, 7, state);
                 continue;
             }
             draw_off(p.base + p.frame, p.x, p.y);
             p.x = (int16_t)(p.x + 2);
             ++p.frame;
-            if (p.frame == p.cycle) {
-                fx_kill(i);
-                if (++dead > 0x1F4) no_more = true;
-            }
+            if (p.frame == p.cycle) fx_kill(i);
         }
         bool any_alive = false;
         for (int i = 0; i < 0x0A; ++i) if (fx_slot[i].state == 1) any_alive = true;
@@ -497,7 +515,7 @@ int CombatII::battle_fx_57ac4(int unit_index, int tx, int ty, int k) {
 //   Group C, 0x28..0x3B: three kinds of snowflake from rand%3, (state = rand%5, period 4) with
 //     base 0x13 / 0x17 / 0x1B, starting at y = -(rand%100), x = rand%320 + 0x50. While age < 8
 //     they fall down-left with x -= 10, y += 0x14; inside (0 < x < 0x12C, x > -0x50, y < 0x12C)
-//     they draw base+0/1/2/3 by age band (<=7 / <=9 / <=10 / otherwise). Above age 0x0A
+//     they draw base + 0/1/2/3 by age band (<=7 / <=9 / <=10 / otherwise). Above age 0x0A
 //     4F4CD(0x34) plays and the slot dies.
 //   When group C is done the shake returns to 0, a few more frames are drawn and the table freed.
 int CombatII::battle_fx_57f18(int unit_index, int tx, int ty, int k) {
@@ -560,8 +578,8 @@ int CombatII::battle_fx_57f18(int unit_index, int tx, int ty, int k) {
             FxParticle& p = fx_slot[i];
             if (p.state != 1) {
                 if (no_more) continue;
-                if (fx_rand_mod(4) == 0)
-                    fx_spawn(i, fx_rand_mod(320), fx_rand_mod(200), 0x0C, 7, 1);
+                const int state = fx_rand_mod(4);          // 56178 state = rand%4
+                fx_spawn(i, fx_rand_mod(320), fx_rand_mod(200), 0x0C, 7, state);
                 continue;
             }
             draw_off(p.base + p.frame, p.x, p.y);

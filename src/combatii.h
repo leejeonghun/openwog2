@@ -2064,8 +2064,31 @@ private:
     int battle_spell_thr(const CombatUnitPlacement& u, int d) const;      // sub_28480
     int battle_spell_damage(const CombatUnitPlacement& caster, const CombatUnitPlacement& target,
                             int base, int p1, int p2);                    // sub_285E4 (raw x100)
+    // sub_28728 prepares the damage digits and knockback for every target and subtracts the
+    // HP, but leaves the animation to sub_287AF. defer=true queues that presentation so the
+    // 24-frame loop can animate all targets at once (the handler calls 287AF later).
+    struct SpellHitPending {
+        int target = -1;       // index in units_
+        int tidx = 0;          // 45F29 target slot
+        int dmg = 0;
+        int color = 0;         // unk_70A5F[army]
+        char digits[8] = {};
+        int ndig = 0;
+        int sx0 = 0;
+        int digit_y[5] = {};
+        bool small_font = false;
+    };
     void battle_apply_spell_hit(int caster_index, const std::vector<int>& targets,
-                                int base, int p1, int p2);                // sub_28728 equivalent
+                                int base, int p1, int p2, bool defer = false,
+                                bool defer_hp = false); // sub_28728
+    void battle_queue_spell_hit(int caster_index, int target_index, int dmg); // 45BFB/45ED2 prep
+    void battle_draw_hp_digits(const SpellHitPending& p);                     // 45CCB digits
+    std::vector<SpellHitPending> battle_spell_hits_;
+    // sub_2A75A clamps the 2A6C0 centre to the map and hands it to the effect driver; the
+    // port keeps it here so battle_item_2a75a_fx can receive the same tile.
+    int battle_2a75a_fx_x_ = -1, battle_2a75a_fx_y_ = -1;
+    // 4F460 sample slots (index = 4F460 id + 1); 4F4CD starts the loaded path.
+    std::vector<std::string> battle_ssp_slot_path_ = std::vector<std::string>(0x50);
     void battle_spell_status_29437(int caster_index, const std::vector<int>& targets,
                                     int status, int chance, int edi);               // sub_29437
     void battle_heal_462a7(int unit_index, int amount_raw);                          // sub_462A7
@@ -2076,7 +2099,22 @@ private:
     bool battle_item_2a75a_fx(int unit_index, int kind, int k, int tx, int ty);
     std::vector<int> battle_spell_2a500_extras(int caster_index, const std::vector<int>& listed,
                                                int base, int p1, int p2);            // sub_2A500
+    void battle_spell_1ed45_targets(int caster_index, const std::vector<int>& targets); // sub_1ED45 loop
     void battle_spell_1ed90_settle(int caster_index, const std::vector<int>& units); // sub_1ED90 (settle units outside the list)
+    // Handlers whose NSP driver and 287AF run in battle_magic_fx queue their post-287AF work
+    // here: 12124(caster) before 287AF, then 29437 and 1ED45 after it, in ASM order.
+    void battle_spell_defer_settle(int caster_index, const std::vector<int>& targets);
+    void battle_spell_defer_status(const std::vector<int>& targets, int status, int chance, int edi);
+    void battle_spell_finish_pending();
+    void battle_spell_clear_pending();
+    std::vector<int> battle_spell_settle_targets_;
+    std::vector<int> battle_spell_status_targets_;
+    struct SpellHpPending { int target = -1; int hp = 0; int deficit = 0; };
+    std::vector<SpellHpPending> battle_spell_hp_pending_;
+    int battle_spell_pending_caster_ = -1;
+    int battle_spell_pending_status_ = -1;
+    int battle_spell_pending_chance_ = 0;
+    int battle_spell_pending_edi_ = 0;
     void battle_clone_3bc67(int unit_index);                                         // sub_3BC67
     void battle_item_3c09f(int unit_index);                                          // sub_3C09F
     void battle_item_3c3a5(int unit_index);                                          // sub_3C3A5

@@ -3208,9 +3208,7 @@ bool CombatII::battle_ai_class_special_43cf0(int unit_index) {
         if (battle_target_list_.empty()) {
             // loc_43F54: F13C8 = sub_2B822 -> sub_2A75A(kind 0, k=1).
             battle_spell_name_ = kSpellNames[19];                // off_74288 (Meteor k=1)
-            battle_item_2a75a(unit_index, 0, 1);
-            if (should_exit_) return true;
-            battle_item_2a75a_fx(unit_index, 0, 1, ax, ay);
+            battle_item_2a75a(unit_index, 0, 1);   // runs its own 4F460 + driver + 287AF
             return true;
         }
         if (battle_trace_)
@@ -3246,9 +3244,7 @@ bool CombatII::battle_ai_class_special_43cf0(int unit_index) {
         if (battle_target_list_.empty()) {
             // loc_4410F: F13E4 = sub_2B8F3 -> sub_2A75A(kind 1, k=1).
             battle_spell_name_ = kSpellNames[40];                // off_742DC (Star Tearer k=1)
-            battle_item_2a75a(unit_index, 1, 1);
-            if (should_exit_) return true;
-            battle_item_2a75a_fx(unit_index, 1, 1, ax, ay);
+            battle_item_2a75a(unit_index, 1, 1);   // runs its own 4F460 + driver + 287AF
             return true;
         }
         if (battle_trace_)
