@@ -1659,22 +1659,25 @@ void CombatII::battle_crit_19168(int attacker_index, const std::vector<int>& tar
     }
 }
 
-// sub_45BFB/45CCB: prepare and draw the floating damage digits. Split out of play_hp_change
-// so sub_287AF can animate every target of a multi-target spell in the same 24-frame loop.
-void CombatII::battle_queue_spell_hit(int caster_index, int target_index, int dmg) {
+// sub_45BFB/45CCB: queue the floating damage digits. The dmg argument is the raw 285E4
+// damage; 45BFB leaves the five-byte buffer empty for raw <= 0, and 45CCB then takes its
+// "miss" branch. The HP update is handled by battle_apply_spell_hit; 28728 runs after the
+// handler's NSP driver, so the camera-dependent sx0/digit_y, the 45BFB walk_off reset and
+// the 45ED2 knockback are prepared by battle_prepare_spell_hits() immediately before 287AF.
+// The queue may be filled in the handler, before that driver moves the camera.
+void CombatII::battle_queue_spell_hit(int target_index, int dmg) {
     if (target_index < 0 || (size_t)target_index >= units_.size()) return;
     auto& U = units_[(size_t)target_index];
     SpellHitPending p;
     p.target = target_index;
     p.tidx = (int)battle_spell_hits_.size();   // 45BFB/45F29 slot, not the units_ index
-    p.dmg = dmg;
-    U.walk_off_x = U.walk_off_y = 0;                       // sub_45BFB prologue: [65h] = [66h] = 0
-    snprintf(p.digits, sizeof(p.digits), "%d", dmg);
-    p.ndig = (int)strlen(p.digits);
-    p.sx0 = (U.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X;
-    const int sy0 = (U.y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y;
-    for (int k = 0; k < 5; k++) p.digit_y[k] = sy0 + 10;   // word_F9708[i*10+k*2]
-    setup_knockback_hit(U, units_[(size_t)caster_index].facing);           // sub_45ED2
+    p.ndig = 0;
+    if (dmg > 0) {
+        const int shown = dmg / 100;
+        p.dmg = shown;
+        snprintf(p.digits, sizeof(p.digits), "%d", shown);
+        p.ndig = (int)strlen(p.digits);
+    }
     static constexpr uint8_t kDmgColor[8] = {0x04, 0x10, 0x31, 0x51, 0x20, 0x01, 0x00, 0x00};
     const int dmg_idx = std::min(std::max(battle_effective_army(U), 0), 7); // unk_70A5F[army]
     p.color = kDmgColor[(size_t)dmg_idx];
@@ -1683,20 +1686,50 @@ void CombatII::battle_queue_spell_hit(int caster_index, int target_index, int dm
     battle_spell_hits_.push_back(p);
 }
 
+// 45BFB/45ED2 at the 28728 timing (after the handler's NSP driver): the coordinates use the
+// current camera, the walk offset is cleared on the target, and the knockback direction is
+// the target's own facing (`[esi+60h]>>24` in sub_28728), not the caster's.
+void CombatII::battle_prepare_spell_hits() {
+    for (auto& p : battle_spell_hits_) {
+        if (p.target < 0 || (size_t)p.target >= units_.size()) continue;
+        auto& U = units_[(size_t)p.target];
+        p.sx0 = (U.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X;
+        const int sy0 = (U.y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y;
+        for (int k = 0; k < 5; k++) p.digit_y[k] = sy0 + 10;   // word_F9708[i*10+k*2]
+        U.walk_off_x = U.walk_off_y = 0;                       // sub_45BFB prologue: [65h] = [66h] = 0
+        setup_knockback_hit(U, U.facing);                      // sub_45ED2
+    }
+}
+
 // sub_45CCB: digit y animation (f<5 lowers digit 0 by 2, 5..19 moves digit k by +2 and
 // digit k+1 by -2, f>=20 raises digit 3 by +2). The caller mutates digit_y each frame.
 void CombatII::battle_draw_hp_digits(const SpellHitPending& p) {
-    if (p.ndig <= 0) return;
+    if (p.sx0 - 16 < 0 || p.sx0 - 16 >= 0x120) return;
+    uint8_t* bb = video_.get_backbuffer();
+    if (p.ndig <= 0) {
+        // sub_45CCB loc_45E21: an empty five-byte buffer is the "miss" branch.
+        const int y = p.digit_y[0];
+        if (y - 5 < 0 || y - 5 >= 0xB2) return;
+        if (p.small_font) {
+            draw_small_text(p.sx0 + 1, y + 1, "miss", 0, 1);
+            draw_small_text(p.sx0, y, "miss", p.color, 1);
+        } else if (bb && font_.is_loaded()) {
+            font_.set_text_mode(4, 0x0000, 0xFF);
+            font_.draw_string(bb, SCREEN_W, SCREEN_H, p.sx0 + 1, y + 1, "miss");
+            font_.set_text_mode(4, (uint16_t)(p.color << 8), 0xFF);
+            font_.draw_string(bb, SCREEN_W, SCREEN_H, p.sx0, y, "miss");
+        }
+        return;
+    }
     // sub_45CCB draws a 4-cell field from the unit's x and advances 6px per cell; the
     // digits occupy the rightmost cells, so the first visible digit is at 6*(4-ndig).
     const int ndig4 = std::min(p.ndig, 4);
-    const int x0 = p.sx0 + 6 * (4 - ndig4);
-    if (p.sx0 - 16 < 0 || p.sx0 - 16 >= 0x120) return;
-    uint8_t* bb = video_.get_backbuffer();
+    const int first = 4 - ndig4;
+    const int x0 = p.sx0 + 6 * first;
     char one[2] = {0, 0};
     for (int k = 0; k < p.ndig && k < 4; k++) {
         one[0] = p.digits[k];
-        const int x = x0 + k * 6, y = p.digit_y[k];
+        const int x = x0 + k * 6, y = p.digit_y[first + k];
         if (y - 5 < 0 || y - 5 >= 0xB2) continue;
         if (p.small_font) {
             // sub_45CCB -> sub_60944 -> sub_608E6: shadow and body both use TEXT.CHR.
@@ -7065,16 +7098,16 @@ void CombatII::battle_apply_spell_hit(int caster_index, const std::vector<int>& 
         if (battle_trace_)
             fprintf(stderr, "COMBAT: spell unit=%d target=%d base=%d dmg_x100=%d hp -> %d%s\n",
                     caster.id, tgt.id, base, dmg, new_hp, defer ? " (deferred 45BFB/45ED2)" : "");
-        if (delta != 0) {
-            if (defer) {
-                battle_queue_spell_hit(caster_index, ti, -delta);   // 45BFB + 45ED2 only
-            } else {
-                VmEvent hp; hp.type = VmEventType::Hp; hp.hp_unit = ti;
-                hp.hp_delta = delta;
-                hp.hp_dir = caster.facing;
-                hp.hp_killer = caster_index;
-                play_hp_change(hp);
-            }
+        if (defer) {
+            // 28728 calls 45BFB for every F0648 target; raw <= 0 leaves the buffer empty
+            // and 45CCB draws its "miss" branch. The HP update above is unchanged.
+            battle_queue_spell_hit(ti, dmg);
+        } else if (delta != 0) {
+            VmEvent hp; hp.type = VmEventType::Hp; hp.hp_unit = ti;
+            hp.hp_delta = delta;
+            hp.hp_dir = caster.facing;
+            hp.hp_killer = caster_index;
+            play_hp_change(hp);
         }
         if (should_exit_) return;
     }
@@ -7400,7 +7433,7 @@ void CombatII::battle_item_2a75a(int unit_index, int kind, int sub) {
     // sub_2A6C0(&x, &y, caster army): walks the four CC968 army chains and keeps the unit
     // with the largest [43h]. The caster's own side is skipped (army 1/2 -> lists 0/1, army
     // 3 -> list 2, army 4 -> list 3). `movsx edi,bl` / `movzx esi,[+43h]` makes the running
-    // best signed, so a value >= 0x80 leaves best negative (F-08).
+    // best signed; that only affects the comparison, not the final 0FFh sentinel check.
     int cx = (int)(int8_t)units_[(size_t)unit_index].x;
     int cy = (int)(int8_t)units_[(size_t)unit_index].y;
     {
@@ -7409,18 +7442,30 @@ void CombatII::battle_item_2a75a(int unit_index, int kind, int sub) {
             if ((caster_army == 1 || caster_army == 2) && army < 3) continue;
             if (caster_army == 3 && army == 3) continue;
             if (caster_army == 4 && army == 4) continue;
-            for (const auto& o : units_) {
+            std::vector<int> bucket;
+            for (int oi = 0; oi < (int)units_.size(); ++oi) {
+                const auto& o = units_[(size_t)oi];
                 if (!o.active || o.hp <= 0) continue;
                 if (battle_effective_army(o) != army) continue;
+                bucket.push_back(oi);
+            }
+            // The original walks each CC968 chain; list_seq is the port's saved chain order.
+            std::sort(bucket.begin(), bucket.end(), [&](int a, int b) {
+                const uint32_t sa = units_[(size_t)a].list_seq, sb = units_[(size_t)b].list_seq;
+                return sa != sb ? sa < sb : a < b;
+            });
+            for (int oi : bucket) {
+                const auto& o = units_[(size_t)oi];
                 const int v = (int)o.combat_value_43;                  // movzx esi,[+43h]
                 if ((int)best >= v) continue;                          // jge (signed best)
                 best = (int8_t)v;                                      // mov bl,[+43h]
                 cx = (int)(int8_t)o.x; cy = (int)(int8_t)o.y;
             }
         }
-        // 2A6C0 returns 0 when no value beat the initial 0FFh (bl stays -1); loc_2A811
-        // then overwrites the centre with the caster's own tile.
-        if (best < 0) {
+        // sub_2A6C0 returns 0 only when the final bl is 0FFh (`cmp eax,-1; setnz`), so a
+        // value in 80h..0FEh still counts as found. loc_2A811 then overwrites the centre
+        // with the caster's own tile only for bl == -1.
+        if (best == -1) {
             cx = (int)(int8_t)units_[(size_t)unit_index].x;
             cy = (int)(int8_t)units_[(size_t)unit_index].y;
         }
@@ -9016,6 +9061,7 @@ const char* CombatII::battle_spell_nsp(int r_code) const {
 //   then 12124 on every member and 499DA(0x24). The numbers therefore animate at the same
 //   time for every target instead of one target at a time.
 void CombatII::battle_spell_pace_287af() {
+    battle_prepare_spell_hits();                          // 45BFB + 45ED2 at the 28728 timing
     game_timer_set(3);                                    // sub_1033B(3, 1)
     for (int f = 1; f <= 0x18 && !should_exit_; ++f) {
         // 45F29 + 45CCB for every prepared target, then 454B3/5E9E8/499E4.
@@ -9023,9 +9069,13 @@ void CombatII::battle_spell_pace_287af() {
             if (p.target < 0 || (size_t)p.target >= units_.size()) continue;
             auto& U = units_[(size_t)p.target];
             apply_knockback_hit(U, p.tidx, f);            // sub_45F29
-            // 45CCB: f<5 -> first digit -2; f>=20 -> fourth digit +2; otherwise one
-            // digit +2 and its neighbour -2.
-            if (f < 5) p.digit_y[0] -= 2;
+            // 45CCB: an empty buffer is the "miss" branch (loc_45E21); otherwise f<5
+            // lowers the first digit, f>=20 raises the fourth, and the middle frames
+            // move one digit +2 and its neighbour -2.
+            if (p.ndig <= 0) {
+                if (f & 1) p.digit_y[0] = p.digit_y[1];
+                else p.digit_y[0] -= (0x14 - f) / 2;
+            } else if (f < 5) p.digit_y[0] -= 2;
             else if (f >= 0x14) p.digit_y[3] += 2;
             else { const int k = (f - 5) / 5; if (k < 4) { p.digit_y[k] += 2; p.digit_y[k + 1] -= 2; } }
         }

@@ -2083,7 +2083,8 @@ private:
     void battle_apply_spell_hit(int caster_index, const std::vector<int>& targets,
                                 int base, int p1, int p2, bool defer = false,
                                 bool defer_hp = false); // sub_28728
-    void battle_queue_spell_hit(int caster_index, int target_index, int dmg); // 45BFB/45ED2 prep
+    void battle_queue_spell_hit(int target_index, int dmg);                   // 45BFB/45ED2 prep
+    void battle_prepare_spell_hits();                                         // 45BFB/45ED2 at 28728 time
     void battle_draw_hp_digits(const SpellHitPending& p);                     // 45CCB digits
     std::vector<SpellHitPending> battle_spell_hits_;
     // sub_2A75A clamps the 2A6C0 centre to the map and hands it to the effect driver; the

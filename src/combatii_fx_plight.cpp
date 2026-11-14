@@ -42,8 +42,8 @@
 //   dword_BA838 -> cam_fine_y_, dword_7001C -> cam_fine_x_.
 //
 // Deviations:
-//   - The tint arguments of sub_61147 (eax=18h / edx=32h) remain unresolved after IDA's stack
-//     cleanup, so the sibling driver b_dragon's 0x32 (-> 50%) is used.
+//   - sub_61147(eax=18h, edx=32h) builds the source-colour-18h LUT; the port passes that
+//     colour as the tint mask. The 0x32 shade gives the 50% background weighting.
 //   - sub_5F305 takes a flat pointer to a table entry and uses its x/y directly; the port
 //     queues a frame number and lets the renderer draw it, so no xo/yo is added for the
 //     intro (the 1FFFE path does add them).
@@ -66,7 +66,7 @@ int CombatII::battle_fx_22d18(int unit_index, int tx, int ty, int k) {
 
     // (2) intro: x fixed at 0x2D, y from 0xC7 down to -0x64 in steps of 0x0F
     for (int y = 0xC7; y > -0x64 && !should_exit_; y -= 0x0F) {
-        battle_fx_blit_tinted(0, 0x2D, y, tint);             // sub_5F305 (frame 0)
+        battle_fx_blit_tinted(0, 0x2D, y, tint, {0x18});     // sub_5F305 (colour-18h LUT)
         battle_fx_present();                                 // 454B3 + 5E9E8
         wait_game_tick();                                    // 499E4
     }

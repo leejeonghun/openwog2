@@ -154,7 +154,7 @@ int CombatII::battle_fx_21944(int unit_index, int tx, int ty, int k) {
         // 611AA(1 colour, shade = 1Eh): only palette entry 1 gets a LUT.
         battle_fx_blit_tinted_unclipped(f, x + fr.xo, y + fr.yo, pct, {0x01});
     };
-    // Tint: 611AA(1 colour, shade = 1Eh) -> brightness weight 100-30 = 70 (0x46).
+    // Tint: 611AA(1 colour, shade = 1Eh) -> effect-colour weight 30, destination 70.
     // The shared tinter only allocates a LUT for palette entry 1.
     // 1033B(7) above also sets the period for this loop: the original has no second 1033B
     // here (the next one is 1033B(1Eh) after the rows), so the rows run at period 7.
@@ -162,21 +162,21 @@ int CombatII::battle_fx_21944(int unit_index, int tx, int ty, int k) {
         const int p = r % 5;                         // remainder of `idiv 5`
         const bool last = (r == h - 1);
         // Main frame = 9 + (r%5); the last row uses unk_F0DFE = F0DAA + 0x54 = entry 7.
-        blit_t(last ? 7 : 9 + p, X, Y, 0x46);
+        blit_t(last ? 7 : 9 + p, X, Y, 0x1E);
         // sub_5F4AF: body rising from the ground, drawing only the first r+1 scanlines.
         if (body)
             blit_nc2_frame_clipped(raw_x + (int)(int8_t)raw[4],
                                    (int)(int8_t)raw[5] + (raw_y - 0x0C) + h - (r + 1),
                                    *body, r + 1);
         if (!last) {
-            blit_t(0x0E + p, X, Y, 0x46);            // secondary frame
+            blit_t(0x0E + p, X, Y, 0x1E);            // secondary frame
             // Plume start = Y + secondary frame's yo - 8, then each sprite adds its own yo
             // and -16 per step (loc_21B3B). blit_t adds the per-frame yo.
             const int sec = 0x0E + p;
             const int plume_y = (sec < nframes) ? (Y + magic_frames_[(size_t)sec].yo - 8)
                                                 : (Y - 8);
             for (int c = 0; c < 8; ++c)
-                blit_t(0x13 + p, X, plume_y - c * 0x10, 0x46);
+                blit_t(0x13 + p, X, plume_y - c * 0x10, 0x1E);
         }
         battle_fx_present();                         // 454B3 + 5E9E8 (flush the queue over the map)
         wait_game_tick();                            // 499E4

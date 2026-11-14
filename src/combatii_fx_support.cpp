@@ -315,7 +315,8 @@ int CombatII::battle_fx_261fc(int unit_index, int tx, int ty, int k) {
     }
     sfx(0x32);                                                           // sub_4F4CD(0x32)
     game_timer_set(4);                                                   // sub_1033B(4)
-    const int shade = 0x28 + (k & 0x3F);                                 // table entry [+8] tint (approx.)
+    (void)k;
+    const int shade = 0x28;                                              // 61147(eax=1, edx=28h)
     int spark_y[5];
     const int top = cy - 0x1E, bottom = cy;
     for (int i = 0; i < 5; ++i) spark_y[i] = cy + (i - 2) * 4;            // dword_1FE58 layout (approx.)
@@ -323,7 +324,7 @@ int CombatII::battle_fx_261fc(int unit_index, int tx, int ty, int k) {
         const int f = (t < 4) ? t : 4;                                   // fixed at +4*0Ch
         for (int i = 0; i < 5; ++i) {
             const int x = cx - 0x28 + i * 0x0A;                          // `sub 28h; add 0Ah`
-            if (f < nframes) battle_fx_blit_tinted(f, x, cy, shade);     // sub_5F305
+            if (f < nframes) battle_fx_blit_tinted(f, x, cy, shade, {0x01}); // sub_5F305
             // Rising ember: frame 5, y -= 4, wrapped to the bottom when it leaves the top
             spark_y[i] -= 4;
             if (spark_y[i] < top) spark_y[i] = bottom;
@@ -418,7 +419,8 @@ int CombatII::battle_fx_26672(int unit_index, int tx, int ty, int k) {
     }
     sfx(0x32);                                                           // sub_4F4CD(0x32)
     game_timer_set(4);                                                   // sub_1033B(4)
-    const int shade = 0x28 + (k & 0x3F);
+    (void)k;
+    const int shade = 0x28;                                              // 61147(eax=1, edx=28h)
     int spark_y[5];
     const int top = cy - 0x28, bottom = cy;
     for (int i = 0; i < 5; ++i) spark_y[i] = cy + (i - 2) * 4;
@@ -426,7 +428,7 @@ int CombatII::battle_fx_26672(int unit_index, int tx, int ty, int k) {
         const int f = (t < 4) ? t : 4;                                   // fixed at +4*0Ch
         for (int i = 0; i < 5; ++i) {
             const int x = cx - 0x28 + i * 0x0A;
-            if (f < nframes) battle_fx_blit_tinted(f, x, cy, shade);     // sub_5F305
+            if (f < nframes) battle_fx_blit_tinted(f, x, cy, shade, {0x01}); // sub_5F305
             const int fr = (i % 3) * 3 + 5;                              // `lea [eax+eax*2]; +5`
             spark_y[i] -= 4;                                             // `sub eax,4`
             if (spark_y[i] < top) spark_y[i] = bottom;                   // wrap back to var_8

@@ -407,14 +407,15 @@ int CombatII::battle_fx_2690b(int unit_index, int tx, int ty, int k) {
 }
 
 // sub_275A4(bl=flag, eax=ty, edx=tx): dna.nsp transformation.
-//   61147(1, 28h) (palette ramp, not ported) -> 1124A -> 11DB2/135EB (centre of the occupying
-//   unit) -> 1FEA4("dna.nsp") -> 1033B(4) -> 4F4CD(32h).
+//   61147(eax=1, edx=28h) builds the source-colour-1 LUT; only that colour is tinted.
+//   Then 1124A -> 11DB2/135EB (centre of the occupying unit) -> 1FEA4("dna.nsp") ->
+//   1033B(4) -> 4F4CD(32h).
 //   30 frames (cx < 1Eh): {454B3; frame = (cx < 4) ? cx : 4 (unk_F0DDA = table + 30h = frame 4);
 //     draw that frame through 5F305(x = centre+xo, y = centre+yo) in colour-transform mode; when
 //     cx > 5 also draw 1FFFE(frame = 5 + ([unit+3]>>24)*6 + (cx % 6)) at the tile position;
 //     5E9E8; 499E4} -> 1FFCD (shared loc_268FA).
-//   Port: 5F305 is battle_fx_blit_tinted(frame, x, y, 100) (tint 100% keeps the palette), and the
-//   extra 1FFFE is one more battle_fx_blit of the same frame.
+//   Port: 5F305 is battle_fx_blit_tinted(frame, x, y, 0x28, {1}); the extra 1FFFE is one more
+//   battle_fx_blit of the same frame.
 int CombatII::battle_fx_275a4(int unit_index, int tx, int ty, int k) {
     (void)unit_index; (void)k;
     if (!battle_nsp_load("dna.nsp") || magic_frames_.empty()) return 0;
@@ -432,7 +433,7 @@ int CombatII::battle_fx_275a4(int unit_index, int tx, int ty, int k) {
     for (int i = 0; i < 0x1E && !should_exit_; ++i) {
         const int f = std::min(nframes - 1, (i < 4) ? i : 4);        // unk_F0DDA = frame 4
         battle_fx_blit_tinted(f, cx + magic_frames_[(size_t)f].xo,
-                                 cy + magic_frames_[(size_t)f].yo, 100);   // sub_5F305
+                                 cy + magic_frames_[(size_t)f].yo, 0x28, {0x01}); // sub_5F305
         if (i > 5) {                                                 // extra 1FFFE after loc_2769F
             const int g = std::min(nframes - 1, 5 + (i % 6));
             battle_fx_blit(g, cx + magic_frames_[(size_t)g].xo,

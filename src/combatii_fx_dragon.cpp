@@ -43,9 +43,8 @@
 // Deviations:
 //   - sub_5F305 takes ebx = the flat pointer of frame 0 (unk_F0DAA+8), not a 12-byte
 //     table entry, so no xo/yo is added on that call.
-//   - sub_61147 builds the LUT for source colour 0 only, while blit_frame_tinted shades
-//     every source colour, so the tint reaches more colours than the original; the 50%
-//     background weighting is identical.
+//   - sub_61147 builds the LUT for source colour 0 only; the port passes that colour as
+//     the tint mask so the other source colours are copied unchanged.
 //   - sub_5FA2C takes its percentage in ecx (other callers use `movsx ecx,si`). The first
 //     call reads the `mov ecx,5Ah` (90) left at the function head, which survives
 //     sub_61147/sub_1FEA4/sub_1033B; the restore call passes an explicit 0x64 (100).
@@ -74,7 +73,7 @@ int CombatII::battle_fx_21be8(int unit_index, int tx, int ty, int k) {
     // (4) dragon (frame 0) rises from below at x = 0x2D (var_4 = 0xC7, -0x0F per frame)
     int16_t fy = 0x00C7;
     while (fy > -0x64 && !should_exit_) {                        // `cmp ecx,0FFFFFF9Ch; jle`
-        battle_fx_blit_tinted(0, 0x2D, fy, kTint);               // sub_5F305 (flat pointer of frame 0)
+        battle_fx_blit_tinted(0, 0x2D, fy, kTint, {0});           // sub_5F305 (colour-0 LUT)
         battle_fx_present();                                     // 454B3 + 5E9E8
         fy = (int16_t)(fy - 0x0F);                               // `sub ebx,0Fh`
         wait_game_tick();                                        // sub_10364 wait
