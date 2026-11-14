@@ -1526,6 +1526,32 @@ void CombatII::play_attack_sequence(const VmEvent& ev) {
     present_cutscene_frame();
 }
 
+// sub_1E2EA: draw the WEA_EFFC weapon arc at the caster's centre. f8 is edx-1 (0/1) and
+// s is the normalised ebx (0/1). The sprite index is base + f8; the anchor offsets come
+// from the caster's 40-byte head table (+1/+2, or +3/+4 when f8 == 1).
+void CombatII::battle_draw_weapon_trail(int unit_index, int f8, int s) {
+    if (unit_index < 0 || (size_t)unit_index >= units_.size()) return;
+    auto& A = units_[(size_t)unit_index];
+    const NC2Parser* np = nullptr;
+    auto it = nc2_chars_.find(A.sprite_type);
+    if (it != nc2_chars_.end()) np = it->second.get();
+    if (!np) return;
+    const int d = A.facing & 3;
+    const int base = np->head(d * 10 + s * 5 + 0);
+    if (base < 0) return;
+    const int kx = (f8 == 1) ? 3 : 1;
+    const int ky = (f8 == 1) ? 4 : 2;
+    const int idx = base + f8;
+    if (idx < 0 || (size_t)idx >= wea_effc_.size() || wea_effc_[(size_t)idx].rle.empty()) return;
+    const int ox = np->head(d * 10 + s * 5 + kx);
+    const int oy = np->head(d * 10 + s * 5 + ky);
+    const int ax = (A.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ +
+                   TILE_ANCHOR_X + CENTER_ADD_X - ox;
+    const int ay = (A.y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ +
+                   TILE_ANCHOR_Y + CENTER_ADD_Y - oy;
+    blit_sprite_480(ax, ay, wea_effc_[(size_t)idx].rle.data());
+}
+
 // sub_19168: per-item [5Bh] gameplay effect of a critical hit (dword_F0B8A+2 == 1).
 //   The .ssp/camera presentation is replaced by logging; instant death, status and area
 //   damage behave as in the original.
@@ -10309,23 +10335,47 @@ int CombatII::battle_weapon_f1474(int unit_index, int idx, int dx) {
                                     idx, u.id, dx, (unsigned)u.combat_flags_13);
         return 1;
     }
-    if (idx == 11) { // sub_2F71E: front single 1D124 + 2CAF7 mul 0/2/3 + 3000
+    if (idx == 11) { // sub_2F71E: 1D124 gate -> poses 7/8/9 + 1E2EA arcs -> 2CAF7
         if (dx < 1 || dx > 3) {
             if (battle_trace_) fprintf(stderr, "COMBAT: warning: f1474[11]=2F71E unit=%d dx=%d invalid -> -1\n",
                                         u.id, dx);
             return -1;
         }
-        const int n = battle_weapon_collect_front(unit_index);
+        // sub_1D124(unit, x, y, facing): rebuild F0648 from the caster's own tile/facing;
+        // 2CAF7 then damages every collected target.
+        const int n = battle_range_collect(unit_index);
         if (n <= 0) {
-            if (battle_trace_) fprintf(stderr, "COMBAT: f1474[11]=2F71E unit=%d dx=%d front empty -> -1\n",
+            if (battle_trace_) fprintf(stderr, "COMBAT: f1474[11]=2F71E unit=%d dx=%d empty -> -1\n",
                                         u.id, dx);
             return -1;
         }
-        const int mul = (dx == 1) ? 0 : dx; // emu: dx1->0, dx2->2, dx3->3
-        const int r = battle_weapon_2caf7_loop(unit_index, mul, 3000);
-        if (battle_trace_) fprintf(stderr, "COMBAT: f1474[11]=2F71E unit=%d dx=%d -> 2CAF7(%d,3000) -> %d\n",
-                                    u.id, dx, mul, r);
-        return r;
+        load_effect_sprites();                                   // sub_11BB8 (WEA_EFFC table)
+        const int mul = (dx == 1) ? 0 : dx;                      // `cmp di,1` -> edi=0
+        // loc_2F751: poses 7/8 with 45559+499E4, 4F4CD(14h)+499E4, 4F4CD(1),
+        // pose 9, then two 454B3 + 1E2EA(1/2) + 5E9E8 frames.
+        game_timer_set(0x10);                                    // sub_1033B(10h)
+        u.anim_frame = 7;
+        battle_fx_present();                                     // sub_45559
+        wait_game_tick();                                        // sub_499E4
+        u.anim_frame = 8;
+        battle_fx_present();                                     // sub_45559
+        wait_game_tick();                                        // sub_499E4
+        sfx(0x14);                                               // sub_4F4CD(14h)
+        wait_game_tick();                                        // sub_499E4
+        sfx(1);                                                  // sub_4F4CD(1)
+        u.anim_frame = 9;
+        render_battle_frame();                                   // 454B3 + 454D5 (fall-through)
+        battle_draw_weapon_trail(unit_index, 0, 1);              // sub_1E2EA(edx=1, ebx=1)
+        battle_fx_commit();                                      // sub_5E9E8
+        wait_game_tick();                                        // sub_499E4
+        if (should_exit_) return 1;
+        render_battle_frame();                                   // 454B3 + 454D5
+        battle_draw_weapon_trail(unit_index, 1, 1);              // sub_1E2EA(edx=2, ebx=1)
+        battle_fx_commit();                                      // sub_5E9E8
+        battle_weapon_2caf7_loop(unit_index, mul, 3000);
+        if (battle_trace_) fprintf(stderr, "COMBAT: f1474[11]=2F71E unit=%d dx=%d -> 2CAF7(%d,3000)\n",
+                                    u.id, dx, mul);
+        return 1;                                               // sub_2F71E: mov eax,1
     }
     if (idx == 1 || idx == 7) { // loc_2F4DE (restrain.nsp, F14D8 auto approximation)
         // The original fills F0648 with a 1AC08 diamond of radius 2D4EB+2CBFB
@@ -10338,6 +10388,17 @@ int CombatII::battle_weapon_f1474(int unit_index, int idx, int dx) {
                                         idx, u.id, dx);
             return -1;
         }
+        // loc_2F4DE: 2D4EB intro (timer 19h, poses 7/8) and bolt1.ssp before the
+        // diamond collection; the restrain table load also precedes it.
+        game_timer_set(0x19);                                   // sub_1033B(19h)
+        for (int i = 0; i < 2 && !should_exit_; ++i) {
+            u.anim_frame = (uint8_t)(7 + i);                    // `add al,7`
+            battle_fx_present();                                // 454B3 + 5E9E8
+            wait_game_tick();                                   // sub_499E4
+        }
+        if (should_exit_) return 1;
+        const bool have_restrain = battle_nsp_load("restrain.nsp"); // sub_1FEA4
+        battle_ssp_play("bolt1.ssp", 0x32);                     // sub_4F460
         const int base_r = (int8_t)battle_lookup_184a4(u.combat_type_5b, 0x38) + dx; // sub_2CBFB
         const int radius = base_r < 0 ? 0 : base_r;
         const int n = battle_weapon_collect_diamond(unit_index, radius);
@@ -10352,7 +10413,6 @@ int CombatII::battle_weapon_f1474(int unit_index, int idx, int dx) {
         // -> 44D6E(0) -> 44D75 -> 12124 -> 1FFCD. 2D527 itself is 24 frames of restrain.nsp.
         battle_highlight_add_depth(unit_index);                 // sub_2CBA1
         battle_dim_row0_ = true;                                // sub_44D6E(1,0)
-        const bool have_restrain = battle_nsp_load("restrain.nsp"); // sub_1FEA4
         for (int ti : battle_target_list_) {
             if (ti < 0 || (size_t)ti >= units_.size()) continue;
             if (!units_[(size_t)ti].active) continue;
@@ -10459,7 +10519,7 @@ int CombatII::battle_weapon_f1474(int unit_index, int idx, int dx) {
                                         idx, u.id, dx);
             return -1;
         }
-        const int add = (idx == 5) ? 5000 : 3000; // emu ecx
+        const int add = (idx == 5) ? 5000 : 3000; // 7449C>>16=1388h, 744A4>>16=0BB8h
         const int base_r = (int8_t)battle_lookup_184a4(u.combat_type_5b, 0x38); // sub_2CBFB
         const int radius = base_r + (idx == 5 ? 5 : 6);
         const int n = battle_weapon_collect_2e0f0(unit_index, radius);
@@ -10612,9 +10672,10 @@ int CombatII::battle_weapon_f1474(int unit_index, int idx, int dx) {
     }
     if (idx == 6) { // sub_2F5EF (r5 diamond + 2CBA1 + 2D7D2 + 2CAF7 add 4000)
         // The original fills F0648 with a 1AC08 r5 diamond through 1A1F8, goes through
-        // 2CBA1/2D7D2 (presentation stub) and applies the damage in one go with 2CAF7.
-        // add = 7449C+2>>16 = 4000 (static dd). mul is approximated by dx (1..3); the exact
-        // [esp+2]>>16 value is unknown. An empty collection returns -1.
+        // 2CBA1/2D7D2 (swstr.nsp) and applies the damage in one go with 2CAF7.
+        // add = 7449C+2>>16 = 4000. mul = [esp+2]>>16 = var_8 = dx (the stack alias at
+        // [esp+4]); both are exact. An empty collection still runs the presentation and
+        // returns 1.
         if (dx < 1 || dx > 3) {
             if (battle_trace_) fprintf(stderr, "COMBAT: warning: f1474[6]=2F5EF unit=%d dx=%d invalid -> -1\n",
                                         u.id, dx);

@@ -1165,6 +1165,7 @@ private:
     // (sub_10971+10h+[65h]+xo, sub_10988+4+[66h]+18h+yo) through sub_5F3FD (480 stride).
     bool load_item_spr();
     void battle_draw_shield_icon(int unit_index);
+    void battle_draw_weapon_trail(int unit_index, int f8, int s); // sub_1E2EA (WEA_EFFC arc)
     // sub_28889: spell-name announce, called by the handlers (F13B0 -> sub_28982/29273/29514/
     // 29722/29F4D/2A75A ...) once the target is fixed. The name is off_7423C[R], stored in
     // dword_F13AC by sub_28883 (battle_spell_name_).
