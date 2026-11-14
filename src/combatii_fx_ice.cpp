@@ -260,13 +260,14 @@ int CombatII::battle_fx_23882(int unit_index, int tx, int ty, int k) {
 // sub_241F7(caster in eax, (strength-1) in dl) - p_light.nsp 16-particle pillar.
 //   1FDAE (16 word x offsets) / 1FDCE (16 word y offsets) / 1FDEE (16 particle progress bytes,
 //   all zero). Particle position = 10971(caster x + tblx)+0Ch, 10988(caster y + tbly). 1033B(5).
-//   Total frames = cl*32 + 11. Every 5 frames: palette restore (5F9E9) -> wait -> dim (5F9AE)
-//   + sfx(0x32).
+//   Total frames = cl*32 + 11. Every 5 frames: palette upload (5F9E9) -> wait -> second upload
+//   (5F9AE) + sfx(0x32).
 //   Particle i is alive only while i*4 < current frame; for progress p (0..11), p < 8 draws
 //   frame p at (x, y) and frame p+8 at the four corners (x+-4p, y+-4p) plus the centre. p then
 //   advances by one. Ends with 1FFCD.
-//   Port: 5F9E9 maps to pal_load_range(0, 0x100, master palette). 5F9AE (dimming) is not ported,
-//   so only the restore and the sound (4F4CD 32h) remain.
+//   Port: 5F9E9 and 5F9AE are the same DAC upload loop and differ only in the first entry
+//   (5F9E9 starts at 1, 5F9AE at 0), so one pal_load_range(0, 0x100, master) plus sfx(32h)
+//   reproduces the pair.
 int CombatII::battle_fx_241f7(int unit_index, int tx, int ty, int k) {
     (void)tx; (void)ty;                         // the original does not use the target tile either
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return 0;
@@ -321,13 +322,13 @@ int CombatII::battle_fx_241f7(int unit_index, int tx, int ty, int k) {
 // sub_24466(caster in eax) - p_light.nsp variant (Turn Undead effect).
 //   1FDFE (16 word x offsets) / 1FE1E (16 word y offsets); particle placement follows sub_241F7.
 //   After 1033B(5), 48 frames (0..0x2F):
-//     - At frames 0 and 8: palette restore (5F9E9) -> wait -> dim (5F9AE) + sfx(0x32).
+//     - At frames 0 and 8: palette upload (5F9E9) -> wait -> second upload (5F9AE) + sfx(0x32).
 //     - When frame % 16 == 0, push all 16 particles away from the caster (x 0x18, y 0x10).
 //     - frame < 8  -> particles 0..7 with frames (f, f+8)
 //       frame < 16 -> particles 8..15 with the same two frames
 //       otherwise  -> particles 0..15 with frames (f%8, f%8+8)
 //       Off-screen positions (x <= -50 or y >= 200) are skipped. Ends with 1FFCD.
-//   Port: palette restore uses pal_load_range as in sub_241F7 (5F9AE dimming is not ported).
+//   Port: one pal_load_range(0, 0x100, master) covers both 5F9E9 and 5F9AE (see sub_241F7).
 int CombatII::battle_fx_24466(int unit_index, int tx, int ty, int k) {
     (void)tx; (void)ty; (void)k;
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return 0;

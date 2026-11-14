@@ -12,8 +12,10 @@
 //
 // Deviations, all replaced inside this file:
 //  - Palette ramps use the shared runtime: 5623E -> pal_ramp_set_width, 562C1 -> pal_ramp_step,
-//    56245/5FA2C -> pal_ramp_apply. The pre-loop 562C1(4Bh,0) fade-in wait of 5666E is not
-//    reproduced; the loop's per-tick 562C1(4Bh,32h) starts the ramp from 0 instead.
+//    56245/5FA2C -> pal_ramp_apply. The four ramped drivers reproduce the ASM's pre-loop
+//    562C1(4Bh,0) fade-in and tail 562C1(4Bh,0) fade-out with battle_fx_present() +
+//    video_.wait_presented() per step (5FD1C waits for the retrace 5E943; wait_game_tick()
+//    would wait a whole 1033B period instead).
 //  - sub_10AEB/sub_12BEE (redraw map and units) are replaced by battle_fx_present(), which draws
 //    the complete battle frame.
 //  - sub_56102/sub_561F4/sub_5EFB9/sub_5F29D (frame offsets and the 480-stride blitter) are
@@ -141,7 +143,7 @@ int fx_append_nsp(const char* path, FrameVec& frames) {
 //     0 -> start frame 0, period 5;  1 -> start frame 5, period 8
 //   Position is always (rand%320, rand%200), the whole screen. Active slots draw their frame and
 //   are killed at the end of the period; above 0x12C (300) killed no more spawn, and above
-//   0x1F4 (500) the loop ends.
+//   0x1F4 (500) the loop ends. Every 5 frames 4F4CD(32h) plays (var_8 starts at 5).
 int CombatII::battle_fx_5666e(int unit_index, int tx, int ty, int k) {
     (void)unit_index; (void)k;                       // handler 2A1C6 passes only the target tile
     battle_nsp_release();                            // the table is already empty in the original
@@ -151,9 +153,17 @@ int CombatII::battle_fx_5666e(int unit_index, int tx, int ty, int k) {
     fx_particles_init();                             // sub_56129
     game_timer_set(0x14);                            // sub_1033B(14h)
     pal_ramp_set_width(0x14);            // sub_5623E (word_11233C ramp width)
-    // sub_5623E(0x14) sets the palette ramp width and the following 562C1(0x4B, 0) waits until the
-    // ramp reaches 1. The port has no ramp runtime, so both are omitted.
-    int spawned = 0;
+    // ASM 95416..95422: fade the palette 0% -> 75% (4Bh) before the first particle frame.
+    // Every 562C1 call ends in 5FD1C -> 5E943 (one 70 Hz retrace). The display palette is
+    // captured on present in the port, so each step is presented before waiting one frame.
+    for (;;) {
+        if (should_exit_) break;
+        const int ramp = pal_ramp_step(0x4B, 0);
+        battle_fx_present();
+        video_.wait_presented();                 // sub_5E943 (one display frame)
+        if (ramp == 1) break;
+    }
+    int spawned = 5, ticks = 5;          // ASM var_10 (kill count) and var_8 both start at 5
     for (int guard = 0; guard < 0x800 && !should_exit_; ++guard) {
         pal_ramp_step(0x4B, 0x32);                 // sub_562C1 (3% ramp per frame)
         for (int i = 0; i < FX_SLOTS && !should_exit_; ++i) {
@@ -176,10 +186,21 @@ int CombatII::battle_fx_5666e(int unit_index, int tx, int ty, int k) {
             }
         }
         if (spawned > 0x12C) break;                  // var_10 > 300 -> draw the final frame
+        if (ticks % 5 == 0) sfx(0x32);               // 4F4CD(32h) every 5 frames (ASM 95528)
+        ++ticks;
         battle_fx_present();                         // sub_454D5 + sub_5E9E8
         wait_game_tick();                            // sub_499E4
     }
     if (!should_exit_) battle_fx_present();          // loc_56858: one last frame
+    // loc_56873: tail 562C1(4Bh,0) fade-out (the original stops at 2-3% and does not flush;
+    // the port presents each step so the captured palette follows the fade).
+    for (;;) {
+        if (should_exit_) break;
+        const int ramp = pal_ramp_step(0x4B, 0);
+        battle_fx_present();
+        video_.wait_presented();                 // sub_5E943
+        if (ramp == 0) break;
+    }
     pal_ramp_apply(0);                               // release the ramp (DAC = master)
     battle_nsp_release();                            // sub_1FFCD
     fx_particles_free();                             // sub_5615D
@@ -200,6 +221,13 @@ int CombatII::battle_fx_56896(int unit_index, int tx, int ty, int k) {
     fx_particles_init();
     game_timer_set(0x14);                            // sub_1033B(14h)
     pal_ramp_set_width(0x14);            // sub_5623E (word_11233C ramp width)
+    for (;;) {                                   // loc_568F0 fade-in (5E943 per step)
+        if (should_exit_) break;
+        const int ramp = pal_ramp_step(0x4B, 0);
+        battle_fx_present();
+        video_.wait_presented();
+        if (ramp == 1) break;
+    }
     int spawned = 0, ticks = 0;
     bool done = false;
     for (int guard = 0; guard < 0x2000 && !should_exit_ && !done; ++guard) {
@@ -246,6 +274,13 @@ int CombatII::battle_fx_56896(int unit_index, int tx, int ty, int k) {
         wait_game_tick();
     }
     if (!should_exit_) battle_fx_present();          // loc_56B96: final frame
+    for (;;) {                                   // loc_56BB1 fade-out
+        if (should_exit_) break;
+        const int ramp = pal_ramp_step(0x4B, 0);
+        battle_fx_present();
+        video_.wait_presented();
+        if (ramp == 0) break;
+    }
     pal_ramp_apply(0);                               // release the ramp (DAC = master)
     battle_nsp_release();
     fx_particles_free();
@@ -270,6 +305,13 @@ int CombatII::battle_fx_56bd4(int unit_index, int tx, int ty, int k) {
     fx_particles_init();
     game_timer_set(0x14);                            // sub_1033B(14h)
     pal_ramp_set_width(0x14);            // sub_5623E (word_11233C ramp width)
+    for (;;) {                                   // loc_56C3A fade-in (5E943 per step)
+        if (should_exit_) break;
+        const int ramp = pal_ramp_step(0x4B, 0);
+        battle_fx_present();
+        video_.wait_presented();
+        if (ramp == 1) break;
+    }
     int spawned = 0, ticks = 0, frames = -1;
     bool done = false;
     for (int guard = 0; guard < 0x4000 && !should_exit_ && !done; ++guard) {
@@ -335,6 +377,13 @@ int CombatII::battle_fx_56bd4(int unit_index, int tx, int ty, int k) {
         wait_game_tick();
     }
     if (!should_exit_) battle_fx_present();          // loc_57041: final frame
+    for (;;) {                                   // loc_5705C fade-out
+        if (should_exit_) break;
+        const int ramp = pal_ramp_step(0x4B, 0);
+        battle_fx_present();
+        video_.wait_presented();
+        if (ramp == 0) break;
+    }
     pal_ramp_apply(0);                               // release the ramp (DAC = master)
     battle_nsp_release();
     fx_particles_free();
@@ -532,6 +581,13 @@ int CombatII::battle_fx_57f18(int unit_index, int tx, int ty, int k) {
     fx_spawn(0x0D, 0, 0, 9, 3, 1);
     game_timer_set(0x0A);                            // sub_1033B(0A)
     pal_ramp_set_width(0x29);            // sub_5623E (word_11233C ramp width)
+    for (;;) {                                   // loc_57FDE fade-in (5E943 per step)
+        if (should_exit_) break;
+        const int ramp = pal_ramp_step(0x4B, 0);
+        battle_fx_present();
+        video_.wait_presented();
+        if (ramp == 1) break;
+    }
     sfx(0x33);                                       // 4F4CD(33)
     int dead = 0, ticks = 0;
     bool no_more = false;
@@ -623,9 +679,14 @@ int CombatII::battle_fx_57f18(int unit_index, int tx, int ty, int k) {
         wait_game_tick();
     }
     cam_fine_y_ = 0;                                 // dword_BA838 = 0 (restore the shake)
-    for (int i = 0; i < 4 && !should_exit_; ++i) {    // a few extra frames instead of the drain
-        battle_fx_present();
-        wait_game_tick();
+    // loc_58571: 454B3 once, then 562C1(4Bh,0) with a 5E9E8 flush per step.
+    if (!should_exit_) battle_fx_present();
+    for (;;) {
+        if (should_exit_) break;
+        const int ramp = pal_ramp_step(0x4B, 0);
+        battle_fx_present();                         // 454B3 + 5E9E8 for the fade step
+        video_.wait_presented();                     // sub_5E943
+        if (ramp == 0) break;
     }
     pal_ramp_apply(0);                               // release the ramp (DAC = master)
     battle_nsp_release();

@@ -1,5 +1,5 @@
 // Magic effect drivers: moon (moon.nsp) and sun light (sunl.nsp, sunl2.nsp)
-//   sub_58619 (dasm 97940..98385, called from sub_2A75A+2DE)  Heal Wind - moon.nsp
+//   sub_58619 (dasm 97940..98385, called from sub_2A75A+2DE)  Star Tearer stage 3 - moon.nsp
 //   sub_5A267 (dasm 100199..100407, called from sub_2A75A+446) Sun Light - sunl.nsp
 //   sub_5A566 (dasm 100408..100639, called from sub_2A75A+44F) Sun Light variant - sunl2.nsp
 //
@@ -50,7 +50,7 @@ inline void sunmoon_anchor(const CombatUnitPlacement& u, int cam_x, int cam_y, i
 
 } // namespace
 
-// sub_58619: moon.nsp (Heal Wind).
+// sub_58619: moon.nsp (Star Tearer 3rd stage; sub_2A75A kind 1 k==2 loads regen.ssp/i-fist.ssp).
 //   Port signature: (unit_index, tx, ty, k). The caster is unit_index; k is unused.
 //   (1) 585B1 collects hostile units in the 13x13 screen area (word_F13AA/dword_F0BA8) and
 //       sets each pose via 1214F: 0x0A (collapsed) for normal units, 0 for large ones.
@@ -108,7 +108,8 @@ int CombatII::battle_fx_58619(int unit_index, int tx, int ty, int k) {
     // (3) moon frames 0/1 + units -> palette restore
     if (0 < nframes) battle_fx_blit(0, ax + magic_frames_[0].xo, ay + magic_frames_[0].yo);
     battle_fx_present();
-    if (1 < nframes) battle_fx_blit(1, ax + magic_frames_[1].xo, ay + magic_frames_[1].yo);
+    // ASM 98050..98054: the first frame-1 blit passes (1,1) exactly; 5EFB9 adds no frame offset.
+    if (1 < nframes) battle_fx_blit(1, 1, 1);
     battle_fx_present();
     for (int pct = 0; pct <= 0x64 && !should_exit_; pct += 2) {
         pal_scale_range(0, 0x100, &battle_palette_[0][0], pct);

@@ -2314,7 +2314,7 @@ private:
     int battle_fx_21e16(int unit_index, int tx, int ty, int k);   // sub_21E16 f-meteo (Meteor)
     int battle_fx_23074(int unit_index, int tx, int ty, int k);   // sub_23074 i-star/cure (Star Tearer)
     int battle_fx_570a1(int unit_index, int tx, int ty, int k);   // sub_570A1 pro/explosio (Mega Thunder)
-    int battle_fx_58619(int unit_index, int tx, int ty, int k);   // sub_58619 moon (Heal Wind)
+    int battle_fx_58619(int unit_index, int tx, int ty, int k);   // sub_58619 moon (Star Tearer 3)
     int battle_fx_58c87(int unit_index, int tx, int ty, int k);   // sub_58C87 thun7 (Mega Thunder 0)
     int battle_fx_58e95(int unit_index, int tx, int ty, int k);   // sub_58E95 thun72 (1)
     int battle_fx_592b0(int unit_index, int tx, int ty, int k);   // sub_592B0 thun73 (2)
