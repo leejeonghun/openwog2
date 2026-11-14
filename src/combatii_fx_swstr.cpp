@@ -132,7 +132,7 @@ int CombatII::battle_fx_2d7d2(int unit_index, int k) {
     // (5) swing loop
     for (int si = 0; si < count && !should_exit_; ++si) {
         if ((size_t)unit_index >= units_.size()) break;
-        battle_fx_world();                                          // sub_454B3
+        battle_fx_world_dim();                                      // sub_454B3 + sub_454D5
         if (si < count - 4) ++swing;                                 // `cmp si, var_8-4; jge`
 
         uint8_t* bb = video_.get_backbuffer();

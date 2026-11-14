@@ -113,7 +113,7 @@ int CombatII::battle_fx_35fc2_anim(int unit_index) {
                 // Toggle the camera fine offset (screen shake)
                 cam_fine_x_ = (int16_t)((cam_fine_x_ == 0x0B) ? 0x0D : 0x0B);
                 cam_fine_y_ = (int16_t)((cam_fine_y_ == 1) ? -1 : 1);
-                battle_fx_world();                                      // sub_454B3
+                battle_fx_world_dim();                                  // sub_454B3 + sub_454D5
                 battle_draw_unit_now(unit_index);                       // sub_12F2A
                 // Three axe frames (var_8 / var_4+0Ah / var_4+0Dh)
                 blit(var_8, si, y_axis);

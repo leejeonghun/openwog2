@@ -273,6 +273,7 @@ int CombatII::battle_fx_2da5e(int unit_index, int tx, int ty, int k) {
         }
     };
     for (int t = 0; t < frames && !should_exit_; ++t) {      // loc_2DC69
+        battle_fx_world_dim();                               // 454B3 + sub_454D5
         draw_trail(trail_n);                                  // twice: 454B3 then the trail
         for (int s = trail_n; s > 0; --s) trail[s] = trail[s - 1];  // loc_2DBAF
         // Main frame: facing*4 + counter%4 through 1FFFE.
@@ -281,7 +282,8 @@ int CombatII::battle_fx_2da5e(int unit_index, int tx, int ty, int k) {
             const MagicFxFrame& fr = magic_frames_[(size_t)f];
             battle_fx_blit(f, wx + fr.xo, wy + fr.yo);        // sub_1FFFE
         }
-        battle_fx_present();                                  // sub_5E9E8
+        battle_fx_flush();                                    // sub_5F093/1FFFE above the dim
+        battle_fx_commit();                                   // sub_5E9E8
         wait_game_tick();                                     // sub_499E4
         if (trail_n < 3) ++trail_n;                           // `cmp bx,3; jge`
         trail[0] = TrailPoint{wx, wy};                        // loc_2DC21
@@ -290,8 +292,10 @@ int CombatII::battle_fx_2da5e(int unit_index, int tx, int ty, int k) {
     }
     // Tail: only the trail remains (loc_2DC98).
     while (trail_n > 0 && !should_exit_) {                    // `test cx,cx; jg`
+        battle_fx_world_dim();                               // 454B3 + sub_454D5
         draw_trail(trail_n);
-        battle_fx_present();                                  // 454B3 + 5E9E8
+        battle_fx_flush();                                    // trail above the dim
+        battle_fx_commit();                                   // 5E9E8
         wait_game_tick();                                     // 499E4
         --trail_n;
     }

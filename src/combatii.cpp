@@ -134,6 +134,16 @@ void CombatII::battle_fx_world() {
     render_weather_layer();                                         // sub_4512E
 }
 
+// sub_454B3 + sub_12E01 + sub_454D5: draw the world, consume any pre-dim queue, then apply
+// the dim/HUD overlay. Effects queued after this call are drawn above the dim by
+// battle_fx_flush().
+void CombatII::battle_fx_world_dim() {
+    battle_hud_time_ = battle_time_;
+    battle_fx_world();
+    battle_fx_flush();
+    battle_fx_overlay();
+}
+
 // sub_10AEB + sub_12D65: the reduced frame the full-screen dark spells use. sub_12D65 has no
 // sub_122C4/sub_12567 pass, so it draws no normal/attacking/water units and no weather - only
 // the map, its top tiles and the sub_18605 item/field markers.

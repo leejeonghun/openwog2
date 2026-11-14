@@ -129,9 +129,11 @@ int CombatII::battle_fx_58c87(int unit_index, int tx, int ty, int k) {
             py[i] = (int16_t)(base_y - 0x32 + combat_rand(0x96));
             break;                                                          // jmp loc_58DFE
         }
+        battle_fx_world_dim();                                              // 454B3 + sub_454D5
         draw_particles();
         cam_fine_x_ = (cam_fine_x_ == 1) ? -1 : 1;                          // toggle dword_BA838
-        battle_fx_present();                                                // 454B3 + 5E9E8
+        battle_fx_flush();                                                  // particle frames above the dim
+        battle_fx_commit();                                                 // 5E9E8
         wait_game_tick();                                                   // sub_499E4
     }
 
@@ -238,6 +240,7 @@ int CombatII::battle_fx_58e95(int unit_index, int tx, int ty, int k) {
             py[i] = (int16_t)(base_y - 0x32 + combat_rand(0x96));
             break;
         }
+        battle_fx_world_dim();                                              // 454B3 + sub_454D5
         draw_particles();
         if (beams_on) {
             const int t3 = frame % 3;                                       // idiv 3 remainder
@@ -263,7 +266,8 @@ int CombatII::battle_fx_58e95(int unit_index, int tx, int ty, int k) {
             if (combat_rand(3) == 0) sfx(0x34);                             // 499BD(3)
         }
         cam_fine_x_ = (cam_fine_x_ == 1) ? -1 : 1;                          // loc_59228
-        battle_fx_present();
+        battle_fx_flush();                                                  // beams above the dim
+        battle_fx_commit();                                                 // 5E9E8
         wait_game_tick();
     }
 
@@ -353,6 +357,7 @@ int CombatII::battle_fx_592b0(int unit_index, int tx, int ty, int k) {
                 ++made;
             }
         }
+        battle_fx_world_dim();                                              // 454B3 + sub_454D5
         draw_particles();
         if (beam_life > 0) {
             // Frame by life: > 8 -> 3 (unk_F0DCE = base + 0x24), > 4 -> 4, else -> 5.
@@ -380,7 +385,8 @@ int CombatII::battle_fx_592b0(int unit_index, int tx, int ty, int k) {
         } else {
             cam_fine_x_ = 0;                                                // xor ecx,ecx
         }
-        battle_fx_present();                                                // 5E9E8
+        battle_fx_flush();                                                  // pillar/debris above the dim
+        battle_fx_commit();                                                 // 5E9E8
         wait_game_tick();                                                   // 499E4
     }
 

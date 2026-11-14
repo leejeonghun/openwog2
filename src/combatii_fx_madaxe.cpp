@@ -63,11 +63,13 @@ int CombatII::battle_fx_2dfc1(int unit_index, int k) {
             const int nf = ((int)u.facing + 3) % 4;                  // `mov edx,[ecx+60h]>>24; add edx,3; idiv ebp(4)`
             u.facing = (int8_t)nf;                                   // `mov [ecx+63h],dl`
         }
+        battle_fx_world_dim();                                       // sub_454B3 + sub_454D5
         if (f >= 0 && f < nframes) {
             const MagicFxFrame& fr = magic_frames_[(size_t)f];
             battle_fx_blit(f, cx + fr.xo, cy + fr.yo);                // sub_1FFFE
         }
-        battle_fx_present();                                         // sub_454B3 + sub_5E9E8
+        battle_fx_flush();                                           // sub_5EE51 above the dim
+        battle_fx_commit();                                          // sub_5E9E8
         wait_game_tick();                                            // sub_499E4
     }
 
@@ -100,9 +102,9 @@ int CombatII::battle_fx_2dfc1(int unit_index, int k) {
 //   dword_F0648 -> battle_target_list_[0].
 //
 // Deviations:
-//   - The original needs sub_12F2A(caster/target) because sub_454B3 does not draw units; the
-//     port's render_battle_map includes them, so battle_fx_present gives the same result
-//     (units are not drawn twice).
+//   - sub_454B3 falls through into sub_454D5, so 12F2A(caster/target) and 1FFFE run after the
+//     dim. battle_fx_present would flush a queued redraw and the effect before that dim, so
+//     each frame redraws both units directly after battle_fx_overlay and then draws 1FFFE.
 //   - The two halves of the sub_135EB result ([esp+2]/[var_A]) are x/y word aliases; they map
 //     to unit_screen_center's cx/cy as the original calling convention (eax = x, edx = y).
 //   - sub_44D6E is a single scalar (dword_FA8B6), so it is cleared to false on exit like the
@@ -132,11 +134,17 @@ int CombatII::battle_fx_2f3b2(int unit_index, int k) {
     const int dir = (int)u.facing & 3;                                // [60h]>>24
     for (int i = 0; i < 3 && !should_exit_; ++i) {
         const int f = dir * 3 + i;                                   // `lea eax,[eax+eax*2]; add eax,edx`
+        battle_fx_world_dim();                                       // sub_454B3 + sub_454D5
+        battle_draw_unit_now(unit_index);                            // sub_12F2A(caster)
+        if (target >= 0 && (size_t)target < units_.size())
+            battle_draw_unit_now(target);                            // sub_12F2A(F0648[0])
         if (f >= 0 && f < nframes) {
             const MagicFxFrame& fr = magic_frames_[(size_t)f];
             battle_fx_blit(f, cx + fr.xo, cy + fr.yo);                // sub_1FFFE
+            battle_fx_flush();                                       // sub_5EE51
+            magic_fx_draws_.clear();                                 // consume the effect queue
         }
-        battle_fx_present();                                         // 454B3 + 5E9E8 (units included)
+        battle_fx_commit();                                          // sub_5E9E8
         wait_game_tick();                                            // sub_499E4
         if (i == 0) wait_game_tick();                                // `test cx,cx; jnz` -> one extra wait
     }
@@ -164,9 +172,8 @@ int CombatII::battle_fx_2f3b2(int unit_index, int k) {
 // Port mapping: 1FEA4 -> battle_nsp_load, 1033B -> game_timer_set, 44D6E ->
 //   battle_dim_row0_, 135EB -> unit_screen_center, 454B3 + 5E9E8 -> battle_fx_present
 //   (which also runs the 454D5 overlay, like the sibling drivers),
-//   1FFFE -> battle_fx_blit (adds the entry's xo/yo), 12F2A -> battle_fx_redraw_unit
-//   (queued after the effect so the caster is redrawn on top, as in the original),
-//   1FFCD -> battle_nsp_release.
+//   1FFFE -> battle_fx_blit (adds the entry's xo/yo), 12F2A -> battle_draw_unit_now
+//   after the overlay, 1FFCD -> battle_nsp_release.
 int CombatII::battle_fx_2ff4b(int unit_index) {
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return 0;
     auto& u = units_[(size_t)unit_index];
@@ -182,12 +189,14 @@ int CombatII::battle_fx_2ff4b(int unit_index) {
     const int nframes = (int)magic_frames_.size();
     for (int i = 0; i < 9 && !should_exit_; ++i) {                   // cmp cx,9
         const int f = i % 3;                                         // `idiv 3` -> remainder (edx)
+        battle_fx_world_dim();                                       // 454B3 + sub_454D5
         if (f < nframes) {
             const MagicFxFrame& fr = magic_frames_[(size_t)f];
             battle_fx_blit(f, cx + fr.xo, cy + fr.yo);                // sub_1FFFE
         }
         battle_fx_redraw_unit(unit_index);                           // sub_12F2A(caster)
-        battle_fx_present();                                         // 454B3 + 5E9E8
+        battle_fx_flush();                                           // sub_5EE51 + 12F2A above the dim
+        battle_fx_commit();                                          // sub_5E9E8
         wait_game_tick();                                            // sub_499E4
         if ((size_t)unit_index >= units_.size()) break;
     }

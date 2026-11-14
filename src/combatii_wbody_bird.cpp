@@ -141,8 +141,10 @@ int CombatII::battle_fx_308ee_anim(int unit_index) {
         // ---- (6) wind-up: 6 frames x 3 subframes at a fixed position ----
         for (int i = 0; i < 6 && !should_exit_; ++i) {
             for (int sub = 0; sub < 3 && !should_exit_; ++sub) {
+                battle_fx_world_dim();                                   // 454B3 + sub_454D5
                 blit(dir + i, x0, y0);
-                battle_fx_present();                                     // 454B3 + 5EE51 + 5E9E8
+                battle_fx_flush();                                       // sub_5EE51 above the dim
+                battle_fx_commit();                                      // sub_5E9E8
                 wait_game_tick();                                        // sub_499E4
             }
         }
@@ -176,7 +178,8 @@ int CombatII::battle_fx_308ee_anim(int unit_index) {
             }
             for (int sub = 0; sub < 3 && !should_exit_; ++sub) {
                 const bool visible = (sub == 2);                         // only the 3rd reaches the screen
-                magic_fx_draws_.clear();
+                if (visible) battle_fx_world_dim();                      // 454B3 + sub_454D5
+                else magic_fx_draws_.clear();
                 if (dir == 0x15) {                                       // north: 6 -> 0
                     for (int i = kSlots - 1; i >= 0; --i)
                         if (life[i] > 0) step_slot(i, visible);
@@ -198,7 +201,8 @@ int CombatII::battle_fx_308ee_anim(int unit_index) {
                 }
                 if (visible) {
                     if (t % 5 == 0) sfx(0x32);                           // 4F4CD(32h)
-                    battle_fx_present();                                 // 5E9E8 (includes 454B3)
+                    battle_fx_flush();                                   // bird frames above the dim
+                    battle_fx_commit();                                  // 5E9E8
                 }
             }
             wait_game_tick();                                            // sub_499E4

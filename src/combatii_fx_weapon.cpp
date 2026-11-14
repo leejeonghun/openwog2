@@ -258,7 +258,7 @@ void CombatII::fx_bolt_strip(int x, int y, int frame) {
 //     (4) sub_44D6E(1) dim + sub_1033B(0Ch)                        (39948~39954)
 //     (5) variant (5/7/0Ch) frames:                                (loc_2CEF9)
 //         sub_454B3 -> trail silhouettes (5F517, colour ramp loc_2CA0E, see below) ->
-//         current pose (5F3FD) -> switch on frame%5 -> shake all units when frame%5==2 ->
+//         current pose (5F3FD) -> switch on frame%5 -> set target hit poses/shake ->
 //         5E9E8 -> 499E4; trail length min(6, frame+1)
 //     (6) repeat the same drawing until the trail reaches 0            (loc_2D2A1)
 //     (7) sub_499DA(40h) -> sub_44D75(clear list) -> sub_44D6E(0) -> [+64h] = frame%5+5
@@ -267,7 +267,9 @@ int CombatII::battle_fx_2cc3a_anim(int unit_index, int variant, int sfx_id) {
     auto& A = units_[(size_t)unit_index];
     // (1) Register every target; the original inserts F0648 in order, duplicates included.
     for (int ti : battle_target_list_) battle_highlight_add(ti);
-    // (2) Caster pose 5; tile occupation is modelled by units_ and skipped here.
+    // (2) sub_11F74 releases the caster footprint. The port's CC998 model skips a unit with
+    // fx_sprite_hidden; the direct swing/current-pose blits below still draw the caster.
+    A.fx_sprite_hidden = true;
     A.anim_frame = 5;
     // (3) Coordinates of the five swing poses.
     const int sx = (A.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + UNIT_ANCHOR_X;
@@ -306,13 +308,18 @@ int CombatII::battle_fx_2cc3a_anim(int unit_index, int variant, int sfx_id) {
         //      5EECF(save) -> 5F3FD(pose) -> 5E9E8 -> 499E4 -> 5EE51(restore) -> 5F3FD(next).
         //      The port redraws the world every frame, so showing the pose for one more frame
         //      is one commit + tick.
-        //   case 2: all units [+64h] = 3 (hit pose); case 0 does the same only when the
-        //      trail is at least 3 (cmp di,2). Case 3 has no body.
+        //   case 2: every F0648 target gets [+64h] = 3 (hit pose); case 0 does the same only
+        //      when the trail is at least 3 (cmp di,2). Case 3 has no body.
+        auto set_target_hit_pose = [&]() {
+            for (int ti : battle_target_list_) {
+                if (ti < 0 || (size_t)ti >= units_.size()) continue;
+                auto& t = units_[(size_t)ti];
+                if (t.active && t.sprite_type < 0x12C) t.anim_frame = 3; // loc_2D096/loc_2D18D
+            }
+        };
         switch (frames % 5) {
             case 0:
-                if (trail > 2)
-                    for (size_t i = 0; i < units_.size(); ++i)
-                        if (units_[i].active && units_[i].sprite_type < 0x12C) units_[i].anim_frame = 3;
+                if (trail > 2) set_target_hit_pose();
                 break;
             case 1:
             case 4:
@@ -323,8 +330,7 @@ int CombatII::battle_fx_2cc3a_anim(int unit_index, int variant, int sfx_id) {
                     blit_nc2_frame(sx + cf->x_off, sy + cf->y_off, *cf);   // 5EE51 + 5F3FD(next pose)
                 break;
             case 2:
-                for (size_t i = 0; i < units_.size(); ++i)
-                    if (units_[i].active && units_[i].sprite_type < 0x12C) units_[i].anim_frame = 3;
+                set_target_hit_pose();
                 break;
             default: break;   // case 3 (loc_2D1B8) has no body
         }
@@ -382,6 +388,7 @@ int CombatII::battle_fx_2cc3a_anim(int unit_index, int variant, int sfx_id) {
     }
     const int pose = frames % 5 + 5;                             // [64h] = var_10 + 5 (var_10 = frames%5)
     A.anim_frame = (uint8_t)pose;
+    A.fx_sprite_hidden = false;                                  // sub_11E04 restores occupancy
     if (battle_trace_)
         fprintf(stderr, "COMBAT: 2CC3A unit=%d variant=%d trail-frames=%d pose=%d\n",
                 A.id, variant, frames, pose);
@@ -1284,6 +1291,7 @@ bool CombatII::battle_fx_32bcb_anim(int unit_index) {
                 p_frame[(size_t)i] = (uint8_t)f;
             }
         }
+        battle_fx_flush();                                                 // 5F29D above the dim, below 12F2A
     };
     // 33E06: a live particle advances var_154 steps along var_208 degrees. Up to step 11 it
     // paints a 5-pixel plus, afterwards a single pixel (colour 18h, +1 every 10 steps, max 1Fh).
@@ -1572,8 +1580,8 @@ void CombatII::battle_fx_367ee_anim(int unit_index) {
         const MagicFxFrame& e = magic_frames_[(size_t)gframe];
         battle_fx_blit(gframe, si - 0x0C + e.xo, di + 8 + e.yo);           // (576, 390)
     };
-    auto frame = [&]() { battle_fx_world(); battle_fx_overlay(); };        // 454B3
-    auto present = [&]() { battle_fx_commit(); wait_game_tick(); };        // 5E9E8,499E4
+    auto frame = [&]() { battle_fx_world_dim(); };                         // 454B3 + 454D5
+    auto present = [&]() { battle_fx_flush(); battle_fx_commit(); wait_game_tick(); }; // 5EE51,5E9E8,499E4
     // sub_36531: move only while life > 4, then decrement life and pick the frame by
     // life and group, drawing 5EE51(frame, x + [rec+4], y + [rec+6]). Life 1..4 uses the
     // static tables F1032/F103E/F104A/F1056 (BSS = 0), i.e. frame 0 with no offset.

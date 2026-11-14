@@ -10129,7 +10129,8 @@ int CombatII::battle_weapon_2cc3a(int unit_index, int variant, int sfx_id) {
     // the screen position to draw at. There is no camera call inside this routine; that is
     // the caller's job (AI: sub_3FFD4 calls sub_1124A right before the handler; player:
     // sub_4C98A does not, because entering the ring already centred the unit).
-    // The port models occupancy through units_ positions, so no separate record is needed.
+    // The port models the cleared CC998 footprint with fx_sprite_hidden; the presentation
+    // sets it after registering the targets and restores it at the end.
     // The presentation (44D89 all targets -> [+64h]=5 -> 5 swing poses -> dim -> afterimage,
     // shake, cleanup) lives in combatii_fx_weapon.cpp; the damage loop follows it.
     battle_fx_2cc3a_anim(unit_index, variant, sfx_id);
@@ -10641,7 +10642,7 @@ int CombatII::battle_weapon_f1474(int unit_index, int idx, int dx) {
         }
 
         // loc_2E6FD/loc_2E726: 44D75 -> 2CBA1 -> 1214F targets, then 1033B(9), sfx(33)
-        // and the 5-frame hon.nsp impact loop (1FFFE stamped at the trail points).
+        // and the 5-frame hon.nsp impact loop (1FFFE at each target centre).
         battle_highlight_clear();                                 // sub_44D75
         battle_highlight_add_depth(unit_index);                   // sub_2CBA1 (41979)
         for (int ti : targets) {
@@ -10649,20 +10650,36 @@ int CombatII::battle_weapon_f1474(int unit_index, int idx, int dx) {
             auto& T = units_[(size_t)ti];
             T.anim_frame = (T.sprite_type < 0x12C) ? (uint8_t)0x0A : (uint8_t)0x00; // sub_1214F
         }
+        // loc_2E6FD computes each target's 135EB screen centre before the frame loop
+        // overwrites the trail-array slots. Fix the centres here so the later map pass
+        // (including map_kind 6 facing) cannot move them.
+        std::vector<int> stamp_x, stamp_y;
+        stamp_x.reserve(targets.size());
+        stamp_y.reserve(targets.size());
+        for (int ti : targets) {
+            if (ti < 0 || (size_t)ti >= units_.size()) continue;
+            int scx = 0, scy = 0;
+            unit_screen_center(units_[(size_t)ti], scx, scy);      // sub_135EB
+            stamp_x.push_back(scx);
+            stamp_y.push_back(scy);
+        }
         game_timer_set(9);                                        // sub_1033B(9)
         sfx(0x33);                                                // sub_4F4CD(33h)
         if (hon_ok) {
-            const int stamps = std::min<int>(12, (int)targets.size());
+            // loc_2E74A stamps every F0648 entry at its fixed centre; there is no
+            // 12-entry cap on the target count.
             // 2E74A reads [var_8+2]>>16, which aliases the low word of var_4: the same
             // 0..4 frame counter loaded into the magic frame index, so f is exact.
             for (int f = 0; f < 5 && !should_exit_; ++f) {
-                battle_fx_world();                                // sub_454B3
-                for (int s = 0; s < stamps; ++s) {
-                    if (f >= (int)magic_frames_.size()) break;
+                battle_fx_world_dim();                            // sub_454B3 + sub_454D5
+                if (f < (int)magic_frames_.size()) {
                     const MagicFxFrame& fr = magic_frames_[(size_t)f];
-                    battle_fx_blit(f, trail_x[s] + fr.xo, trail_y[s] + fr.yo); // sub_1FFFE
+                    for (size_t s = 0; s < stamp_x.size(); ++s) {
+                        battle_fx_blit(f, stamp_x[s] + fr.xo, stamp_y[s] + fr.yo); // sub_1FFFE
+                    }
+                    battle_fx_flush();                            // stamp after the dim
+                    magic_fx_draws_.clear();                      // consume the stamp queue
                 }
-                battle_fx_overlay();                              // sub_454D5
                 battle_fx_commit();                               // sub_5E9E8
                 wait_game_tick();                                 // sub_499E4
             }
@@ -11485,13 +11502,13 @@ int CombatII::battle_weapon_f1474_ext(int unit_index, int idx, int dx) {
             battle_dim_row0_ = true;                         // sub_44D6E(1)
             const bool nsp_ok = battle_nsp_load("t_arrow.nsp"); // sub_1FEA4
             battle_ssp_play("bolt2.ssp", 0x32);              // sub_4F460
-            // off_2FA5E: 0 -> +4x, 1 -> -4y, 2 -> -4x, 3 -> +4y.
+            // off_2FA5E: 0 -> +4y, 1 -> -4x, 2 -> -4y, 3 -> +4x.
             int step_x = 0, step_y = 0;
             switch (u.facing & 3) {
-                case 0: step_x = 4; break;
-                case 1: step_y = -4; break;
-                case 2: step_x = -4; break;
-                default: step_y = 4; break;
+                case 0: step_y = 4; break;
+                case 1: step_x = -4; break;
+                case 2: step_y = -4; break;
+                default: step_x = 4; break;
             }
             // sub_49ADF(caster, last ray tile) - 1, scaled by 6 for E/W and 4 for N/S facing.
             // At 4 px/frame this is 24 px per E/W tile and 16 px per N/S tile.
@@ -11521,11 +11538,13 @@ int CombatII::battle_weapon_f1474_ext(int unit_index, int idx, int dx) {
             const int facing_base = (u.facing & 3) * 5;      // [unit+60h]>>24 == [63h] facing
             for (int i = 0; i < frames && !should_exit_; ++i) {
                 const int frame = facing_base + (i % 5);
+                battle_fx_world_dim();                       // 454B3 + sub_454D5
                 if (nsp_ok && frame < (int)magic_frames_.size()) {
                     const MagicFxFrame& fr = magic_frames_[(size_t)frame];
                     battle_fx_blit(frame, px + fr.xo, py + fr.yo); // sub_1FFFE
                 }
-                battle_fx_present();                         // 454B3 + 5E9E8
+                battle_fx_flush();                           // sub_5EE51 above the dim
+                battle_fx_commit();                          // sub_5E9E8
                 wait_game_tick();                            // sub_499E4
                 px += step_x;                                // var_C / var_10
                 py += step_y;
@@ -11783,7 +11802,8 @@ void CombatII::battle_damage_fx_triggers(const std::vector<int>& targets, int ca
 //   sub_53797(victim, caster, 1). The caller owns the caster's pose.
 int CombatII::battle_weapon_2caf7_loop(int unit_index, int mul, int add) {
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return -1;
-    if (battle_target_list_.empty()) return -1;
+    // sub_2CAF7 has no empty-list branch: sub_287AF still runs its 24 frames and the
+    // 499DA(24h) period restore when F0648 is empty.
     const std::vector<int> targets = battle_target_list_;
     auto& A = units_[(size_t)unit_index];
     const int16_t orig44 = A.combat_value_44;

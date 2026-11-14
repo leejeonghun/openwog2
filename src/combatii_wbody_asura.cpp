@@ -203,7 +203,7 @@ int CombatII::battle_fx_31283_anim(int unit_index) {
     // sub_30F61: toggle + sub_454B3 (the particle stage still shows the dimmed map).
     auto shake_world = [&]() {
         toggle_shake();
-        battle_fx_world();
+        battle_fx_world_dim();
     };
     // sub_30F98: toggle + clear the visible canvas. The original memsets 17700h bytes to 0;
     // the port clears its backbuffer and does not redraw the map, so all later stages are black.
@@ -221,7 +221,7 @@ int CombatII::battle_fx_31283_anim(int unit_index) {
     fx_pal_mix(0x60, 0x100, 0, 0x28);                      // sub_30824(0, 28h); edx from 44D6E
     C.facing = 0;                                          // mov byte [ebp+63h],0
     if (should_exit_) { battle_dim_row0_ = false; battle_nsp_release(); return 1; }
-    battle_fx_world();                                     // sub_454B3
+    battle_fx_world_dim();                                 // sub_454B3 + sub_454D5
     draw_target_units();                                   // 12F2A targets
     battle_draw_unit_now(unit_index);                      // 12F2A caster
     battle_fx_commit();                                    // sub_5E9E8
@@ -264,6 +264,8 @@ int CombatII::battle_fx_31283_anim(int unit_index) {
 
     while (!should_exit_) {
         shake_world();                                     // sub_30F61: shake toggle + 454B3
+        draw_target_units();                               // 12F2A targets (loc_3145E)
+        battle_draw_unit_now(unit_index);                  // 12F2A caster (loc_31472)
         // Spawn (var_C < 0x64): one wave every 9 frames, activating the first free slot only
         if (frame < 0x64) {
             if ((frame % 9) == 8) ++wave;
@@ -691,8 +693,10 @@ int CombatII::battle_fx_31283_anim(int unit_index) {
         fade_palette_step(pct);
     }
     if (!should_exit_) {
-        battle_fx_world();                                   // 454B3 + 12F2A for all
-        battle_fx_commit();
+        battle_fx_world_dim();                               // 454B3 + sub_454D5
+        draw_target_units();                                 // 12F2A targets (46846)
+        battle_draw_unit_now(unit_index);                    // 12F2A caster (46852)
+        battle_fx_commit();                                  // 5E9E8
         wait_game_tick();
     }
     for (int pct = 0; pct <= 0x64 && !should_exit_; pct += 4) {   // 5FA2C fade up

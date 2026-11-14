@@ -52,11 +52,13 @@ int CombatII::battle_fx_2d5a3(int unit_index) {
     for (int i = 0; i < 0x0A && !should_exit_; ++i) { // cmp cx,0Ah; jl
         game_timer_set(0x0F);                         // sub_1033B(0Fh)
         const int f = i % 5;                          // `idiv 5` remainder -> var_8
+        battle_fx_world_dim();                        // 454B3 + sub_454D5
         if (f < nframes) {
             const MagicFxFrame& fr = magic_frames_[(size_t)f];
             battle_fx_blit(f, fx + fr.xo, fy + fr.yo);        // sub_1FFFE
         }
-        battle_fx_present();                          // 454B3 + 5E9E8
+        battle_fx_flush();                            // sub_5EE51 above the dim
+        battle_fx_commit();                           // sub_5E9E8
         if (f == 4) {                                 // `cmp esi,4; jnz`
             sfx(0x32);                                // sub_4F4CD(32h)
             // sub_2D48A(0Ah): cover the palette with 0x3F, restore it 10 ticks later
@@ -91,11 +93,13 @@ int CombatII::battle_fx_2d527(int unit_index) {
     for (int i = 0; i < 0x18 && !should_exit_; ++i) {        // cmp cx,18h
         game_timer_set(0x0A);                                // sub_1033B(0Ah)
         const int f = i % 8;                                 // `idiv 8` remainder, *0Ch entry stride
+        battle_fx_world_dim();                               // 454B3 + sub_454D5
         if (f < nframes) {
             const MagicFxFrame& fr = magic_frames_[(size_t)f];
             battle_fx_blit(f, fx + fr.xo, fy + fr.yo);       // sub_1FFFE
         }
-        battle_fx_present();                                 // 454B3 + 5E9E8
+        battle_fx_flush();                                   // sub_5EE51 above the dim
+        battle_fx_commit();                                  // sub_5E9E8
         wait_game_tick();                                    // sub_499E4
     }
     return 1;
@@ -129,11 +133,13 @@ int CombatII::battle_fx_2d684(int unit_index) {
         const int f = i / 2;                          // `(cx - sign)/2`
         const int dx = (int16_t)(fx + 0x32 - 5 * i);  // var_C(x)+32h-edi, edi += 5
         const int dy = (int16_t)(fy - 0x46 + 7 * i);  // var_4(y)-46h+esi, esi += 7
+        battle_fx_world_dim();                        // 454B3 + sub_454D5
         if (f < nframes) {
             const MagicFxFrame& fr = magic_frames_[(size_t)f];
             battle_fx_blit(f, dx + fr.xo, dy + fr.yo);        // sub_1FFFE
         }
-        battle_fx_present();                          // 454B3 + 5E9E8
+        battle_fx_flush();                            // sub_5EE51 above the dim
+        battle_fx_commit();                           // sub_5E9E8
         wait_game_tick();                             // sub_499E4
     }
     // sub_2D48A(14h)
@@ -147,11 +153,13 @@ int CombatII::battle_fx_2d684(int unit_index) {
     video_.present();
     for (int i = 5; i < 0x0B && !should_exit_; ++i) { // mov ecx,5 -> cmp cx,0Bh; jl
         game_timer_set(0x0F);                         // sub_1033B(0Fh)
+        battle_fx_world_dim();                        // 454B3 + sub_454D5
         if (i < nframes) {
             const MagicFxFrame& fr = magic_frames_[(size_t)i];
             battle_fx_blit(i, fx + fr.xo, fy + fr.yo);        // sub_1FFFE
         }
-        battle_fx_present();                          // 454B3 + 5E9E8
+        battle_fx_flush();                            // sub_5EE51 above the dim
+        battle_fx_commit();                           // sub_5E9E8
         wait_game_tick();                             // sub_499E4
     }
     battle_highlight_clear();                         // sub_44D75

@@ -95,11 +95,13 @@ int CombatII::battle_fx_2dd7a(int unit_index, int tx, int ty, int k) {
         game_timer_set(5);                                           // sub_1033B(5)
         --edi;                                                       // `dec edi`
         const int f = cx % 6;                                        // `idiv 6` remainder
+        battle_fx_world_dim();                                       // sub_454B3 + sub_454D5
         if (f < nframes) {
             const MagicFxFrame& fr = magic_frames_[(size_t)f];
             battle_fx_blit(f, x + fr.xo, y + fr.yo);                 // sub_1FFFE(eax=x, edx=y)
         }
-        battle_fx_present();                                         // sub_454B3 + sub_5E9E8
+        battle_fx_flush();                                           // sub_5EE51 above the dim
+        battle_fx_commit();                                          // sub_5E9E8
         wait_game_tick();                                            // sub_499E4
         --step;                                                      // `mov ebx,[var_8]; dec ebx`
                                                                      //  (read by stage 1 only, so

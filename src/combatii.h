@@ -623,6 +623,7 @@ private:
     void present_cutscene_frame();
     // ---- Original frame chain (the order the spell drivers call every frame) ----
     void battle_fx_world();      // sub_454B3: sub_10AEB + sub_12BEE + sub_4512E (map/units/weather)
+    void battle_fx_world_dim();  // sub_454B3 + sub_12E01 + sub_454D5 (dim before post-dim effects)
     void battle_fx_world_12d65();        // sub_10AEB + sub_12D65 (no unit pass, no weather)
     void battle_fx_world_454b3_12d65();  // sub_454B3 then sub_12D65 over it (276B9 step 2)
     void battle_fx_present_12d65();      // 10AEB+12D65 -> 12E01 -> 454D5 -> 5E9E8
