@@ -12,6 +12,31 @@
 #include <cstdio>
 #include <cstring>
 
+// The original leaves the target/confirm choice to each F13B0 handler:
+//   28982                   -> one 4A483 unit click (no 4A815)
+//   28B24 / 28C8A / 2B031  -> 4A483 centre click, then 4A815 confirm
+//   2A1C6 / 29722 / 29F4D / 2A75A / 2C36A -> 4A815 confirm at the caster
+//   2BC3B                   -> no cursor and no confirmation
+static MagicAimMode battle_magic_aim_mode(int r_code) {
+    const int q1 = (r_code < 0) ? -1 : r_code / 3;
+    switch (q1) {
+        case 26: // Revible (2BC3B)
+            return MagicAimMode::Immediate;
+        case 3: case 4: case 5: case 6:
+        case 10: case 11: case 12: case 13:
+        case 17: case 18: case 19: case 20:
+        case 24: case 25: case 27: case 33:
+        case 35: case 36: case 37: case 38: case 39: case 40: case 41:
+        case 45: case 48:
+            return MagicAimMode::ConfirmOnly;
+        case 2: case 9: case 16: case 22:
+        case 28: case 29: case 30: case 31: case 32: case 34: case 47:
+            return MagicAimMode::AreaCenter;
+        default:
+            return MagicAimMode::Single;
+    }
+}
+
 // sub_4C72A tail: read unk_74FA8 after the sub_4BFCA id normalization.
 // Returns the 1-based spell id, or 0 for an empty/non-base slot.
 static int battle_magic_ring_value(int g, int b, int c) {
@@ -2585,7 +2610,9 @@ bool CombatII::battle_quick_load_4fd25() {
     battle_item_select_ = false;
     battle_weapon_select_ = false;
     battle_magic_pending_r_ = -1;
-    battle_magic_confirm_2a75a_ = false;
+    battle_magic_aim_ = MagicAimMode::None;
+    battle_magic_confirm_ = false;
+    battle_magic_confirm_tx_ = battle_magic_confirm_ty_ = -1;
     battle_item_pending_dx_ = -1;
     if (battle_state_ == 1) battle_free_wait_ = true;
     if (h.version >= 3) {
@@ -3324,6 +3351,9 @@ void CombatII::battle_reset() {
     battle_item_select_ = false;
     battle_weapon_select_ = false;
     battle_magic_pending_r_ = -1;
+    battle_magic_aim_ = MagicAimMode::None;
+    battle_magic_confirm_ = false;
+    battle_magic_confirm_tx_ = battle_magic_confirm_ty_ = -1;
     battle_item_pending_dx_ = -1;
     // sub_18539 (F0382 clear) runs when the scenario loads (sub_4ED18), so battle_reset
     // (sub_19652) leaves it alone; battle_tile_load_events() fills tile events from
@@ -4231,9 +4261,12 @@ bool CombatII::battle_player_input() {
     // Back to the ring (si==0/-2): end the turn when TP < var18 (4DA7B), else redraw the
     // menu (4D7EA). No move diffusion is laid down here; E8 is the sub_1CC09 range.
     auto back_to_ring = [&]() {
+        if (should_exit_) return; // do not reopen the ring after a battle-ending cast
         battle_attack_cancel();
         battle_move_cancel();
-        battle_magic_confirm_2a75a_ = false;
+        battle_magic_confirm_ = false;
+        battle_magic_aim_ = MagicAimMode::None;
+        battle_magic_confirm_tx_ = battle_magic_confirm_ty_ = -1;
         battle_magic_pending_r_ = -1;
         battle_magic_select_ = false;
         battle_item_select_ = false;
@@ -4249,6 +4282,31 @@ bool CombatII::battle_player_input() {
             return;
         }
         battle_player_show_menu(ui); // 1CC09 + redraw the ring (4D7EA)
+    };
+    // Enter the exact targeting state of the selected F13B0 handler. The ring is
+    // hidden first (4C72A's 4B9D7); 4A815-only spells then show the confirm cursor at
+    // the caster, single/area spells wait for the 4A483 click, and Revible runs now.
+    auto begin_magic_aim = [&](int r, int cx, int cy) {
+        const MagicAimMode aim = battle_magic_aim_mode(r);
+        battle_magic_pending_r_ = r;
+        battle_magic_aim_ = aim;
+        battle_magic_confirm_ = false;
+        battle_magic_confirm_tx_ = battle_magic_confirm_ty_ = -1;
+        battle_magic_select_ = false;
+        ring_sub_close();
+        if (aim == MagicAimMode::Immediate) {
+            battle_cast_magic(ui, r, cx, cy);
+            if (battle_tp_changed() && (size_t)ui < units_.size())
+                units_[(size_t)ui].combat_acc57 = 0;
+            back_to_ring();
+            return;
+        }
+        battle_magic_select_ = true;
+        if (aim == MagicAimMode::ConfirmOnly) {
+            battle_magic_confirm_ = true;
+            battle_magic_confirm_tx_ = cx;
+            battle_magic_confirm_ty_ = cy;
+        }
     };
     // sub_4BA7F calls sub_4AC8A only when sub_102FF fires (30 ticks, 171 ms); a click
     // still runs it immediately. Gate the per-frame hover scan with the same cadence.
@@ -4337,9 +4395,11 @@ bool CombatII::battle_player_input() {
                     return true;
                 }
                 case SubRingKind::MagicD:
+                    ring_sub_close(); // 4C72A step-back runs 4B9D7 first
                     ring_sub_open(SubRingKind::MagicG, ui);
                     return true;
                 case SubRingKind::MagicK:
+                    ring_sub_close(); // 4C72A step-back runs 4B9D7 first
                     ring_sub_open(SubRingKind::MagicD, ui);
                     return true;
                 case SubRingKind::Item:
@@ -4420,9 +4480,11 @@ bool CombatII::battle_player_input() {
                         back_to_ring();
                         return false;
                     case SubRingKind::MagicD:
+                        ring_sub_close(); // 4C72A step-back runs 4B9D7 first
                         ring_sub_open(SubRingKind::MagicG, ui);
                         return false;
                     case SubRingKind::MagicK:
+                        ring_sub_close(); // 4C72A step-back runs 4B9D7 first
                         ring_sub_open(SubRingKind::MagicD, ui);
                         return false;
                     case SubRingKind::Item:
@@ -4468,6 +4530,7 @@ bool CombatII::battle_player_input() {
                     ring_sub_magic_g_ = opt - 1;
                     if (battle_trace_)
                         fprintf(stderr, "COMBAT: magic a=%d g=%d (4C72A level 1)\n", opt, ring_sub_magic_g_);
+                    ring_sub_close(); // 4C72A: 4B9D7 before the next 4B8EB
                     ring_sub_open(SubRingKind::MagicD, ui);
                     return false;
                 }
@@ -4477,10 +4540,15 @@ bool CombatII::battle_player_input() {
                     if (battle_trace_)
                         fprintf(stderr, "COMBAT: magic g=%d id=%d b=%d (4C72A level 2)\n",
                                 ring_sub_magic_g_, opt, ring_sub_magic_d_);
+                    ring_sub_close(); // 4C72A: 4B9D7 before the next 4B8EB
                     ring_sub_open(SubRingKind::MagicK, ui);
                     return false;
                 }
                 case SubRingKind::MagicK: {
+                    // 4C72A runs 4B9D7 right after 4BA7F, before 4C605's Wrong Spell /
+                    // No TP! / No MP! returns. Hide the level-3 ring first so those
+                    // labels appear over the map, not over the ring.
+                    ring_sub_close();
                     // sub_4C72A: id 0 -> c=7, ids 15..21 -> c=0..6; then unk_74FA8.
                     const int g = ring_sub_magic_g_, b = ring_sub_magic_d_;
                     const int c = (opt == 0) ? 7 : opt - 15;
@@ -4528,27 +4596,9 @@ bool CombatII::battle_player_input() {
                         back_to_ring();
                         return false;
                     }
-                    // The 2A75A family (Meteor, Star Tearer, Mega Thunder, Heal Wind, Sun
-                    // Light) has no 28982/4A483 target cursor in the original, but sub_2A75A
-                    // still runs sub_4A815 in manual mode: wait for that confirm before the
-                    // cast (cancel returns -1 and 4C605 spends nothing).
-                    const int q1_direct = r / 3;
-                    if (q1_direct == 6 || q1_direct == 13 || q1_direct == 20 ||
-                        q1_direct == 25 || q1_direct == 27) {
-                        // sub_2A75A calls sub_4A815 in manual mode (dword_74492 == 0) and
-                        // returns -1 on cancel; defer the cast until the confirm.
-                        battle_magic_confirm_2a75a_ = true;
-                        battle_magic_pending_r_ = r;
-                        battle_magic_select_ = true;
-                        ring_sub_close();
-                        return false;
-                    }
-                    battle_magic_pending_r_ = r;
-                    // After R is fixed, wait for the target click: close the sub-ring and
-                    // let the map click path take over (the original's 4C605 opens the
-                    // cursor once 4C72A returns R).
-                    ring_sub_close();
-                    // battle_magic_select_ stays set (waiting for a target).
+                    // The selected handler decides whether it needs 4A483, 4A815,
+                    // both, or neither. Enter that aim state before hiding the ring.
+                    begin_magic_aim(r, (int)(int8_t)u.x, (int)(int8_t)u.y);
                     return false;
                 }
                 case SubRingKind::Item: {
@@ -4744,6 +4794,19 @@ bool CombatII::battle_player_input() {
         back_to_ring();
         return true;
     }
+    // 4A483 target cancellation (right click/1Bh/3 -> -1): a single-target or area
+    // centre selection returns to the ring without spending MP/TP. The 4A815 confirm
+    // state above handles its own cancel path.
+    if (battle_magic_select_ && !battle_magic_confirm_ &&
+        battle_magic_pending_r_ >= 0 && input_.get_mouse().right_clicked) {
+        if (battle_trace_) fprintf(stderr, "COMBAT: 4A483 right-cancel unit=%d R=%d\n",
+                                    u.id, battle_magic_pending_r_);
+        battle_magic_select_ = false;
+        battle_magic_pending_r_ = -1;
+        battle_magic_aim_ = MagicAimMode::None;
+        back_to_ring();
+        return true;
+    }
     {
         const MouseState& mst = input_.get_mouse();
         if (mst.right_clicked && !battle_magic_select_ && !battle_item_select_ && !battle_weapon_select_) {
@@ -4753,28 +4816,57 @@ bool CombatII::battle_player_input() {
         }
     }
 
-    // sub_4A815 confirm for the sub_2A75A family (manual cast only): Enter/left click
-    // continues, Esc/right click returns to the ring without spending MP/TP.
-    if (battle_magic_confirm_2a75a_) {
+    // sub_4A815 confirm: Enter/left click continues; Esc/right click cancels. For a
+    // 28B24/28C8A/2B031 area centre the cancel returns to the 4A483 centre cursor,
+    // while a caster-only confirm returns to the ring.
+    if (battle_magic_confirm_) {
         const MouseState& cm = input_.get_mouse();
         const bool ok = input_.was_left_clicked() || input_.is_key_pressed(SDLK_RETURN) ||
                         input_.is_key_pressed(SDLK_KP_ENTER);
         const bool cancel = input_.is_key_pressed(SDLK_ESCAPE) || cm.right_clicked;
         if (!ok && !cancel) return true;
         const int r = battle_magic_pending_r_;
-        battle_magic_confirm_2a75a_ = false;
-        battle_magic_pending_r_ = -1;
-        battle_magic_select_ = false;
+        const MagicAimMode aim = battle_magic_aim_;
+        const int ctx = battle_magic_confirm_tx_;
+        const int cty = battle_magic_confirm_ty_;
+        battle_magic_confirm_ = false;
+        battle_magic_confirm_tx_ = battle_magic_confirm_ty_ = -1;
         if (cancel) {
-            if (battle_trace_) fprintf(stderr, "COMBAT: 4A815 cancelled R=%d unit=%d\n", r, u.id);
+            if (battle_trace_)
+                fprintf(stderr, "COMBAT: 4A815 cancelled R=%d unit=%d area=%d\n",
+                        r, u.id, aim == MagicAimMode::AreaCenter ? 1 : 0);
+            if (aim == MagicAimMode::AreaCenter) {
+                // 28B24/28C8A/2B031 jump back to 4A483, keeping R and the area mode.
+                battle_magic_select_ = true;
+                battle_magic_aim_ = MagicAimMode::AreaCenter;
+                return true;
+            }
+            battle_magic_select_ = false;
+            battle_magic_pending_r_ = -1;
+            battle_magic_aim_ = MagicAimMode::None;
             back_to_ring();
             return true;
         }
-        const int cx = (int)(int8_t)u.x, cy = (int)(int8_t)u.y;
-        battle_cast_magic(ui, r, cx, cy);
-        if (battle_tp_changed() && (size_t)ui < units_.size())
-            units_[(size_t)ui].combat_acc57 = 0; // 83317
-        back_to_ring();
+        const int si = battle_cast_magic(ui, r, ctx, cty);
+        if (si == 0) {
+            battle_magic_select_ = false;
+            battle_magic_pending_r_ = -1;
+            battle_magic_aim_ = MagicAimMode::None;
+            if (battle_tp_changed() && (size_t)ui < units_.size())
+                units_[(size_t)ui].combat_acc57 = 0; // 83317
+            back_to_ring();
+        } else if (si == 3 && aim == MagicAimMode::AreaCenter) {
+            // The area listing was empty: 28B24 loops back to its centre cursor.
+            if (battle_trace_) fprintf(stderr, "COMBAT: area centre R=%d has no targets, reselect\n", r);
+            battle_magic_select_ = true;
+            battle_magic_pending_r_ = r;
+            battle_magic_aim_ = MagicAimMode::AreaCenter;
+        } else {
+            battle_magic_select_ = false;
+            battle_magic_pending_r_ = -1;
+            battle_magic_aim_ = MagicAimMode::None;
+            back_to_ring();
+        }
         return true;
     }
     // Esc: cancels a selection back to the ring, or cancels the menu (-1) to free wait.
@@ -4864,20 +4956,37 @@ bool CombatII::battle_player_input() {
             back_to_ring();
             return false;
         }
-        // Magic target selection (manual sub_28982 path: click after R is fixed).
+        // Magic target selection: 4A483 unit click for 28982, or the centre click
+        // that opens 4A815 for 28B24/28C8A/2B031.
         if (battle_magic_select_) {
-            if (battle_magic_pending_r_ < 0) return false; // waiting for a spell number (ignore click)
+            if (battle_magic_pending_r_ < 0) return false; // ignore a click before R is fixed
             const int rc = battle_magic_pending_r_;
+            const MagicAimMode aim = battle_magic_aim_mode(rc);
+            if (aim == MagicAimMode::AreaCenter) {
+                battle_magic_aim_ = aim;
+                battle_magic_confirm_ = true;
+                battle_magic_confirm_tx_ = tx;
+                battle_magic_confirm_ty_ = ty;
+                if (battle_trace_)
+                    fprintf(stderr, "COMBAT: 4A483 area centre R=%d tile=(%d,%d) -> 4A815\n",
+                            rc, tx, ty);
+                return false;
+            }
             const int si = battle_cast_magic(ui, rc, tx, ty);
             if (si == 0) {
                 battle_magic_select_ = false;
                 battle_magic_pending_r_ = -1;
+                battle_magic_aim_ = MagicAimMode::None;
                 if (battle_tp_changed() && (size_t)ui < units_.size()) units_[(size_t)ui].combat_acc57 = 0; // 83317
                 back_to_ring();
             } else if (si == 3) {
-                // Retarget: the magic target cursor (sub_28982 -> sub_4A483) continues.
+                // 28982 keeps its 4A483 cursor after an invalid target.
             } else {
-                battle_magic_pending_r_ = -1; // keep the failure message, reselect the spell
+                // Any other handler result skips the 4C605 cost and returns to 4D674.
+                battle_magic_select_ = false;
+                battle_magic_pending_r_ = -1;
+                battle_magic_aim_ = MagicAimMode::None;
+                back_to_ring();
             }
             return false;
         }
@@ -5064,20 +5173,9 @@ bool CombatII::battle_player_input() {
     for (int k = 0; k < 7; ++k) {
         if (!input_.is_test_key_pressed((SDL_Keycode)(SDLK_1 + k))) continue;
         if (battle_magic_select_ && (size_t)k < battle_magic_options_.size()) {
-            battle_magic_pending_r_ = battle_magic_options_[(size_t)k];
-            const int r = battle_magic_pending_r_;
+            const int r = battle_magic_options_[(size_t)k];
             if (battle_trace_) fprintf(stderr, "COMBAT: magic pick unit=%d R=%d %s\n", u.id, r, kSpellNames[r]);
-            // 2A75A spells skip the 28982/4A483 target cursor but still require the manual
-            // sub_4A815 confirm (see the MagicK case).
-            const int q1_direct = r / 3;
-            if (q1_direct == 6 || q1_direct == 13 || q1_direct == 20 ||
-                q1_direct == 25 || q1_direct == 27) {
-                // sub_2A75A -> sub_4A815 confirm (manual cast); no MP/TP is spent on cancel.
-                battle_magic_confirm_2a75a_ = true;
-                battle_magic_pending_r_ = r;
-                battle_magic_select_ = true;
-                ring_sub_close();
-            }
+            begin_magic_aim(r, (int)(int8_t)u.x, (int)(int8_t)u.y);
             return false;
         }
         if (battle_item_select_ && (size_t)k < battle_item_options_.size()) {
@@ -5148,6 +5246,15 @@ void CombatII::render_player_move_overlay() {
     if (battle_ring_dim_active()) {
         draw_speaker_frame(battle_player_unit_);
         battle_render_ring_panels(battle_player_unit_);
+        // sub_4C72A draws "MP %d" at x=60h on every magic-ring stage; y is 1Eh or C2h
+        // depending on whether the ring centre is above/below A0h.
+        if ((ring_subkind_ == SubRingKind::MagicG || ring_subkind_ == SubRingKind::MagicD ||
+             ring_subkind_ == SubRingKind::MagicK) && ring_sub_open_) {
+            char mp[16];
+            snprintf(mp, sizeof(mp), "MP %d", (int)(int16_t)u.combat_mp_50);
+            const int mp_y = ring_sub_center_y_ < 0xA0 ? 0xC2 : 0x1E;
+            draw_small_text(0x60, mp_y, mp, 0xFF, 1);
+        }
     }
     if (battle_atk_phase_ != 0) {
         // render_attack_range() draws the range shading behind the tiles; only the cursor
@@ -5203,9 +5310,11 @@ void CombatII::render_player_move_overlay() {
         }
         return;
     }
-    if (battle_magic_confirm_2a75a_) {
-        // sub_4A815 cursor on the caster tile: the confirm loop draws a 1x1 frame.
-        const int tx = (int)(int8_t)u.x, ty = (int)(int8_t)u.y;
+    if (battle_magic_confirm_) {
+        // sub_4A815 cursor: the selected area centre, or the caster for a
+        // confirmation-only handler. The confirm loop draws a 1x1 frame.
+        const int tx = battle_magic_confirm_tx_ >= 0 ? battle_magic_confirm_tx_ : (int)(int8_t)u.x;
+        const int ty = battle_magic_confirm_ty_ >= 0 ? battle_magic_confirm_ty_ : (int)(int8_t)u.y;
         const int x0 = (tx - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X;
         const int y0 = (ty - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y;
         auto put = [&](int x, int y) {
@@ -5600,6 +5709,9 @@ bool CombatII::battle_player_enter_ring(int unit_index) {
     battle_item_select_ = false;
     battle_weapon_select_ = false;
     battle_magic_pending_r_ = -1;
+    battle_magic_aim_ = MagicAimMode::None;
+    battle_magic_confirm_ = false;
+    battle_magic_confirm_tx_ = battle_magic_confirm_ty_ = -1;
     battle_item_pending_dx_ = -1;
     // sub_455BD: when the mouse covers the HUD panel at ring entry, move the panel to
     // another slot. Original call sites: 78827 (sub_4A483 destination cursor loop -
@@ -5646,6 +5758,9 @@ void CombatII::battle_ring_cancel_to_free(int unit_index) {
     battle_item_select_ = false;
     battle_weapon_select_ = false;
     battle_magic_pending_r_ = -1;
+    battle_magic_aim_ = MagicAimMode::None;
+    battle_magic_confirm_ = false;
+    battle_magic_confirm_tx_ = battle_magic_confirm_ty_ = -1;
     battle_item_pending_dx_ = -1;
     battle_used_bits_ = 0;
     battle_var24_action_end_ = false;
@@ -6243,6 +6358,9 @@ void CombatII::battle_player_end_turn(bool action_end) {
     battle_magic_select_ = false;
     battle_item_select_ = false;
     battle_magic_pending_r_ = -1;
+    battle_magic_aim_ = MagicAimMode::None;
+    battle_magic_confirm_ = false;
+    battle_magic_confirm_tx_ = battle_magic_confirm_ty_ = -1;
     battle_item_pending_dx_ = -1;
     battle_used_bits_ = 0;
     battle_var24_action_end_ = false;
@@ -8294,7 +8412,10 @@ int CombatII::battle_spell_2a1c6(int unit_index, int kind, int k) {
     if (kind == 4) radius -= 2;
     const int mode = (kind == 4) ? 0 : 1;                        // 28A97 filter (1201D result)
     std::vector<int> targets = battle_spell_diamond(unit_index, cx, cy, radius, mode);
-    if (targets.empty()) return 3;
+    // Manual 2A1C6 still runs 4A815, announces and returns 1 even when the
+    // diamond is empty (4C605 then spends MP/TP). Only the AI target collector
+    // fails early with -1 when it has no target.
+    if (targets.empty() && battle_spell_auto_) return 3;
     battle_spell_announce(unit_index, battle_spell_name_);       // sub_28889
     if (should_exit_) return 0;
     switch (kind) {
@@ -8793,6 +8914,10 @@ int CombatII::battle_spell_field(int unit_index, int g, int k, int tx, int ty) {
         for (int dy = -rad; dy <= rad; ++dy) {
             const int half = rad - (dy < 0 ? -dy : dy);
             for (int dx = -half; dx <= half; ++dx) add_victim(tx + dx, ty + dy);
+        }
+        if (victims.empty()) {
+            if (battle_trace_) fprintf(stderr, "COMBAT: field diamond empty unit=%d tile=(%d,%d)\n", u.id, tx, ty);
+            return 3;                                        // 28B24 loops back to 4A483
         }
     }
     battle_spell_announce(unit_index, battle_spell_name_);        // 29514 -> sub_28889
@@ -9723,8 +9848,9 @@ void CombatII::render_magic_effect_layer() {
 }
 
 // sub_4C605 + F13B0: validate R -> pick target -> run -> spend MP -> drain TP.
-// Returns 0 = done (back to the ring), 3 = pick another target, 4 = show a failure label
-// and stay in selection.
+// Returns 0 = done, 3 = the handler wants its target/area cursor again, 4 = failure.
+// The caller keeps the 4A483 cursor on 3 for 28982 and loops the 4A483 centre for
+// 28B24/28C8A/2B031; every failure returns to 4D674 (the ring).
 // The handler table follows the order sub_2C643 writes into dword_F13B0[49]:
 //   q1 = g*7+d -> {row 0: 2B73F,2B74A,2B75A,2B79C,2B7C0,2B7DC,2B822},
 //   {row 1: 2B82D,2B83D,2B848,2B86C,2B890,2B8A6,2B8F3},

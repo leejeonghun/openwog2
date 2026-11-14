@@ -21,6 +21,17 @@
 #include "combatii_range.h"
 #include "combatii_move.h"
 
+// sub_4C605 handler targeting mode. Single = 4A483 unit cursor; AreaCenter =
+// 4A483 centre cursor followed by the 4A815 confirm; ConfirmOnly = 4A815
+// confirmation at the caster; Immediate = no cursor/confirmation.
+enum class MagicAimMode : uint8_t {
+    None,
+    Single,
+    AreaCenter,
+    ConfirmOnly,
+    Immediate,
+};
+
 // ==== COMBATII: battle scenario module ====
 // Pre-battle cutscenes, map rendering and scrolling, sprites, portraits and dialogue,
 // plus the tactical battle driven by SCE scripts and the AI.
@@ -2027,8 +2038,11 @@ private:
     std::vector<int> battle_magic_options_;  // R codes (g*21+d*3+k) for the 7 entries of the current page
     std::vector<int> battle_magic_groups_;   // learned groups; replaces the level-3 4C72A pick (M pages through them)
     int battle_magic_page_ = 0;              // current group page
-    int battle_magic_pending_r_ = -1;        // chosen R waiting for a target click (-1 = none)
-    bool battle_magic_confirm_2a75a_ = false; // sub_2A75A manual sub_4A815 confirm pending
+    int battle_magic_pending_r_ = -1;        // chosen R waiting for a target/confirm (-1 = none)
+    MagicAimMode battle_magic_aim_ = MagicAimMode::None;
+    bool battle_magic_confirm_ = false;      // sub_4A815 confirmation is on screen
+    int battle_magic_confirm_tx_ = -1;       // 4A815 cursor tile (area centre or caster)
+    int battle_magic_confirm_ty_ = -1;
     bool battle_item_select_ = false;        // item selection in progress (sub_4CDBD)
     std::vector<int> battle_item_options_;   // dx list (sub_4C19D order), 7 entries of the current page
     std::vector<int> battle_item_full_options_; // full dx list, kept for page changes
