@@ -9343,34 +9343,46 @@ void CombatII::battle_spell_2c8a4(int effect) {
     }
     const int left = cam_tile_x_, top = cam_tile_y_;
     const int right = left + 12, bottom = top + 12;
-    int hit = 0;
-    for (size_t i = 0; i < units_.size(); ++i) {
-        CombatUnitPlacement& t = units_[i];
-        if (!t.active || t.hp <= 0) continue;
+    // ASM 39419..39490: walk the four CC968 army chains in list order (no caster skip),
+    // prepare 45BFB/45ED2 for every unit inside the camera box, subtract [48h], and then
+    // let 287AF animate the whole F0648 list.
+    std::vector<int> order;
+    for (int army = 1; army <= 4; ++army) {
+        std::vector<int> bucket;
+        for (int i = 0; i < (int)units_.size(); ++i) {
+            const auto& u = units_[(size_t)i];
+            if (u.active && u.hp > 0 && battle_effective_army(u) == army) bucket.push_back(i);
+        }
+        std::stable_sort(bucket.begin(), bucket.end(), [&](int a, int b) {
+            return units_[(size_t)a].list_seq < units_[(size_t)b].list_seq;
+        });
+        order.insert(order.end(), bucket.begin(), bucket.end());
+    }
+    std::vector<BattleDamageFx> fx;
+    std::vector<int> targets;
+    for (int ti : order) {
+        CombatUnitPlacement& t = units_[(size_t)ti];
         const int tx = (int)(int8_t)t.x, ty = (int)(int8_t)t.y;
         if (tx < left || tx >= right || ty < top || ty >= bottom) continue;
         int def = (int)t.combat_def59;
         if (t.combat_flags_15 & 0x20) def += 20;             // `test dl,20h; add eax,14h`
         const int dmg = (100 - def) * 10000 / 100;           // imul 2710h; idiv 64h
-        const int new_raw = battle_hp_raw(t) - dmg;
-        const int new_hp = new_raw <= 0 ? 0 : (new_raw + 99) / 100;
-        const int delta = new_hp - t.hp;
-        t.hp = new_hp;
-        t.hp_deficit = new_hp > 0 ? new_hp * 100 - new_raw : 0;
-        ++hit;
+        const size_t before = fx.size();
+        // 45BFB + 45ED2: the ASM passes the target's own [+63h] facing as the knockback
+        // direction, so the target itself doubles as the "caster" here.
+        battle_damage_fx_prepare(ti, ti, (int)fx.size(), dmg, fx);
+        if (fx.size() == before) continue;
+        targets.push_back(ti);
         if (battle_trace_)
             fprintf(stderr, "COMBAT: 2C8A4 meteor unit=%d def=%d dmg=%d hp=%d (%d,%d)\n",
-                    t.id, def, dmg, new_hp, tx, ty);
-        (void)delta;
+                    t.id, def, dmg, t.hp, tx, ty);
     }
-    // 287AF (hit pacing) -> 12124 on the list -> 1ED90 (ASM 39502 calls it with eax=0).
-    // The port still applies the 2C8A4 HP damage directly (no 45BFB/45ED2 hit list), so
-    // the shared pace is a no-op when no hits are queued; the full-list settlement below
-    // is the same tail call the ASM makes.
-    if (hit > 0) battle_spell_pace_287af();
+    // 287AF (45F29/45CCB, period 3) -> 12124 on the F0648 list -> 1ED90 (eax=0).
+    if (!fx.empty()) battle_damage_fx_play(fx, targets);
     battle_spell_1ed90_settle(-1);
     if (battle_trace_)
-        fprintf(stderr, "COMBAT: 2C8A4 effect=%d targets=%d camera=(%d,%d)\n", effect, hit, left, top);
+        fprintf(stderr, "COMBAT: 2C8A4 effect=%d targets=%zu camera=(%d,%d)\n",
+                effect, fx.size(), left, top);
 }
 
 // F13B0 driver replacement: play SSP -> NSP frame loop (period 3) -> 287AF pacing ->
