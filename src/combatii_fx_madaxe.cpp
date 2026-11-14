@@ -38,7 +38,7 @@ int CombatII::battle_fx_2dfc1(int unit_index, int k) {
     cy -= 3;                                                        // `mov edx,[var_8]; sub edx,3`
     // (2) load the sprite table and play the sound
     if (!battle_nsp_load("madaxe.nsp") || magic_frames_.empty()) return 0;  // sub_1FEA4
-    battle_ssp_play("i-fist.ssp");                                  // sub_4F460("i-fist.ssp", 32h)
+    battle_ssp_play("i-fist.ssp", 0x32);                            // sub_4F460("i-fist.ssp", 32h)
     // (3) sub_2D4EB: timer 0x19, poses 7 and 8
     game_timer_set(0x19);                                           // sub_1033B(19h)
     for (int i = 0; i < 2 && !should_exit_; ++i) {

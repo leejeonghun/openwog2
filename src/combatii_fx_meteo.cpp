@@ -35,7 +35,7 @@
 //     (same frame result).
 //   - the original records the camera shake per meteor and applies it to the NEXT frame's
 //     454B3; the port applies the last value to the same frame (one-frame phase shift).
-//   - the caller (sub_2A75A) passes a 13x13 sweep coordinate, while the port centres 1124A on
+//   - the caller (sub_2A75A) passes a 12x12 sweep coordinate, while the port centres 1124A on
 //     the target tile (tx, ty).
 #include "combatii.h"
 #include "combatii_internal.h"

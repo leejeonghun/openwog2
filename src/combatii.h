@@ -2028,6 +2028,7 @@ private:
     std::vector<int> battle_magic_groups_;   // learned groups; replaces the level-3 4C72A pick (M pages through them)
     int battle_magic_page_ = 0;              // current group page
     int battle_magic_pending_r_ = -1;        // chosen R waiting for a target click (-1 = none)
+    bool battle_magic_confirm_2a75a_ = false; // sub_2A75A manual sub_4A815 confirm pending
     bool battle_item_select_ = false;        // item selection in progress (sub_4CDBD)
     std::vector<int> battle_item_options_;   // dx list (sub_4C19D order), 7 entries of the current page
     std::vector<int> battle_item_full_options_; // full dx list, kept for page changes
@@ -2101,7 +2102,7 @@ private:
     std::vector<int> battle_spell_2a500_extras(int caster_index, const std::vector<int>& listed,
                                                int base, int p1, int p2);            // sub_2A500
     void battle_spell_1ed45_targets(int caster_index, const std::vector<int>& targets); // sub_1ED45 loop
-    void battle_spell_1ed90_settle(int caster_index, const std::vector<int>& units); // sub_1ED90 (settle units outside the list)
+    void battle_spell_1ed90_settle(int caster_index); // sub_1ED90 (caster -1 = ASM eax 0: all four chains)
     // Handlers whose NSP driver and 287AF run in battle_magic_fx queue their post-287AF work
     // here: 12124(caster) before 287AF, then 29437 and 1ED45 after it, in ASM order.
     void battle_spell_defer_settle(int caster_index, const std::vector<int>& targets);
@@ -2225,8 +2226,8 @@ private:
     std::vector<DrawEntry> highlight_draws_;
     bool battle_nsp_load(const char* name);    // sub_1FEA4 (MAGICSPR\<name>)
     void battle_nsp_release();                 // sub_1FFCD (release the table)
-    void battle_ssp_play(const char* name);    // sub_4F460 (play MAGICSPR\<name>)
-    const char* battle_spell_ssp(int r_code) const;   // SSP the handler loads through 4F460
+    void battle_ssp_play(const char* name, int id);   // sub_4F460 (load into slot id+1)
+    void battle_spell_load_ssps(int r_code);          // all 4F460 loads of the handler
     const char* battle_spell_nsp(int r_code) const;   // NSP that handler's driver loads through 1FEA4
     void battle_spell_pace_287af();            // sub_287AF (24-frame hit, pose reset, cadence restore)
     void battle_spell_2c8a4(int effect);        // sub_2C8A4 (VM spell >= 0x64 screen damage)

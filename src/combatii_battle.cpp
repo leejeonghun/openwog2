@@ -483,29 +483,6 @@ void CombatII::sfx(int id) {
     }
 }
 
-// 4F460's id argument per SSP name (the load sites pass 32h/33h/34h). Kept as a name table
-// because the port's effect drivers call battle_ssp_play with the file name only.
-static int battle_ssp_slot_id_for_name(const char* name) {
-    struct Ent { const char* name; int id; };
-    static const Ent kMap[] = {
-        {"f-arrow.ssp", 0x32}, {"f-wave.ssp", 0x33}, {"f-blast.ssp", 0x32},
-        {"f-meteo1.ssp", 0x32}, {"f-meteo2.ssp", 0x33}, {"promi-1.ssp", 0x32},
-        {"promi-2.ssp", 0x33}, {"cure.ssp", 0x33}, {"i-star.ssp", 0x33},
-        {"regen.ssp", 0x32}, {"i-fist.ssp", 0x33}, {"thunder3.ssp", 0x32},
-        {"bolt1.ssp", 0x33}, {"elect.ssp", 0x34}, {"thunder1.ssp", 0x34},
-        {"heal.ssp", 0x32}, {"sun1.ssp", 0x32}, {"sun2.ssp", 0x33},
-        {"sun.ssp", 0x34}, {"enchant.ssp", 0x32}, {"f-field.ssp", 0x32},
-        {"m-wind.ssp", 0x32}, {"i-shoot.ssp", 0x32}, {"i-piece.ssp", 0x32},
-        {"pierce.ssp", 0x33}, {"fire.ssp", 0x32}, {"death1.ssp", 0x32},
-        {"bomb.ssp", 0x33}, {"assist-u.ssp", 0x32}, {"assist-d.ssp", 0x32},
-        {"poison.ssp", 0x32}, {"b-hole.ssp", 0x32}, {"atomic.ssp", 0x32},
-        {"dragon.ssp", 0x32}, {"summon.ssp", 0x33}, {"recall.ssp", 0x32},
-    };
-    if (!name) return 0x32;
-    for (const Ent& e : kMap) if (strcmp(e.name, name) == 0) return e.id;
-    return 0x32;
-}
-
 // sub_135EB: screen centre of a unit's (facing, pose 0) frame.
 //   x = sub_10971(tile x) + 12 + entry[4] + entry[2]/2
 //   y = sub_10988(tile y) + 2 + entry[5] + entry[3]/2
@@ -1706,12 +1683,15 @@ void CombatII::battle_queue_spell_hit(int caster_index, int target_index, int dm
     battle_spell_hits_.push_back(p);
 }
 
-// sub_45CCB: digit y animation (f<5 moves all digits by -2, 5..19 bounces one digit by +2,
-// f>=20 moves all by +2). The caller mutates SpellHitPending::digit_y each frame.
+// sub_45CCB: digit y animation (f<5 lowers digit 0 by 2, 5..19 moves digit k by +2 and
+// digit k+1 by -2, f>=20 raises digit 3 by +2). The caller mutates digit_y each frame.
 void CombatII::battle_draw_hp_digits(const SpellHitPending& p) {
     if (p.ndig <= 0) return;
-    const int x0 = p.sx0 + 12 - p.ndig * 3;
-    if (x0 - 16 < 0 || x0 - 16 >= 0x120) return;
+    // sub_45CCB draws a 4-cell field from the unit's x and advances 6px per cell; the
+    // digits occupy the rightmost cells, so the first visible digit is at 6*(4-ndig).
+    const int ndig4 = std::min(p.ndig, 4);
+    const int x0 = p.sx0 + 6 * (4 - ndig4);
+    if (p.sx0 - 16 < 0 || p.sx0 - 16 >= 0x120) return;
     uint8_t* bb = video_.get_backbuffer();
     char one[2] = {0, 0};
     for (int k = 0; k < p.ndig && k < 4; k++) {
@@ -1774,15 +1754,16 @@ void CombatII::play_hp_change(const VmEvent& ev) {
     game_timer_set(5);
     for (int f = 0; f < 0x19 && !should_exit_ && !skip_cutscene_; f++) {
         apply_knockback_hit(U, 0, f);                      // sub_45F29(U, 0, f)
-        // sub_45CCB(U, f, color): digit y animation - f<5 moves all digits by -2, 5..19 bounces one
-        // digit by +2, f>=20 moves all by +2.
-        if (f < 5) for (int k = 0; k < 5; k++) digit_y[k] -= 2;
-        else if (f >= 0x14) for (int k = 0; k < 5; k++) digit_y[k] += 2;
-        else { const int k = (f - 5) / 5; if (k < 5) digit_y[k] += 2; }
+        // sub_45CCB: f<5 lowers digit 0 by 2, f>=20 raises digit 3 by 2, otherwise
+        // digit k += 2 and digit k+1 -= 2.
+        if (f < 5) digit_y[0] -= 2;
+        else if (f >= 0x14) digit_y[3] += 2;
+        else { const int k = (f - 5) / 5; if (k < 3) { digit_y[k] += 2; digit_y[k + 1] -= 2; } }
         render_battle_frame();
         {
-            const int x0 = sx0 + 12 - ndig * 3;
-            if (x0 - 16 >= 0 && x0 - 16 < 0x120) {
+            const int ndig4 = std::min(ndig, 4);
+            const int x0 = sx0 + 6 * (4 - ndig4);   // sub_45CCB: right-aligned 4-cell field
+            if (sx0 - 16 >= 0 && sx0 - 16 < 0x120) {
                 uint8_t* bb = video_.get_backbuffer();
                 char one[2] = {0, 0};
                 for (int k = 0; k < ndig && k < 4; k++) {
@@ -2571,6 +2552,7 @@ bool CombatII::battle_quick_load_4fd25() {
     battle_item_select_ = false;
     battle_weapon_select_ = false;
     battle_magic_pending_r_ = -1;
+    battle_magic_confirm_2a75a_ = false;
     battle_item_pending_dx_ = -1;
     if (battle_state_ == 1) battle_free_wait_ = true;
     if (h.version >= 3) {
@@ -3592,16 +3574,8 @@ void CombatII::battle_status_damage_anim(const std::vector<std::pair<int,int>>& 
         if (t.first < 0 || (size_t)t.first >= units_.size()) continue;
         reset_unit_pose(units_[(size_t)t.first]);            // sub_12124
     }
-    // sub_1ED90: per army list, HP <= 0 calls sub_1DB1D (killer 0), else sub_53797 (mode 1).
-    for (const auto& t : targets) {
-        if (should_exit_) return;
-        const int ti = t.first;
-        if (ti < 0 || (size_t)ti >= units_.size()) continue;
-        auto& u = units_[(size_t)ti];
-        if (!u.active) continue;
-        if (battle_hp_raw(u) <= 0) play_unit_death(ti, -1);
-        else run_unit_hp_trigger(ti, -1, 1);
-    }
+    // sub_1ED90 (ASM 14507 calls it with eax=0): all four army chains, killer null.
+    battle_spell_1ed90_settle(-1);
 }
 
 // ---- sub_1767E / 176F1 / 1796B / 184F9 / 17A20: level-up and kill rewards ----
@@ -4226,6 +4200,8 @@ bool CombatII::battle_player_input() {
     auto back_to_ring = [&]() {
         battle_attack_cancel();
         battle_move_cancel();
+        battle_magic_confirm_2a75a_ = false;
+        battle_magic_pending_r_ = -1;
         battle_magic_select_ = false;
         battle_item_select_ = false;
         battle_weapon_select_ = false;
@@ -4520,18 +4496,18 @@ bool CombatII::battle_player_input() {
                         return false;
                     }
                     // The 2A75A family (Meteor, Star Tearer, Mega Thunder, Heal Wind, Sun
-                    // Light) has no 28982/4A483 target cursor in the original: 4C605 calls
-                    // the handler immediately. Cast here instead of waiting for a click.
+                    // Light) has no 28982/4A483 target cursor in the original, but sub_2A75A
+                    // still runs sub_4A815 in manual mode: wait for that confirm before the
+                    // cast (cancel returns -1 and 4C605 spends nothing).
                     const int q1_direct = r / 3;
                     if (q1_direct == 6 || q1_direct == 13 || q1_direct == 20 ||
                         q1_direct == 25 || q1_direct == 27) {
-                        battle_magic_select_ = false;
-                        battle_magic_pending_r_ = -1;
+                        // sub_2A75A calls sub_4A815 in manual mode (dword_74492 == 0) and
+                        // returns -1 on cancel; defer the cast until the confirm.
+                        battle_magic_confirm_2a75a_ = true;
+                        battle_magic_pending_r_ = r;
+                        battle_magic_select_ = true;
                         ring_sub_close();
-                        battle_cast_magic(ui, r, -1, -1);
-                        if (battle_tp_changed() && (size_t)ui < units_.size())
-                            units_[(size_t)ui].combat_acc57 = 0;
-                        back_to_ring();
                         return false;
                     }
                     battle_magic_pending_r_ = r;
@@ -4744,6 +4720,30 @@ bool CombatII::battle_player_input() {
         }
     }
 
+    // sub_4A815 confirm for the sub_2A75A family (manual cast only): Enter/left click
+    // continues, Esc/right click returns to the ring without spending MP/TP.
+    if (battle_magic_confirm_2a75a_) {
+        const MouseState& cm = input_.get_mouse();
+        const bool ok = input_.was_left_clicked() || input_.is_key_pressed(SDLK_RETURN) ||
+                        input_.is_key_pressed(SDLK_KP_ENTER);
+        const bool cancel = input_.is_key_pressed(SDLK_ESCAPE) || cm.right_clicked;
+        if (!ok && !cancel) return true;
+        const int r = battle_magic_pending_r_;
+        battle_magic_confirm_2a75a_ = false;
+        battle_magic_pending_r_ = -1;
+        battle_magic_select_ = false;
+        if (cancel) {
+            if (battle_trace_) fprintf(stderr, "COMBAT: 4A815 cancelled R=%d unit=%d\n", r, u.id);
+            back_to_ring();
+            return true;
+        }
+        const int cx = (int)(int8_t)u.x, cy = (int)(int8_t)u.y;
+        battle_cast_magic(ui, r, cx, cy);
+        if (battle_tp_changed() && (size_t)ui < units_.size())
+            units_[(size_t)ui].combat_acc57 = 0; // 83317
+        back_to_ring();
+        return true;
+    }
     // Esc: cancels a selection back to the ring, or cancels the menu (-1) to free wait.
     if (input_.is_key_pressed(SDLK_ESCAPE)) {
         if (battle_attack_select_ || battle_magic_select_ || battle_item_select_ ||
@@ -5034,16 +5034,16 @@ bool CombatII::battle_player_input() {
             battle_magic_pending_r_ = battle_magic_options_[(size_t)k];
             const int r = battle_magic_pending_r_;
             if (battle_trace_) fprintf(stderr, "COMBAT: magic pick unit=%d R=%d %s\n", u.id, r, kSpellNames[r]);
-            // 2A75A spells take no target cursor: fire immediately (see the MagicK case).
+            // 2A75A spells skip the 28982/4A483 target cursor but still require the manual
+            // sub_4A815 confirm (see the MagicK case).
             const int q1_direct = r / 3;
             if (q1_direct == 6 || q1_direct == 13 || q1_direct == 20 ||
                 q1_direct == 25 || q1_direct == 27) {
-                battle_magic_select_ = false;
-                battle_magic_pending_r_ = -1;
-                battle_cast_magic(ui, r, -1, -1);
-                if (battle_tp_changed() && (size_t)ui < units_.size())
-                    units_[(size_t)ui].combat_acc57 = 0;
-                back_to_ring();
+                // sub_2A75A -> sub_4A815 confirm (manual cast); no MP/TP is spent on cancel.
+                battle_magic_confirm_2a75a_ = true;
+                battle_magic_pending_r_ = r;
+                battle_magic_select_ = true;
+                ring_sub_close();
             }
             return false;
         }
@@ -5169,6 +5169,17 @@ void CombatII::render_player_move_overlay() {
                 box(hx, hy, 1, 1, 0x0F);
         }
         return;
+    }
+    if (battle_magic_confirm_2a75a_) {
+        // sub_4A815 cursor on the caster tile: the confirm loop draws a 1x1 frame.
+        const int tx = (int)(int8_t)u.x, ty = (int)(int8_t)u.y;
+        const int x0 = (tx - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X;
+        const int y0 = (ty - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y;
+        auto put = [&](int x, int y) {
+            if (x >= 0 && x < SCREEN_W && y >= 0 && y < SCREEN_H) bb[y * SCREEN_W + x] = 0x0F;
+        };
+        for (int x = x0; x < x0 + TOWN_TILE_W; ++x) { put(x, y0); put(x, y0 + TOWN_TILE_H - 1); }
+        for (int y = y0; y < y0 + TOWN_TILE_H; ++y) { put(x0, y); put(x0 + TOWN_TILE_W - 1, y); }
     }
     // render_player_move_range() draws the move range behind the base tiles and in front
     // of the units (sub_454B3 order). The original has no radius-3 dot fallback: the ring
@@ -6848,8 +6859,8 @@ int CombatII::battle_spell_summon(int unit_index, int k, int row, int sprite, in
         // sub_299DA: 1124A -> 10971/10988(+0Ch) -> sub_21944(recall.nsp), same table as
         // 3C548/4426D.
         if (battle_nsp_load("recall.nsp")) {                           // sub_1FEA4
-            battle_ssp_play("regen.ssp");                              // 4F460(32h)
-            battle_ssp_play("summon.ssp");                             // 4F460(33h)
+            battle_ssp_play("regen.ssp", 0x32);                        // 4F460(32h)
+            battle_ssp_play("summon.ssp", 0x33);                       // 4F460(33h)
             const int spawn_index = (int)units_.size() - 1;
             battle_fx_21944(spawn_index, (int)(int8_t)units_.back().x,
                             (int)(int8_t)units_.back().y, 0);
@@ -7273,28 +7284,50 @@ void CombatII::battle_spell_finish_pending() {
     battle_spell_status_targets_.clear();
 }
 
-// sub_1ED90 (off-list settlement): HP <= 0 -> sub_1DB1D (death), otherwise sub_53797 (hit
-// trigger, mode 1).
-void CombatII::battle_spell_1ed90_settle(int caster_index, const std::vector<int>& units) {
-    for (int ei : units) {
-        if (ei < 0 || (size_t)ei >= units_.size() || !units_[(size_t)ei].active) continue;
-        if (units_[(size_t)ei].hp <= 0) play_unit_death(ei, caster_index);
-        else run_unit_hp_trigger(ei, caster_index, 1);
-        if (should_exit_) return;
+// sub_1ED90: walk the four army chains (the caster's own side is skipped exactly like
+// sub_2A6C0: army 1/2 -> armies 1/2, army 3 -> army 3, army 4 -> army 4) and settle each
+// unit: HP <= 0 -> sub_1DB1D (death), otherwise sub_53797 (hit trigger, mode 1).
+// caster_index < 0 reproduces the ASM's eax == 0 call (2C8A4/19AEF): army 0 (no side is
+// skipped), killer null (-1), and all four lists are walked.
+void CombatII::battle_spell_1ed90_settle(int caster_index) {
+    const bool has_caster = caster_index >= 0 && (size_t)caster_index < units_.size();
+    if (caster_index >= 0 && !has_caster) return;
+    const int caster_army = has_caster ? battle_effective_army(units_[(size_t)caster_index]) : 0;
+    const int killer = has_caster ? caster_index : -1;
+    for (int army = 1; army <= 4; ++army) {
+        if ((caster_army == 1 || caster_army == 2) && army < 3) continue;
+        if (caster_army == 3 && army == 3) continue;
+        if (caster_army == 4 && army == 4) continue;
+        std::vector<int> bucket;
+        for (int ei = 0; ei < (int)units_.size(); ++ei) {
+            const auto& U = units_[(size_t)ei];
+            if (U.active && battle_effective_army(U) == army) bucket.push_back(ei);
+        }
+        // The original walks each CC968 chain; list_seq is the port's saved chain order
+        // (the same ordering battle_atb_step uses).
+        std::stable_sort(bucket.begin(), bucket.end(), [&](int a, int b) {
+            return units_[(size_t)a].list_seq < units_[(size_t)b].list_seq;
+        });
+        for (int ei : bucket) {
+            auto& U = units_[(size_t)ei];
+            if (U.hp <= 0) play_unit_death(ei, killer);
+            else run_unit_hp_trigger(ei, killer, 1);
+            if (should_exit_) return;
+        }
     }
 }
 
-// sub_2A75A (rows 0..2 d6 / row 3 d4,d6 / 3BDC7,3C12D): 13x13 area effect.
+// sub_2A75A (rows 0..2 d6 / row 3 d4,d6 / 3BDC7,3C12D): 12x12 area effect.
 //   eax = unit, edx = k (level 0..2), ebx = kind (0 Meteor / 1 Star Tearer / 2 Mega Thunder /
 //   3 Heal Wind / 4 Sun Light).
 //   dword_283FE (ASM 33364) holds exactly three dwords {2000,4000,7000}; every damage and
 //   heal below indexes it by k, not by kind.
 //   kind 0..2: centre = sub_2A6C0 (highest [43h] in the armies not skipped for the caster's
-//     side) or the caster -> 13x13 hostile list -> 28728(table[k], 70, kind) -> 29437/2A5BE
+//     side) or the caster -> 12x12 hostile list -> 28728(table[k], 70, kind) -> 29437/2A5BE
 //     (status 1<<kind, 30, edi = k) -> 2A500 (off-list) -> 1ED90. No allied heal.
 //   kind 3: allies (armies 1 and 2 when the caster's army < 3, otherwise its own side) with
 //     [0Dh] != 2 -> 2ACCB(table[k], 50).
-//   kind 4: 13x13 hostile list -> 28728(9000, 70, -1) -> 2A500 -> 1ED90; with k >= 1 an
+//   kind 4: 12x12 hostile list -> 28728(9000, 70, -1) -> 2A500 -> 1ED90; with k >= 1 an
 //     allied heal of table[k-1].
 void CombatII::battle_item_2a75a(int unit_index, int kind, int sub) {
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return;
@@ -7338,8 +7371,8 @@ void CombatII::battle_item_2a75a(int unit_index, int kind, int sub) {
         if (x0 < 0) x0 = 0;
         if (y0 < 0) y0 = 0;
         std::vector<int> victims;
-        for (int y = y0; y < y0 + 13; ++y) {
-            for (int x = x0; x < x0 + 13; ++x) {
+        for (int y = y0; y < y0 + 12; ++y) {
+            for (int x = x0; x < x0 + 12; ++x) {
                 if (x >= (int)map_w_ || y >= (int)map_h_) continue;
                 const int oi = battle_unit_index_at(x, y);
                 if (oi < 0 || (size_t)oi >= units_.size()) continue;
@@ -7358,10 +7391,8 @@ void CombatII::battle_item_2a75a(int unit_index, int kind, int sub) {
         reset_unit_pose(units_[(size_t)unit_index]);                       // sub_12124
         battle_spell_pace_287af();                                         // sub_287AF
         if (should_exit_) return;
-        const std::vector<int> extra = battle_spell_2a500_extras(unit_index, victims, 9000, 70, -1);
-        std::vector<int> settle = victims;                                  // sub_1ED90 list + off-list
-        settle.insert(settle.end(), extra.begin(), extra.end());
-        battle_spell_1ed90_settle(unit_index, settle);
+        battle_spell_2a500_extras(unit_index, victims, 9000, 70, -1);       // sub_2A500
+        battle_spell_1ed90_settle(unit_index);                              // sub_1ED90
         if (should_exit_) return;
         if (k >= 1) heal_own_side(kSpellBase[k - 1], 0x32);                // 2ACCB(dword_283FE[k-1])
         return;
@@ -7387,6 +7418,12 @@ void CombatII::battle_item_2a75a(int unit_index, int kind, int sub) {
                 cx = (int)(int8_t)o.x; cy = (int)(int8_t)o.y;
             }
         }
+        // 2A6C0 returns 0 when no value beat the initial 0FFh (bl stays -1); loc_2A811
+        // then overwrites the centre with the caster's own tile.
+        if (best < 0) {
+            cx = (int)(int8_t)units_[(size_t)unit_index].x;
+            cy = (int)(int8_t)units_[(size_t)unit_index].y;
+        }
     }
     int x0 = cx - 6, y0 = cy - 6;
     if (x0 < 0) x0 = 0;
@@ -7398,8 +7435,8 @@ void CombatII::battle_item_2a75a(int unit_index, int kind, int sub) {
     const int fx_cx = x0 + 6, fx_cy = y0 + 6;                              // loc_2A89F add 6
     battle_2a75a_fx_x_ = fx_cx; battle_2a75a_fx_y_ = fx_cy;
     std::vector<int> victims;
-    for (int y = y0; y < y0 + 13; ++y) {
-        for (int x = x0; x < x0 + 13; ++x) {
+    for (int y = y0; y < y0 + 12; ++y) {
+        for (int x = x0; x < x0 + 12; ++x) {
             if (x < 0 || y < 0 || x >= (int)map_w_ || y >= (int)map_h_) continue;
             const int oi = battle_unit_index_at(x, y);
             if (oi < 0 || (size_t)oi >= units_.size()) continue;
@@ -7424,10 +7461,8 @@ void CombatII::battle_item_2a75a(int unit_index, int kind, int sub) {
     battle_thunder_sweep_2a5be(unit_index, victims, 1 << kind, 30, k);
     if (should_exit_) return;
     // 2A500: the same damage to every off-list hostile unit, then 1ED90 settles.
-    const std::vector<int> extra = battle_spell_2a500_extras(unit_index, victims, base, 70, kind);
-    std::vector<int> settle = victims;                                      // sub_1ED90 list + off-list
-    settle.insert(settle.end(), extra.begin(), extra.end());
-    battle_spell_1ed90_settle(unit_index, settle);
+    battle_spell_2a500_extras(unit_index, victims, base, 70, kind);         // sub_2A500
+    battle_spell_1ed90_settle(unit_index);                                  // sub_1ED90
 }
 // sub_3BDC7 (dx 8): heal / Sun Light / MP +20. Pose 8, delay 0x5A, then it fires when
 // rand(10) < (5 for class 0x25, else 3). rand(10) >= 4 gives "MP +20!" (MP += 20, clamped to
@@ -7456,7 +7491,7 @@ void CombatII::battle_item_3bdc7(int unit_index) {
             battle_unit_label(unit_index, "MP +20!");    // loc_3BEAF: sub_48612(unit, "MP +20!", 0x11)
             if (should_exit_ || (size_t)unit_index >= units_.size()) return;
             // loc_3BEAF: cure.ssp + sub_25C88 (cure.nsp particles, 50 frames).
-            battle_ssp_play("cure.ssp");                     // 4F460("cure.ssp", 32h)
+            battle_ssp_play("cure.ssp", 0x32);               // 4F460("cure.ssp", 32h)
             auto& u = units_[(size_t)unit_index];
             battle_fx_25c88(unit_index, (int)(int8_t)u.x, (int)(int8_t)u.y, 0);
             int mp = (int)u.combat_mp_50 + 0x14;
@@ -7612,8 +7647,8 @@ int CombatII::battle_item_3c548(int unit_index, int form) {
     //   61115 -> 1FFCD -> 12124 -> 45559. The shared 21944 driver is battle_fx_21944;
     //   61147/61115 are the tint-LUT setup/restore, covered by its tinted blits in the port.
     if (battle_nsp_load("recall.nsp")) {                                    // sub_1FEA4
-        battle_ssp_play("regen.ssp");                                       // sub_4F460(32h)
-        battle_ssp_play("summon.ssp");                                      // sub_4F460(33h)
+        battle_ssp_play("regen.ssp", 0x32);                                 // sub_4F460(32h)
+        battle_ssp_play("summon.ssp", 0x33);                                // sub_4F460(33h)
         // 21944 receives [60h] (image slot); the port driver derives the D66A8 entry from
         // sprite_type, so this argument is informational.
         battle_fx_21944(unit_index, (int)(int8_t)u.x, (int)(int8_t)u.y,
@@ -7938,10 +7973,8 @@ void CombatII::battle_item_3c3a5(int unit_index) {
         battle_thunder_sweep_2a5be(unit_index, victims, 2, 30, 2);          // sub_2A5BE(edx=2, ebx=0x1E, ecx=2)
         // sub_2A500(ecx=1, ebx=0x32, edx=0x1770): the same damage to every off-list hostile
         // unit, walking the N=1..4 army chains. ASM runs it after 2A5BE, then 1ED90.
-        const std::vector<int> extra = battle_spell_2a500_extras(unit_index, victims, 6000, 50, 1);
-        std::vector<int> settle = victims;                                  // sub_1ED90 list + off-list
-        settle.insert(settle.end(), extra.begin(), extra.end());
-        battle_spell_1ed90_settle(unit_index, settle);
+        battle_spell_2a500_extras(unit_index, victims, 6000, 50, 1);        // sub_2A500
+        battle_spell_1ed90_settle(unit_index);                              // sub_1ED90
 }
 
 // VM 0x09 (sub_51FF7): centres the camera on the unit, then runs subcommands 0..6:
@@ -8436,8 +8469,8 @@ int CombatII::battle_spell_2bc3b(int unit_index, int k) {
     if (should_exit_ || (size_t)unit_index >= units_.size()) return 0;
     // 2BC3B: heal.ssp + sun2.ssp -> sub_59A70(revible.nsp). The original plays this
     //   before placing the unit ([0]/[1]/[60h] are written after the effect ends).
-    battle_ssp_play("heal.ssp");                                  // 4F460(32h)
-    battle_ssp_play("sun2.ssp");                                  // 4F460(33h)
+    battle_ssp_play("heal.ssp", 0x32);                            // 4F460(32h)
+    battle_ssp_play("sun2.ssp", 0x33);                            // 4F460(33h)
     battle_fx_59a70(unit_index, ci);                              // sub_59A70(eax=caster, edx=revived)
     if (should_exit_) return 0;
     auto& z = units_[(size_t)ci];
@@ -8786,7 +8819,7 @@ int CombatII::battle_spell_wave(int unit_index, int g, int k, int tx, int ty,
         // AI F13D8 has no separate battle_magic_fx call: run the original row-3 handler's
         // 4F460 + 21114/2132B/215FE limb here, after the announcement and before damage.
         const int r_code = g * 21 + 9 + k; // wave row is d=3 (q1 3/10/17)
-        battle_ssp_play(battle_spell_ssp(r_code));
+        battle_spell_load_ssps(r_code);
         battle_fx_driver(r_code, unit_index, (int)(int8_t)u.x, (int)(int8_t)u.y);
         if (should_exit_) return 0;
     }
@@ -8873,53 +8906,91 @@ void CombatII::battle_nsp_release() {
     magic_fx_frame_ = -1;
 }
 
-// sub_4F460(name, id): clears sample slots 2..7 with 5CD0D and loads MAGICSPR\<name> into
-// slot id+1 with 5CA62. It does NOT play; the effect driver later calls 4F4CD(id) at the
-// collision/impact point, which is the call that actually starts the sample.
-void CombatII::battle_ssp_play(const char* name) {
+// sub_4F460(name, id): stops SFX channels 2..7 (5CD0D for each) and loads MAGICSPR\<name>
+// into sample slot id+1 with 5CA62. It does NOT play; the effect driver later calls
+// 4F4CD(id) at the impact point, which starts the sample on a free channel 2..7.
+void CombatII::battle_ssp_play(const char* name, int id) {
     if (!name || !*name) return;
-    const std::string path = game_path((std::string("MAGICSPR/") + name).c_str());
-    const int id = battle_ssp_slot_id_for_name(name);
     const int slot = id + 1;
-    if (slot >= 0 && (size_t)slot < battle_ssp_slot_path_.size())
-        battle_ssp_slot_path_[(size_t)slot] = path;
-    if (battle_trace_) fprintf(stderr, "COMBAT: ssp load '%s' slot %d (4F460)\n", name, slot);
+    if (slot < 0 || (size_t)slot >= battle_ssp_slot_path_.size()) return;
+    Audio::stop_sfx_channels();                      // 5CD0D(2..7)
+    battle_ssp_slot_path_[(size_t)slot] =
+        game_path((std::string("MAGICSPR/") + name).c_str());
+    if (battle_trace_) fprintf(stderr, "COMBAT: ssp load '%s' id %d -> slot %d (4F460)\n",
+                               name, id, slot);
 }
 
-// SSP name loaded by the handler through 4F460 (q1 = g*7+d; k variants are picked here).
-const char* CombatII::battle_spell_ssp(int r_code) const {
-    if (r_code < 0 || r_code >= 147) return "";
+// All SSPs a handler loads through 4F460, with the slot id of each call site (the id is not
+// a property of the file: cure.ssp is 32h in 2BBB7/2A75A kind1 and 33h in 2BC05).
+void CombatII::battle_spell_load_ssps(int r_code) {
+    if (r_code < 0 || r_code >= 147) return;
     const int q1 = r_code / 3, k = r_code % 3;
+    auto load = [&](const char* n, int id) { battle_ssp_play(n, id); };
     switch (q1) {
-        case 0:  return (k == 2) ? "f-blast.ssp" : "f-arrow.ssp";   // Fire Arrow/Ball/Blast
-        case 1:  case 8:  case 15: return "enchant.ssp";            // X.Blade
-        case 2:  case 16: return "f-field.ssp";                      // Field
-        case 3:  return "f-wave.ssp";                                // Fire Gazer
-        case 4:  case 11: case 18:                                   // Salamanda/Marid/Djinni
+        case 0:  // 28ED6 fire: k<=1 f-arrow 32h + f-wave 33h; k2 f-blast 32h
+            if (k == 2) load("f-blast.ssp", 0x32);
+            else { load("f-arrow.ssp", 0x32); load("f-wave.ssp", 0x33); }
+            break;
+        case 1:  case 8:  case 15: load("enchant.ssp", 0x32); break;
+        case 2:  load("f-field.ssp", 0x32); break;
+        case 16:  // 2B919
+            load("f-field.ssp", 0x32); load("ddoing.ssp", 0x33); load("bolt3.ssp", 0x34);
+            break;
+        case 3:  load("f-wave.ssp", 0x32); break;   // 2B79C
+        case 4:  case 11: case 18: case 45: load("regen.ssp", 0x32); break;
+        case 5:  // 2B7DC
+            load("fire.ssp", 0x32); load("m-wind.ssp", 0x33); load("hell.ssp", 0x34);
+            break;
+        case 6:  // 2A75A kind 0
+            if (k == 2) { load("promi-1.ssp", 0x32); load("promi-2.ssp", 0x33); }
+            else { load("f-meteo1.ssp", 0x32); load("f-meteo2.ssp", 0x33); }
+            break;
+        case 7:  // 28ED6 ice: i-shoot/i-piece 32h + pierce 33h
+            load(k >= 2 ? "i-piece.ssp" : "i-shoot.ssp", 0x32);
+            load("pierce.ssp", 0x33);
+            break;
+        case 9:  load("m-wind.ssp", 0x32); break;
+        case 10: load("i-fist.ssp", 0x32); break;   // 2B86C
+        case 12:  // 2B8A6
+            load("f-blast.ssp", 0x32); load("m-wind.ssp", 0x33); load("boom.ssp", 0x34);
+            break;
+        case 13:  // 2A75A kind 1
+            if (k >= 2) { load("regen.ssp", 0x32); load("i-fist.ssp", 0x33); }
+            else { load("cure.ssp", 0x32); load("i-star.ssp", 0x33); }
+            break;
+        case 14: load("bolt1.ssp", 0x32); break;   // 28ED6 thunder; 23882 plays 32h
+        case 17: load("bolt2.ssp", 0x32); break;
+        case 19: load("thunder1.ssp", 0x32); break; // 2B995
+        case 20:  // 2A75A kind 2
+            load("thunder3.ssp", 0x32);
+            load("bolt1.ssp", 0x33);
+            if (k == 1) load("elect.ssp", 0x34);
+            else if (k == 2) load("thunder1.ssp", 0x34);
+            break;
+        case 21: case 22: load("heal.ssp", 0x32); break;   // 2B9C8 / 2BA8E
+        case 26:  // 2BC3B
+            load("heal.ssp", 0x32); load("sun2.ssp", 0x33);
+            break;
+        case 23: load("cure.ssp", 0x32); break;    // 2BBB7
+        case 24: load("assist-d.ssp", 0x32); break;
+        case 25: load("heal.ssp", 0x32); load("cure.ssp", 0x33); break; // 2BC05
+        case 27:  // 2BDF9
+            load("sun1.ssp", 0x32); load("sun2.ssp", 0x33); load("sun.ssp", 0x34);
+            break;
+        case 28: case 29: case 30: case 31: case 33: load("assist-u.ssp", 0x32); break;
+        case 32: case 34: case 43: case 46: load("assist-d.ssp", 0x32); break;
         case 35: case 36: case 37: case 38: case 39: case 40: case 41:
-        case 45: return "regen.ssp";                                 // summon / Soul Recall
-        case 5:  return "fire.ssp";                                  // Explosion series
-        case 6:  return "f-meteo2.ssp";                              // Meteor series
-        case 7:  return (k >= 2) ? "i-piece.ssp" : "i-shoot.ssp";   // Ice Missile series
-        case 9:  return "m-wind.ssp";                                // Ice Fog
-        case 10: return "i-fist.ssp";                                // Diamond Fist
-        case 12: return "f-blast.ssp";                               // Leopard
-        case 13: return "f-meteo2.ssp";                              // Star Tearer
-        case 14: return (k == 0) ? "bolt1.ssp" : (k == 1 ? "bolt2.ssp" : "bolt3.ssp");
-        case 17: return "bolt2.ssp";                                 // E.Wave
-        case 19: return "thunder1.ssp";                              // P.Lighting
-        case 20: return "f-meteo2.ssp";                              // Mega/Giga/Pow Thunder
-        case 21: case 22: case 25: case 26: return "heal.ssp";       // Heal/Wide Heal/Heal Wind/Revible
-        case 23: return "cure.ssp";                                  // Cure
-        case 24: return "assist-d.ssp";                              // Turn Undead
-        case 27: return "sun1.ssp";                                  // Sun Light
-        case 28: case 29: case 30: case 31: case 33: return "assist-u.ssp";  // Power/Speed/M.Armor/Bless/Barrier
-        case 32: case 34: case 43: case 46: return "assist-d.ssp";   // Silence/Curse/Melt/DNA Change
-        case 42: return "poison.ssp";                                // Confuse
-        case 44: return "death1.ssp";                                // Death
-        case 47: return "b-hole.ssp";                                // Black Hole
-        case 48: return (k == 1) ? "f-meteo2.ssp" : "atomic.ssp";   // Dark Zone/Atomic/Amageddon
-        default: return "";
+            break;   // 2BF59..2BFD4: the load happens inside sub_29F4D
+        case 42: load("poison.ssp", 0x32); break;
+        case 44:  // 2C28F
+            load("death1.ssp", 0x32); load("death2.ssp", 0x33);
+            break;
+        case 47: load("b-hole.ssp", 0x32); break;
+        case 48:  // 2A1C6 kind 5
+            if (k == 1) load("f-meteo2.ssp", 0x32);
+            else { load("atomic.ssp", 0x32); load("darkzone.ssp", 0x33); }
+            break;
+        default: break;
     }
 }
 
@@ -9119,42 +9190,42 @@ bool CombatII::battle_item_2a75a_fx(int unit_index, int kind, int k, int tx, int
     switch (kind) {
         case 0:
             if (lv <= 1) {
-                battle_ssp_play("f-meteo1.ssp");                        // 4F460(32h)
-                battle_ssp_play("f-meteo2.ssp");                        // 4F460(33h)
+                battle_ssp_play("f-meteo1.ssp", 0x32);                  // 4F460(32h)
+                battle_ssp_play("f-meteo2.ssp", 0x33);                  // 4F460(33h)
                 return battle_fx_21e16(unit_index, tx, ty, lv) != 0;    // sub_21E16
             }
-            battle_ssp_play("promi-1.ssp");
-            battle_ssp_play("promi-2.ssp");
+            battle_ssp_play("promi-1.ssp", 0x32);
+            battle_ssp_play("promi-2.ssp", 0x33);
             return battle_fx_570a1(unit_index, tx, ty, lv) != 0;        // sub_570A1
         case 1:
             if (lv <= 1) {
-                battle_ssp_play("cure.ssp");
-                battle_ssp_play("i-star.ssp");
+                battle_ssp_play("cure.ssp", 0x32);
+                battle_ssp_play("i-star.ssp", 0x33);
                 return battle_fx_23074(unit_index, tx, ty, lv) != 0;    // sub_23074
             }
-            battle_ssp_play("regen.ssp");
-            battle_ssp_play("i-fist.ssp");
+            battle_ssp_play("regen.ssp", 0x32);
+            battle_ssp_play("i-fist.ssp", 0x33);
             return battle_fx_58619(unit_index, tx, ty, lv) != 0;        // sub_58619
         case 2:
             // ASM 36808..36861: thunder3.ssp (32h) and bolt1.ssp (33h) are loaded for every
             // level; only the third sample depends on k.
-            battle_ssp_play("thunder3.ssp");                            // 4F460(32h)
-            battle_ssp_play("bolt1.ssp");                               // 4F460(33h)
+            battle_ssp_play("thunder3.ssp", 0x32);                      // 4F460(32h)
+            battle_ssp_play("bolt1.ssp", 0x33);                         // 4F460(33h)
             if (lv == 0) return battle_fx_58c87(unit_index, tx, ty, lv) != 0;  // sub_58C87
             if (lv == 1) {
-                battle_ssp_play("elect.ssp");                           // 4F460(34h)
+                battle_ssp_play("elect.ssp", 0x34);                     // 4F460(34h)
                 return battle_fx_58e95(unit_index, tx, ty, lv) != 0;    // sub_58E95
             }
-            battle_ssp_play("thunder1.ssp");                            // 4F460(34h)
+            battle_ssp_play("thunder1.ssp", 0x34);                      // 4F460(34h)
             return battle_fx_592b0(unit_index, tx, ty, lv) != 0;        // sub_592B0
         case 3:
-            battle_ssp_play("heal.ssp");                                // 2BC05: 4F460(32h)
-            battle_ssp_play("cure.ssp");                                // 2BC05: 4F460(33h)
+            battle_ssp_play("heal.ssp", 0x32);                          // 2BC05: 4F460(32h)
+            battle_ssp_play("cure.ssp", 0x33);                          // 2BC05: 4F460(33h)
             return battle_fx_25dfe(unit_index, lv) != 0;                // sub_25DFE
         case 4:
-            battle_ssp_play("sun1.ssp");                                // 2BDF9: 4F460(32h)
-            battle_ssp_play("sun2.ssp");                                // 2BDF9: 4F460(33h)
-            battle_ssp_play("sun.ssp");                                 // 2BDF9: 4F460(34h)
+            battle_ssp_play("sun1.ssp", 0x32);                          // 2BDF9: 4F460(32h)
+            battle_ssp_play("sun2.ssp", 0x33);                          // 2BDF9: 4F460(33h)
+            battle_ssp_play("sun.ssp", 0x34);                           // 2BDF9: 4F460(34h)
             if (lv == 0) return battle_fx_5a267(unit_index, tx, ty, lv) != 0;  // sub_5A267
             return battle_fx_5a566(unit_index, tx, ty, lv) != 0;               // sub_5A566
         default: return false;
@@ -9255,8 +9326,8 @@ bool CombatII::battle_fx_driver(int r_code, int unit_index, int tx, int ty) {
 //   sub_2C863 shakes the screen for 0x40 frames with dword_BA838 = rand(5)-2.
 void CombatII::battle_spell_2c8a4(int effect) {
     if (effect == 0) {
-        battle_ssp_play("dragon.ssp");
-        battle_ssp_play("f-meteo2.ssp");
+        battle_ssp_play("dragon.ssp", 0x32);
+        battle_ssp_play("f-meteo2.ssp", 0x33);
         // sub_21BE8 (b_dragon.nsp): takes no arguments (the call site clears eax/edx/ebx).
         battle_fx_21be8(0, 0, 0, 0);
         if (should_exit_) return;
@@ -9292,8 +9363,12 @@ void CombatII::battle_spell_2c8a4(int effect) {
                     t.id, def, dmg, new_hp, tx, ty);
         (void)delta;
     }
-    // 287AF (hit pacing) -> 12124 on the list -> 1ED90. The port uses the shared pace.
+    // 287AF (hit pacing) -> 12124 on the list -> 1ED90 (ASM 39502 calls it with eax=0).
+    // The port still applies the 2C8A4 HP damage directly (no 45BFB/45ED2 hit list), so
+    // the shared pace is a no-op when no hits are queued; the full-list settlement below
+    // is the same tail call the ASM makes.
     if (hit > 0) battle_spell_pace_287af();
+    battle_spell_1ed90_settle(-1);
     if (battle_trace_)
         fprintf(stderr, "COMBAT: 2C8A4 effect=%d targets=%d camera=(%d,%d)\n", effect, hit, left, top);
 }
@@ -9307,7 +9382,7 @@ void CombatII::battle_magic_fx(int r_code, int unit_index, int tx, int ty) {
     // the driver plays the SSP too.
     const int q0 = r_code / 3;
     const bool ssp_in_driver = (q0 == 6 || q0 == 13 || q0 == 20 || q0 == 25 || q0 == 27);
-    if (!ssp_in_driver) battle_ssp_play(battle_spell_ssp(r_code));  // sub_4F460
+    if (!ssp_in_driver) battle_spell_load_ssps(r_code);  // sub_4F460
     // Only the hit handlers (28ED6/29514/29722/2A1C6/2A75A/2C00E/2C28F/2C566) call 287AF.
     const int q1 = r_code / 3, k = r_code % 3;
     auto pace = [&]() {
@@ -9332,7 +9407,7 @@ void CombatII::battle_magic_fx(int r_code, int unit_index, int tx, int ty) {
         return;
     }
     // Only when the driver could not open its NSP: play the skipped SSP here.
-    if (ssp_in_driver) battle_ssp_play(battle_spell_ssp(r_code));
+    if (ssp_in_driver) battle_spell_load_ssps(r_code);
     magic_fx_draws_.clear();                              // draws left behind by a failed driver
     const bool loaded = battle_nsp_load(battle_spell_nsp(r_code));   // sub_1FEA4
     int sx0 = 0, sy0 = 0;
@@ -9959,12 +10034,13 @@ void CombatII::battle_weapon_301bb(int unit_index, int weapon_idx, int is_leader
     for (int f = 1; f < 0x19 && !should_exit_ && !skip_cutscene_; f++) {
         render_battle_frame(); // sub_454B3
         apply_knockback_hit(u, 0, f); // sub_45F29(U, 0, f)
-        if (f < 5) for (int k = 0; k < 5; k++) digit_y[k] -= 2;
-        else if (f >= 0x14) for (int k = 0; k < 5; k++) digit_y[k] += 2;
-        else { const int k = (f - 5) / 5; if (k < 5) digit_y[k] += 2; }
+        if (f < 5) digit_y[0] -= 2;
+        else if (f >= 0x14) digit_y[3] += 2;
+        else { const int k = (f - 5) / 5; if (k < 3) { digit_y[k] += 2; digit_y[k + 1] -= 2; } }
         {
-            const int x0 = sx0 + 12 - ndig * 3;
-            if (x0 - 16 >= 0 && x0 - 16 < 0x120) {
+            const int ndig4 = std::min(ndig, 4);
+            const int x0 = sx0 + 6 * (4 - ndig4);   // sub_45CCB: right-aligned 4-cell field
+            if (sx0 - 16 >= 0 && sx0 - 16 < 0x120) {
                 uint8_t* bb = video_.get_backbuffer();
                 char one[2] = {0, 0};
                 for (int k = 0; k < ndig && k < 4; k++) {
@@ -10197,8 +10273,8 @@ int CombatII::battle_weapon_f1474(int unit_index, int idx, int dx) {
         battle_dim_row0_ = true;                                  // sub_44D6E(1)
         battle_highlight_add_depth(unit_index);                   // sub_2CBA1 (41768)
         const bool hon_ok = battle_nsp_load("hon.nsp");           // sub_1FEA4
-        battle_ssp_play("death.ssp");                             // sub_4F460
-        battle_ssp_play("bomb.ssp");                              // sub_4F460
+        battle_ssp_play("death.ssp", 0x32);                       // sub_4F460
+        battle_ssp_play("bomb.ssp", 0x33);                        // sub_4F460
         {
             int ccx = (int)(int8_t)u.x, ccy = (int)(int8_t)u.y;
             switch (u.facing & 3) {
@@ -11092,7 +11168,7 @@ int CombatII::battle_weapon_f1474_ext(int unit_index, int idx, int dx) {
             battle_highlight_add_depth(unit_index);          // sub_2CBA1
             battle_dim_row0_ = true;                         // sub_44D6E(1)
             const bool nsp_ok = battle_nsp_load("t_arrow.nsp"); // sub_1FEA4
-            battle_ssp_play("bolt2.ssp");                    // sub_4F460
+            battle_ssp_play("bolt2.ssp", 0x32);              // sub_4F460
             // off_2FA5E: 0 -> +4x, 1 -> -4y, 2 -> -4x, 3 -> +4y.
             int step_x = 0, step_y = 0;
             switch (u.facing & 3) {
@@ -11728,7 +11804,7 @@ int CombatII::battle_weapon_3aee8(int unit_index) {
 // ported: dx > 0x0C returns -1, edi == 10 (elect + 37FA4) returns 0 on the normal path, and
 // the other 12 return 1 normally or -1 with no target.
 // 4C98A runs 301BB and the cost only for ax == 1, so 0/-1 returns to the ring without
-// spending. SSP playback is log-only here.
+// spending. The SSPs above are staged for the routine's sfx calls.
 int CombatII::battle_weapon_302e6(int unit_index, int edi) {
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return -1;
     const int id = units_[(size_t)unit_index].id;
@@ -11742,9 +11818,8 @@ int CombatII::battle_weapon_302e6(int unit_index, int edi) {
         if (battle_trace_) fprintf(stderr, "COMBAT: warning: 302e6 unit=%d edi=%d out of range -> -1 (Tripwire)\n", id, edi);
         return -1;
     }
-    // ASM loc_30300..loc_30501: each branch first loads and plays MAGICSPR\<name>.ssp with
-    //   4F460 (32h/33h/34h/35h are the sound slots). Audio here is single-channel, so the files
-    //   play in order.
+    // ASM loc_30300..loc_30501: each branch stages MAGICSPR\<name>.ssp with 4F460
+    //   (32h/33h/34h/35h are the sound slots); the routine's sfx calls play them.
     static const char* const kSsp[13][5] = {
         {"fire.ssp", nullptr, nullptr, nullptr, nullptr},                             // 0
         {"kang.ssp", "f-blast.ssp", "slash.ssp", nullptr, nullptr},                    // 1
@@ -11760,8 +11835,24 @@ int CombatII::battle_weapon_302e6(int unit_index, int edi) {
         {"fire.ssp", "effect2.ssp", "f-wave.ssp", nullptr, nullptr},                    // 11
         {"f-blast.ssp", nullptr, nullptr, nullptr, nullptr},                             // 12
     };
+    // The id is the edx at each 4F460 site in loc_30300..loc_30501 (case 1 starts at 33h).
+    static constexpr int kSspId[13][5] = {
+        {0x32, 0, 0, 0, 0},
+        {0x33, 0x34, 0x35, 0, 0},
+        {0x32, 0x33, 0, 0, 0},
+        {0x32, 0x33, 0x34, 0, 0},
+        {0x32, 0x33, 0x34, 0x35, 0},
+        {0x32, 0, 0, 0, 0},
+        {0x32, 0x33, 0, 0, 0},
+        {0x32, 0x33, 0, 0, 0},
+        {0x32, 0x33, 0x34, 0, 0},
+        {0x32, 0x33, 0, 0, 0},
+        {0x32, 0, 0, 0, 0},
+        {0x32, 0x33, 0x34, 0, 0},
+        {0x32, 0, 0, 0, 0},
+    };
     for (int si = 0; si < 5; ++si)
-        if (kSsp[edi][si]) battle_ssp_play(kSsp[edi][si]);            // sub_4F460
+        if (kSsp[edi][si]) battle_ssp_play(kSsp[edi][si], kSspId[edi][si]); // sub_4F460
     if (battle_trace_) fprintf(stderr, "COMBAT: 302e6 unit=%d edi=%d %s begin\n",
                                 id, edi, kCases[edi]);
     int ret = -1;

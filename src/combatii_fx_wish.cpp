@@ -59,7 +59,7 @@ int CombatII::battle_fx_3c12d(int unit_index, int tx, int ty, int k) {
     else di = (u.combat_level_2b > 0x3C) ? 2 : 1;
 
     // Step 3: 4F460("heal.ssp", 32h, 5) then the 253DC(x, y, 1Eh) wide-heal effect.
-    battle_ssp_play("heal.ssp");                                 // 4F460("heal.ssp", 32h)
+    battle_ssp_play("heal.ssp", 0x32);                           // 4F460("heal.ssp", 32h)
     battle_fx_253dc(unit_index, tx, ty, 0x1E);                   // sub_253DC(eax=x, edx=y, ebx=1Eh)
     if (should_exit_) return 1;
 

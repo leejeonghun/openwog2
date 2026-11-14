@@ -95,7 +95,7 @@ int CombatII::battle_fx_2d7d2(int unit_index, int k) {
     unit_screen_center(units_[(size_t)unit_index], cx, cy);          // sub_135EB
     if (!battle_nsp_load("swstr.nsp") || magic_frames_.empty()) return 0;  // sub_1FEA4
     const int nframes = (int)magic_frames_.size();
-    battle_ssp_play("f-blast.ssp");                                  // sub_4F460
+    battle_ssp_play("f-blast.ssp", 0x32);                            // sub_4F460
 
     // (2) sub_2D4EB: two attack-pose frames (1033B(19h) -> 454B3 + 5E9E8 + 499E4 x2)
     game_timer_set(0x19);

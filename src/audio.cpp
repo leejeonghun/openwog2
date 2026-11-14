@@ -10,8 +10,8 @@ Mix_Chunk* Audio::current_chunk_ = nullptr;
 int Audio::current_channel_ = -1;
 
 // dword_1124B0 slots: 4F460 loads a sample into a slot and 4F4CD starts it later. The port
-// keeps the decoded chunks alive for the process lifetime; 5CD0D only disables a slot, and
-// re-loading the same path is therefore free.
+// keeps the decoded chunks alive for the process lifetime; 5CD0D stops the channel that is
+// playing (it does not clear the loaded slot), and re-loading the same path is free.
 static std::map<std::string, Mix_Chunk*> g_chunk_cache;
 
 bool Audio::init() {
@@ -30,8 +30,9 @@ bool Audio::init() {
         return false;
     }
 
-    // The original mixes up to 8 sample slots at once (dword_11273C table).
-    Mix_AllocateChannels(16);
+    // 5CB97 searches channels 2..7 (maximum 6 SFX voices) and drops the sample when all are
+    // busy; channels 0/1 stay free for the non-SFX paths.
+    Mix_AllocateChannels(8);
     initialized_ = true;
     return true;
 }
@@ -169,8 +170,19 @@ bool Audio::play_cached(const std::string& filepath, int volume) {
         g_chunk_cache[filepath] = chunk;
     }
 
+    // sub_5CB97: play only on a free channel in 2..7; no free channel -> drop the sound.
+    int channel = -1;
+    for (int c = 2; c < 8; ++c) {
+        if (!Mix_Playing(c)) { channel = c; break; }
+    }
+    if (channel < 0) return false;
     Mix_VolumeChunk(chunk, volume);
-    return Mix_PlayChannel(-1, chunk, 0) >= 0;
+    return Mix_PlayChannel(channel, chunk, 0) >= 0;
+}
+
+void Audio::stop_sfx_channels() {
+    if (!initialized_) return;
+    for (int c = 2; c < 8; ++c) Mix_HaltChannel(c);
 }
 
 void Audio::stop() {

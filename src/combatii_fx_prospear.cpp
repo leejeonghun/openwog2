@@ -89,7 +89,8 @@ void pro_kill(int idx) {
 // span stream from the D66A8 entry:
 //   (1) game_timer_set(7), then for 9 frames raise table frames 0..8 at
 //       (x + (tile_w > 1 ? 0x0C : 0), y)
-//   (2) sfx(0x32), then an h-row loop: per row present (sub_454B3), blit the main frame
+//   (2) sfx(0x32), then an h-row loop on the same 7-tick period (no second 1033B): per row
+//       present (sub_454B3), blit the main frame
 //       (last row = entry 7 = unk_F0DFE), draw the summon body with sub_5F4AF (ecx = r+1 rows),
 //       and only when this is not the last row the secondary frame and the 8-fold plume.
 //   (3) game_timer_set(0x1E), one wait, sfx(0x33), sub_284A3 (white palette flash: 49A3E
@@ -155,7 +156,8 @@ int CombatII::battle_fx_21944(int unit_index, int tx, int ty, int k) {
     };
     // Tint: 611AA(1 colour, shade = 1Eh) -> brightness weight 100-30 = 70 (0x46).
     // The shared tinter only allocates a LUT for palette entry 1.
-    game_timer_set(3);                               // 21944 runs at period 3 during the rows
+    // 1033B(7) above also sets the period for this loop: the original has no second 1033B
+    // here (the next one is 1033B(1Eh) after the rows), so the rows run at period 7.
     for (int r = 0; r < h && !should_exit_; ++r) {   // loc_21BAC: var_14 < [edx+3]
         const int p = r % 5;                         // remainder of `idiv 5`
         const bool last = (r == h - 1);
@@ -210,7 +212,7 @@ int CombatII::battle_fx_2da5e(int unit_index, int tx, int ty, int k) {
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return 0;
     auto& u = units_[(size_t)unit_index];
     const char* nsp = (k == 0) ? "slight.nsp" : (k == 1 ? "spearfly.nsp" : "fistlv3.nsp");
-    battle_ssp_play("f-fall.ssp");                   // sub_4F460("f-fall.ssp")
+    battle_ssp_play("f-fall.ssp", 0x32);             // sub_4F460("f-fall.ssp",32h)
     if (!battle_nsp_load(nsp) || magic_frames_.empty()) return 0;
     const int nframes = (int)magic_frames_.size();
 

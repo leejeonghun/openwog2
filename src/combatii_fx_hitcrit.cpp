@@ -44,7 +44,7 @@ int CombatII::battle_fx_2d5a3(int unit_index) {
     auto& u = units_[(size_t)unit_index];
     int fx = 0, fy = 0;
     unit_screen_center(u, fx, fy);                    // sub_135EB (x->[edx], y->[ebx])
-    battle_ssp_play("i-shoot.ssp");                   // sub_4F460
+    battle_ssp_play("i-shoot.ssp", 0x32);             // sub_4F460
     battle_dim_row0_ = true;                          // sub_44D6E(1)
     battle_highlight_add(unit_index);                 // sub_44D89(eax=unit)
     u.anim_frame = 8;                                 // mov byte [edi+64h],8
@@ -118,7 +118,7 @@ int CombatII::battle_fx_2d684(int unit_index) {
     auto& u = units_[(size_t)unit_index];
     int fx = 0, fy = 0;
     unit_screen_center(u, fx, fy);                    // sub_135EB
-    battle_ssp_play("i-star2.ssp");                   // sub_4F460
+    battle_ssp_play("i-star2.ssp", 0x32);             // sub_4F460
     battle_dim_row0_ = true;                          // sub_44D6E(1)
     battle_highlight_add(unit_index);                 // sub_44D89(eax=unit)
     u.anim_frame = 8;                                 // mov byte [ebp+64h],8

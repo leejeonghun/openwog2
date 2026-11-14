@@ -48,7 +48,7 @@ int CombatII::battle_fx_2dd7a(int unit_index, int tx, int ty, int k) {
     unit_screen_center(u, x, y);                                     // sub_135EB
     int edi = 0x0F;                                                  // `mov edi,0Fh`
     if (!battle_nsp_load("axefly.nsp") || magic_frames_.empty()) return 0;  // sub_1FEA4
-    battle_ssp_play("f-fall.ssp");                                   // sub_4F460("f-fall.ssp")
+    battle_ssp_play("f-fall.ssp", 0x32);                             // sub_4F460("f-fall.ssp",32h)
 
     // (3) sub_2D4EB: timer 19h + the two pose frames 7 and 8
     game_timer_set(0x19);                                            // sub_1033B(19h)

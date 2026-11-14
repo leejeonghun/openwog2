@@ -12,6 +12,7 @@ public:
     // sub_5CB97: start a sample that was loaded earlier (4F460 slot) without cutting the
     // samples already playing. Chunks are cached by path, so repeated 4F4CD calls are cheap.
     static bool play_cached(const std::string& filepath, int volume = MIX_MAX_VOLUME);
+    static void stop_sfx_channels();   // sub_5CD0D(2..7): stop every SFX channel
     static void stop();
     static void free_chunk(Mix_Chunk* chunk);
 
