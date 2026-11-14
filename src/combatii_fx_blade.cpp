@@ -124,7 +124,7 @@ int CombatII::battle_fx_2262c(int unit_index, int tx, int ty, int k) {
 }
 
 // sub_5637D(eax=unit, edx=ty, ebx=tx): fireblad.nsp particle vortex.
-//   Prologue: 61011(0) / 61147(1,0x28) / 61011(1) set the weapon palette ramp (not ported).
+//   Prologue: 61011(0) / 61147(1,0x32) / 61011(1) set the weapon palette ramp (not ported).
 //   1FEA4("fireblad.nsp") -> 1124A -> 11DB2/135EB (centre of the occupying unit) -> 1033B(5) ->
 //   56129 (100-slot table) -> 56178(slot 0..19, x=0, y=0, base=14h, cycle=5, state=0).
 //   (1) 30 frames (0..29): {10AEB; 1FFFE(frame = (i % 0Eh) + 6); 12BEE; 454D5; 5E9E8;
@@ -183,7 +183,7 @@ int CombatII::battle_fx_5637d(int unit_index, int tx, int ty, int k) {
     auto draw_561f4 = [&](int f, int x, int y) {            // sub_561F4 -> sub_5F29D
         if (f < 0 || f >= nframes) return;
         battle_fx_blit_tinted_unclipped(f, x + magic_frames_[(size_t)f].xo,
-                                          y + magic_frames_[(size_t)f].yo, 60);
+                                          y + magic_frames_[(size_t)f].yo, 0x32, {0x01});
     };
 
     // sub_56129 + 56178: clear the table and seed slots 0..19 as inactive.
@@ -510,7 +510,7 @@ int CombatII::battle_fx_272ad(int unit_index, int tx, int ty, int k) {
 }
 
 // sub_59675(eax=unit): turn undead; one target unit is struck by a bstar.nsp star and collapses.
-//   1FEA4("bstar.nsp", 46h) -> 103A8 (not ported) -> 61147(1,?) (palette ramp, not ported) ->
+//   1FEA4("bstar.nsp", 46h) -> 103A8 -> 61147(1,46h); 1FEA4 restores edx via loc_21E10 ->
 //   [unit+64h] = 0Ah (hit pose) -> anchor 10971([unit])+0Ch / 10988([unit])-6 -> 1033B(0Fh).
 //   (1) 13 frames (cx <= 0Ch): {10AEB; 5EFB9(frame cx, anchor, scale); 12BEE; 12F2A(unit);
 //       5E9E8; 499E4}
@@ -541,13 +541,13 @@ int CombatII::battle_fx_59675(int target_index) {
     };
     auto tinted_u = [&](int f, int x, int y) {              // sub_5F29D
         if (const MagicFxFrame* e = frame_ptr(f))
-            battle_fx_blit_tinted_unclipped(f, x + e->xo, y + e->yo, 100);
+            battle_fx_blit_tinted_unclipped(f, x + e->xo, y + e->yo, 0x46, {0x01});
     };
     auto column = [&](int f, int y0, int bottom) {          // sub_5F305, 25 rows
         const MagicFxFrame* e = frame_ptr(f);
         if (!e) return;
         for (int yy = y0; yy > bottom; yy -= 8)
-            battle_fx_blit_tinted(f, ax + e->xo, yy + e->yo, 100);
+            battle_fx_blit_tinted(f, ax + e->xo, yy + e->yo, 0x46, {0x01});
     };
     // (1) 13 frames as the star lands and stays above the unit
     for (int i = 0; i <= 0x0C && !should_exit_; ++i) {

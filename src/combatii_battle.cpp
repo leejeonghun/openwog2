@@ -1705,19 +1705,20 @@ void CombatII::battle_prepare_spell_hits() {
 // digit k+1 by -2, f>=20 raises digit 3 by +2). The caller mutates digit_y each frame.
 void CombatII::battle_draw_hp_digits(const SpellHitPending& p) {
     if (p.sx0 - 16 < 0 || p.sx0 - 16 >= 0x120) return;
+    // sub_45CCB tests word_F9708[slot*10] (cell 0) once, then draws the four cells.
+    const int y0 = p.digit_y[0];
+    if (y0 - 5 < 0 || y0 - 5 >= 0xB2) return;
     uint8_t* bb = video_.get_backbuffer();
     if (p.ndig <= 0) {
-        // sub_45CCB loc_45E21: an empty five-byte buffer is the "miss" branch.
-        const int y = p.digit_y[0];
-        if (y - 5 < 0 || y - 5 >= 0xB2) return;
+        // sub_45CCB loc_45E21: empty buffer -> "miss" with spacing 0 and the shadow at y.
         if (p.small_font) {
-            draw_small_text(p.sx0 + 1, y + 1, "miss", 0, 1);
-            draw_small_text(p.sx0, y, "miss", p.color, 1);
+            draw_small_text(p.sx0 + 1, y0, "miss", 0, 0);
+            draw_small_text(p.sx0, y0, "miss", p.color, 0);
         } else if (bb && font_.is_loaded()) {
             font_.set_text_mode(4, 0x0000, 0xFF);
-            font_.draw_string(bb, SCREEN_W, SCREEN_H, p.sx0 + 1, y + 1, "miss");
+            font_.draw_string(bb, SCREEN_W, SCREEN_H, p.sx0 + 1, y0, "miss");
             font_.set_text_mode(4, (uint16_t)(p.color << 8), 0xFF);
-            font_.draw_string(bb, SCREEN_W, SCREEN_H, p.sx0, y, "miss");
+            font_.draw_string(bb, SCREEN_W, SCREEN_H, p.sx0, y0, "miss");
         }
         return;
     }
@@ -1730,7 +1731,6 @@ void CombatII::battle_draw_hp_digits(const SpellHitPending& p) {
     for (int k = 0; k < p.ndig && k < 4; k++) {
         one[0] = p.digits[k];
         const int x = x0 + k * 6, y = p.digit_y[first + k];
-        if (y - 5 < 0 || y - 5 >= 0xB2) continue;
         if (p.small_font) {
             // sub_45CCB -> sub_60944 -> sub_608E6: shadow and body both use TEXT.CHR.
             draw_small_text(x + 1, y + 1, one, 0, 1);
@@ -9064,7 +9064,9 @@ void CombatII::battle_spell_pace_287af() {
     battle_prepare_spell_hits();                          // 45BFB + 45ED2 at the 28728 timing
     game_timer_set(3);                                    // sub_1033B(3, 1)
     for (int f = 1; f <= 0x18 && !should_exit_; ++f) {
-        // 45F29 + 45CCB for every prepared target, then 454B3/5E9E8/499E4.
+        // 454B3 draws the old [65h]/[66h] offsets; 45F29 advances them afterwards, so the
+        // kick is visible on the next frame. 45CCB then draws the updated digits.
+        render_battle_frame();                            // sub_454B3
         for (auto& p : battle_spell_hits_) {
             if (p.target < 0 || (size_t)p.target >= units_.size()) continue;
             auto& U = units_[(size_t)p.target];
@@ -9079,7 +9081,6 @@ void CombatII::battle_spell_pace_287af() {
             else if (f >= 0x14) p.digit_y[3] += 2;
             else { const int k = (f - 5) / 5; if (k < 4) { p.digit_y[k] += 2; p.digit_y[k + 1] -= 2; } }
         }
-        render_battle_frame();                            // sub_454B3
         for (const auto& p : battle_spell_hits_) battle_draw_hp_digits(p); // sub_45CCB
         render_overlay();
         video_.present();                                 // sub_5E9E8
@@ -11424,6 +11425,7 @@ void CombatII::battle_damage_fx_play(std::vector<BattleDamageFx>& fx,
     const bool damage_small_font = small_font_loaded_;
     game_timer_set(3);
     for (int f = 1; f <= 0x18 && !should_exit_ && !skip_cutscene_; ++f) {
+        render_battle_frame();                                 // sub_454B3 before 45F29
         for (BattleDamageFx& d : fx) {
             if (d.unit < 0 || (size_t)d.unit >= units_.size()) continue;
             auto& U = units_[(size_t)d.unit];
@@ -11444,7 +11446,6 @@ void CombatII::battle_damage_fx_play(std::vector<BattleDamageFx>& fx,
                 d.digit_y[k + 1] -= 2;                         // sub cx,2
             }
         }
-        render_battle_frame();
         uint8_t* bb = video_.get_backbuffer();
         for (const BattleDamageFx& d : fx) {
             // loc_45D6E/loc_45E4D: one cull for the whole number (x-10h, y[0]-5).
@@ -11452,13 +11453,13 @@ void CombatII::battle_damage_fx_play(std::vector<BattleDamageFx>& fx,
             const int y0 = d.digit_y[0];
             if (y0 - 5 < 0 || y0 - 5 >= 0xB2) continue;
             if (d.ndig <= 0) {
-                // loc_45E78: an empty buffer shows "miss" (shadow at +1,+1).
+                // loc_45E78: an empty buffer shows "miss" with spacing 0 and the shadow at y.
                 if (damage_small_font) {
-                    draw_small_text(d.sx0 + 1, y0 + 1, "miss", 0, 1);
-                    draw_small_text(d.sx0, y0, "miss", d.color, 1);
+                    draw_small_text(d.sx0 + 1, y0, "miss", 0, 0);
+                    draw_small_text(d.sx0, y0, "miss", d.color, 0);
                 } else if (bb && font_.is_loaded()) {
                     font_.set_text_mode(4, 0x0000, 0xFF);
-                    font_.draw_string(bb, SCREEN_W, SCREEN_H, d.sx0 + 1, y0 + 1, "miss");
+                    font_.draw_string(bb, SCREEN_W, SCREEN_H, d.sx0 + 1, y0, "miss");
                     font_.set_text_mode(4, (uint16_t)(d.color << 8), 0xFF);
                     font_.draw_string(bb, SCREEN_W, SCREEN_H, d.sx0, y0, "miss");
                 }

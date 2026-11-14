@@ -81,8 +81,9 @@
 //   - 5EB4A/5EB58 (set colour + Bresenham line) are canvas primitives the port lacks, so
 //     this file has equivalents (asura_put/asura_line) and draws directly between
 //     battle_fx_world and battle_fx_commit, the same window the original uses.
-//   - The third argument of 5F305/5F29D is the tint LUT at [entry+8] in the original. The
-//     port takes a percentage, fixed at tint 50h to match 61147(1, 50h).
+//   - The third argument of 5F305/5F29D is the tint LUT at [entry+8] in the original.
+//     61147(eax=1, edx=50h) builds only the colour-1 LUT; the port passes tint 50h with
+//     the {0x01} mask.
 //   - Per-unit 12F2A calls use battle_draw_unit_now at the same points as the original. On
 //     the cleared stages the port draws one target, flushes its queued effects, draws that
 //     target, and only then moves to the next target, matching the ASM's effect/12F2A order.
@@ -396,14 +397,14 @@ int CombatII::battle_fx_31283_anim(int unit_index) {
         if (f < 0 || f + 1 >= nframes) return;
         const MagicFxFrame& fr = magic_frames_[(size_t)f];
         const MagicFxFrame& fr2 = magic_frames_[(size_t)(f + 1)];
-        battle_fx_blit_tinted(f, bx + fr.xo, by + fr.yo, 0x50);
+        battle_fx_blit_tinted(f, bx + fr.xo, by + fr.yo, 0x50, {0x01});
         for (int j = 0; j < 11; ++j) {
             const int y = by - 0x19 - 0x10 * j;
-            battle_fx_blit_tinted(f + 1, bx + fr2.xo, y + fr2.yo, 0x50);
+            battle_fx_blit_tinted(f + 1, bx + fr2.xo, y + fr2.yo, 0x50, {0x01});
         }
     };
     auto blit_entry = [&](int f, int x, int y) {
-        if (f >= 0 && f < nframes) battle_fx_blit_tinted(f, x, y, 0x50);   // sub_5F305
+        if (f >= 0 && f < nframes) battle_fx_blit_tinted(f, x, y, 0x50, {0x01}); // sub_5F305
     };
     int rounds = 0;
     while (!should_exit_ && rounds++ < 64) {
@@ -513,7 +514,7 @@ int CombatII::battle_fx_31283_anim(int unit_index) {
                 }
                 if (esi < nframes) {
                     const MagicFxFrame& fr = magic_frames_[(size_t)esi];
-                    battle_fx_blit_tinted_unclipped(esi, base_x + fr.xo, base_y + fr.yo, 0x50); // 5F29D
+                    battle_fx_blit_tinted_unclipped(esi, base_x + fr.xo, base_y + fr.yo, 0x50, {0x01}); // 5F29D
                 }
                 battle_fx_flush();                           // caster 5F29D frame
                 battle_draw_unit_now(unit_index);            // 12F2A caster
@@ -600,7 +601,7 @@ int CombatII::battle_fx_31283_anim(int unit_index) {
             }
             if (di < nframes) {
                 const MagicFxFrame& fr = magic_frames_[(size_t)di];
-                battle_fx_blit_tinted_unclipped(di, fr.xo, 0x61 + fr.yo, 0x50); // sub_5F29D
+                battle_fx_blit_tinted_unclipped(di, fr.xo, 0x61 + fr.yo, 0x50, {0x01}); // sub_5F29D
             }
             battle_fx_flush();                           // 5F29D frame
             battle_fx_commit();

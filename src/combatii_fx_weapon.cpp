@@ -1270,12 +1270,12 @@ bool CombatII::battle_fx_32bcb_anim(int unit_index) {
             const int ux = (U.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X + 0x0C;
             const int uy = (U.y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y + 2;
             const MagicFxFrame& e = magic_frames_[(size_t)idx];
-            battle_fx_blit_tinted_unclipped(idx, ux + e.xo, uy + e.yo, 70); // 5F29D (61147 1Fh,46h)
+            battle_fx_blit_tinted_unclipped(idx, ux + e.xo, uy + e.yo, 70, {0x1F}); // 5F29D (61147 1Fh,46h)
             if (v >= 0x26 && v < 0x64 && 31 < nframes && 29 < nframes) {
                 // 33D3F: a second copy of frame 31 at the frame-29 offsets, shifted +-1 x.
                 const MagicFxFrame& b = magic_frames_[29];
                 const int parity = (frame_counter & 1) ? -1 : 1;
-                battle_fx_blit_tinted_unclipped(31, ux + b.xo + parity, uy + b.yo, 70);
+                battle_fx_blit_tinted_unclipped(31, ux + b.xo + parity, uy + b.yo, 70, {0x1F});
             }
             if ((frame_counter % 4) == 3) {                                // +1 every 4 frames, after drawing
                 int f = v + 1;
