@@ -10,7 +10,7 @@
 //   (3) 0Ch-frame loop (cx = 0..0Bh):
 //         [unit+63h] = ([unit+63h] + 1) & 3     -- rotate the facing once per frame
 //         read dword_BA83C / dword_BA838+2 and draw 454B3 (background + units)
-//         frame index = cx / 3 (`idiv 3`, 12-byte entry -> `imul eax,edx,0Ch`)
+//         frame index = cx % 3 (`idiv 3`, remainder edx -> `imul eax,edx,0Ch`)
 //         x = centre x + entry[+2], y = centre y + entry[+4], then 5EE51 (flat blit)
 //         5E9E8 -> 499E4 (present + wait)
 //   (4) 1FFCD (table release), then 28728(edx=1770h, ebx=14h, ecx=1) for damage ->
@@ -40,12 +40,11 @@ int CombatII::battle_fx_3b9e1(int unit_index, int tx, int ty, int k) {
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return 0;
     auto& u = units_[(size_t)unit_index];
 
-    // (1) radius-1 diamond collection (1AC08 ebx=1). The original returns -1 on an empty
-    // list; the port returns 0.
+    // (1) radius-1 diamond collection (1AC08 ebx=1). An empty list returns -1 (ASM 3BA2C).
     magic_fx_draws_.clear();                                     // dword_F0B9C+2 = 0
     battle_target_list_.clear();
     const int n = battle_weapon_collect_dia_at(unit_index, (int)(int8_t)u.x, (int)(int8_t)u.y, 1);
-    if (n <= 0) return 0;
+    if (n <= 0) return -1;
 
     // (2) table load + centre + period
     if (!battle_nsp_load("swirl.nsp") || magic_frames_.empty()) return 0;   // sub_1FEA4
@@ -54,13 +53,13 @@ int CombatII::battle_fx_3b9e1(int unit_index, int tx, int ty, int k) {
     unit_screen_center(u, cx, cy);                               // sub_135EB
     game_timer_set(5);                                           // sub_1033B(5); ecx=0 is dead
 
-    // (3) 12 frames: rotate the facing every frame and draw frame cx/3 at the centre.
+    // (3) 12 frames: rotate the facing every frame and draw frame cx%3 at the centre.
     for (int i = 0; i < 0x0C && !should_exit_; ++i) {           // `cmp cx,0Ch; jl`
         if ((size_t)unit_index < units_.size()) {
             auto& uu = units_[(size_t)unit_index];
             uu.facing = (int8_t)(((int)uu.facing + 1) & 3);      // [63h] = ([63h]+1)&3
         }
-        const int f = i / 3;                                     // `idiv 3`, remainder dropped
+        const int f = i % 3;                                     // `idiv 3` -> remainder (edx)
         if (f < nframes) {
             const MagicFxFrame& fr = magic_frames_[(size_t)f];
             battle_fx_blit(f, cx + fr.xo, cy + fr.yo);            // sub_5EE51

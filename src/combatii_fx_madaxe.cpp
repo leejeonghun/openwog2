@@ -148,3 +148,55 @@ int CombatII::battle_fx_2f3b2(int unit_index, int k) {
         fprintf(stderr, "COMBAT: 2F3B2 %s unit=%d k=%d dir=%d target=%d\n", nsp, u.id, k, dir, target);
     return 1;
 }
+
+// ==== sub_2FF4B: fistlv4.nsp (F1474 idx 22 finisher) ====
+// ASM: COMBATII_code.ASM 44078..44130. The table entry idx 22 calls it with eax = unit.
+//
+// Original flow:
+//   (1) sub_1FEA4("fistlv4.nsp") -> sub_1033B(9) -> sub_44D6E(1) -> sub_1033B(9).
+//       The second 1033B(9) is redundant (44D6E only writes FA8B6).
+//   (2) sub_135EB(unit) -> centre (x at esp, y at esp+4).
+//   (3) 9 frames (`cmp cx,9`): frame = cx%3 (0,1,2,0,1,2,0,1,2) through
+//       sub_454B3 -> sub_1FFFE(frame, x, y) -> sub_12F2A(caster) -> sub_5E9E8 -> sub_499E4.
+//       The original never changes [unit+64h], so the caster keeps its current pose.
+//   (4) sub_44D6E(0) -> sub_1FFCD -> [unit+13h] |= 80h.
+//
+// Port mapping: 1FEA4 -> battle_nsp_load, 1033B -> game_timer_set, 44D6E ->
+//   battle_dim_row0_, 135EB -> unit_screen_center, 454B3 + 5E9E8 -> battle_fx_present
+//   (which also runs the 454D5 overlay, like the sibling drivers),
+//   1FFFE -> battle_fx_blit (adds the entry's xo/yo), 12F2A -> battle_fx_redraw_unit
+//   (queued after the effect so the caster is redrawn on top, as in the original),
+//   1FFCD -> battle_nsp_release.
+int CombatII::battle_fx_2ff4b(int unit_index) {
+    if (unit_index < 0 || (size_t)unit_index >= units_.size()) return 0;
+    auto& u = units_[(size_t)unit_index];
+    if (!battle_nsp_load("fistlv4.nsp") || magic_frames_.empty()) {
+        u.combat_flags_13 = (uint8_t)(u.combat_flags_13 | 0x80);    // or [13h],80h
+        return 0;
+    }
+    game_timer_set(9);                                               // sub_1033B(9)
+    battle_dim_row0_ = true;                                         // sub_44D6E(1)
+    int cx = 0, cy = 0;
+    unit_screen_center(u, cx, cy);                                   // sub_135EB
+
+    const int nframes = (int)magic_frames_.size();
+    for (int i = 0; i < 9 && !should_exit_; ++i) {                   // cmp cx,9
+        const int f = i % 3;                                         // `idiv 3` -> remainder (edx)
+        if (f < nframes) {
+            const MagicFxFrame& fr = magic_frames_[(size_t)f];
+            battle_fx_blit(f, cx + fr.xo, cy + fr.yo);                // sub_1FFFE
+        }
+        battle_fx_redraw_unit(unit_index);                           // sub_12F2A(caster)
+        battle_fx_present();                                         // 454B3 + 5E9E8
+        wait_game_tick();                                            // sub_499E4
+        if ((size_t)unit_index >= units_.size()) break;
+    }
+    battle_dim_row0_ = false;                                        // sub_44D6E(0)
+    battle_nsp_release();                                            // sub_1FFCD
+    if ((size_t)unit_index < units_.size())
+        units_[(size_t)unit_index].combat_flags_13 =
+            (uint8_t)(units_[(size_t)unit_index].combat_flags_13 | 0x80);
+    if (battle_trace_)
+        fprintf(stderr, "COMBAT: 2FF4B fistlv4 unit=%d frames=9\n", units_[(size_t)unit_index].id);
+    return 1;
+}

@@ -54,7 +54,7 @@ int CombatII::battle_ai_3b9e1(int unit_index) {
         fprintf(stderr, "COMBAT: AI unit=%d swirl (sub_3B9E1) targets=%zu\n",
                 units_[(size_t)unit_index].id, battle_target_list_.size());
     // 3B9E1 effect body: 1FEA4("swirl.nsp") -> 135EB -> 1033B(5) -> 12 frames (facing +1 per frame,
-    // frame i/3) -> 1FFCD.
+    // frame i%3) -> 1FFCD.
     battle_fx_3b9e1(unit_index, actor.x, actor.y, 0);
     if (should_exit_) return 1;
     const std::vector<int> victims = battle_target_list_;

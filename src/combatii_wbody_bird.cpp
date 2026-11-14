@@ -5,7 +5,8 @@
 //   (1) 169D7(unit): reset the AI grid.
 //   (2) Target collection.
 //       - word_F14D8 == 1 (auto): 2E0F0(unit, 7, &var_1C, &var_24), up to 7 targets;
-//         empty returns -1. Distance edi = 49ADF(unit, target) = Manhattan.
+//         empty returns -1. Distance edi = 49ADF(unit, endpoint) = Manhattan, where the
+//         endpoint is the last empty E8 tile before the first collected hostile.
 //       - Player: 44D67(1) starts the cursor, 1A1DE(front tile), then the 1A452/1A552
 //         rays (width 1, length 7) fill F0648 through 1A1F8/13CBD/13D02; when the tile
 //         chosen by the 4A483 cursor satisfies (13CBD >= 0, 49ADF >= 2, 11DB2 == 0)
@@ -75,19 +76,19 @@
 int CombatII::battle_fx_308ee_anim(int unit_index) {
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return -1;
     auto& A = units_[(size_t)unit_index];
-    std::vector<int> grid;
-    battle_ai_169d7_reset(unit_index, grid);                              // sub_169D7
 
     // ---- (2) target collection and distance ----
+    // battle_weapon_collect_2e0f0 runs the sub_169D7 E8 rebuild internally.
     int dist = 0;                                                        // edi
     if (battle_f14d8_ == 1) {
-        if (battle_weapon_collect_2e0f0(unit_index, 7) <= 0) {           // sub_2E0F0(unit, 7)
+        int end_x = (int)(int8_t)A.x, end_y = (int)(int8_t)A.y;
+        if (battle_weapon_collect_2e0f0(unit_index, 7, &end_x, &end_y) <= 0) { // sub_2E0F0(unit, 7)
             if (battle_trace_) fprintf(stderr, "COMBAT: 308ee unit=%d empty(auto) -> -1\n", A.id);
             return -1;
         }
-        const auto& T = units_[(size_t)battle_target_list_[0]];
-        dist = std::abs((int)(int8_t)T.x - (int)(int8_t)A.x) +
-               std::abs((int)(int8_t)T.y - (int)(int8_t)A.y);            // sub_49ADF
+        // 308EE uses the selected ray endpoint, not the first target tile.
+        dist = std::abs(end_x - (int)(int8_t)A.x) +
+               std::abs(end_y - (int)(int8_t)A.y);                      // sub_49ADF
     } else {
         int fx = 0, fy = 0;
         battle_weapon_front_tile(unit_index, fx, fy);                    // sub_1A1DE

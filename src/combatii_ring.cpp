@@ -621,6 +621,9 @@ void CombatII::ring_sub_open(SubRingKind kind, int unit_index) {
     }
     ring_subkind_ = kind;
     ring_sub_open_ = true;
+    // sub_4BFCA calls sub_4A901 at the start of every 4C72A stage: clear the
+    // hover position as well, including the initial stage entered from the ring.
+    ring_sub_hover_ = -1;
     ring_sub_hover_frame_ = 0;
     ring_sub_hover_last_us_ = timer_now_us();
     if (!was) sfx(0x1F);
@@ -962,6 +965,9 @@ bool CombatII::battle_ring_dispatch(int unit_index, int menu_id) {
             // Enter the sub_4C72A three-stage ring at the group stage.
             battle_magic_select_ = true;
             battle_magic_pending_r_ = -1;
+            battle_magic_aim_ = MagicAimMode::None;
+            battle_magic_confirm_ = false;
+            battle_magic_confirm_tx_ = battle_magic_confirm_ty_ = -1;
             battle_attack_cancel();
             battle_item_select_ = false;
             battle_weapon_select_ = false;

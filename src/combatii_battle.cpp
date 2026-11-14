@@ -12,6 +12,31 @@
 #include <cstdio>
 #include <cstring>
 
+// The original leaves the target/confirm choice to each F13B0 handler:
+//   28982                   -> one 4A483 unit click (no 4A815)
+//   28B24 / 28C8A / 2B031  -> 4A483 centre click, then 4A815 confirm
+//   2A1C6 / 29722 / 29F4D / 2A75A / 2C36A -> 4A815 confirm at the caster
+//   2BC3B                   -> no cursor and no confirmation
+static MagicAimMode battle_magic_aim_mode(int r_code) {
+    const int q1 = (r_code < 0) ? -1 : r_code / 3;
+    switch (q1) {
+        case 26: // Revible (2BC3B)
+            return MagicAimMode::Immediate;
+        case 3: case 4: case 5: case 6:
+        case 10: case 11: case 12: case 13:
+        case 17: case 18: case 19: case 20:
+        case 24: case 25: case 27: case 33:
+        case 35: case 36: case 37: case 38: case 39: case 40: case 41:
+        case 45: case 48:
+            return MagicAimMode::ConfirmOnly;
+        case 2: case 9: case 16: case 22:
+        case 28: case 29: case 30: case 31: case 32: case 34: case 47:
+            return MagicAimMode::AreaCenter;
+        default:
+            return MagicAimMode::Single;
+    }
+}
+
 // sub_4C72A tail: read unk_74FA8 after the sub_4BFCA id normalization.
 // Returns the 1-based spell id, or 0 for an empty/non-base slot.
 static int battle_magic_ring_value(int g, int b, int c) {
@@ -1501,6 +1526,34 @@ void CombatII::play_attack_sequence(const VmEvent& ev) {
     present_cutscene_frame();
 }
 
+// sub_1E2EA: draw the WEA_EFFC weapon arc at the caster's centre. f8 is edx-1 (0/1) and
+// s is the normalised ebx (0/1). The sprite index is base + f8; the anchor offsets come
+// from the caster's 40-byte head table (+1/+2, or +3/+4 when f8 == 1).
+void CombatII::battle_draw_weapon_trail(int unit_index, int f8, int s) {
+    if (unit_index < 0 || (size_t)unit_index >= units_.size()) return;
+    auto& A = units_[(size_t)unit_index];
+    const NC2Parser* np = nullptr;
+    auto it = nc2_chars_.find(A.sprite_type);
+    if (it != nc2_chars_.end()) np = it->second.get();
+    if (!np) return;
+    const int d = A.facing & 3;
+    // sub_1E2EA normalises ebx to 0/1 (`test bx,bx; jz; mov ebx,1`); s is a flag.
+    const int sn = s ? 1 : 0;
+    const int base = np->head(d * 10 + sn * 5 + 0);
+    if (base < 0) return;
+    const int kx = (f8 == 1) ? 3 : 1;
+    const int ky = (f8 == 1) ? 4 : 2;
+    const int idx = base + f8;
+    if (idx < 0 || (size_t)idx >= wea_effc_.size() || wea_effc_[(size_t)idx].rle.empty()) return;
+    const int ox = np->head(d * 10 + sn * 5 + kx);
+    const int oy = np->head(d * 10 + sn * 5 + ky);
+    const int ax = (A.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ +
+                   TILE_ANCHOR_X + CENTER_ADD_X - ox;
+    const int ay = (A.y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ +
+                   TILE_ANCHOR_Y + CENTER_ADD_Y - oy;
+    blit_sprite_480(ax, ay, wea_effc_[(size_t)idx].rle.data());
+}
+
 // sub_19168: per-item [5Bh] gameplay effect of a critical hit (dword_F0B8A+2 == 1).
 //   The .ssp/camera presentation is replaced by logging; instant death, status and area
 //   damage behave as in the original.
@@ -2585,7 +2638,9 @@ bool CombatII::battle_quick_load_4fd25() {
     battle_item_select_ = false;
     battle_weapon_select_ = false;
     battle_magic_pending_r_ = -1;
-    battle_magic_confirm_2a75a_ = false;
+    battle_magic_aim_ = MagicAimMode::None;
+    battle_magic_confirm_ = false;
+    battle_magic_confirm_tx_ = battle_magic_confirm_ty_ = -1;
     battle_item_pending_dx_ = -1;
     if (battle_state_ == 1) battle_free_wait_ = true;
     if (h.version >= 3) {
@@ -3324,6 +3379,9 @@ void CombatII::battle_reset() {
     battle_item_select_ = false;
     battle_weapon_select_ = false;
     battle_magic_pending_r_ = -1;
+    battle_magic_aim_ = MagicAimMode::None;
+    battle_magic_confirm_ = false;
+    battle_magic_confirm_tx_ = battle_magic_confirm_ty_ = -1;
     battle_item_pending_dx_ = -1;
     // sub_18539 (F0382 clear) runs when the scenario loads (sub_4ED18), so battle_reset
     // (sub_19652) leaves it alone; battle_tile_load_events() fills tile events from
@@ -4231,9 +4289,12 @@ bool CombatII::battle_player_input() {
     // Back to the ring (si==0/-2): end the turn when TP < var18 (4DA7B), else redraw the
     // menu (4D7EA). No move diffusion is laid down here; E8 is the sub_1CC09 range.
     auto back_to_ring = [&]() {
+        if (should_exit_) return; // do not reopen the ring after a battle-ending cast
         battle_attack_cancel();
         battle_move_cancel();
-        battle_magic_confirm_2a75a_ = false;
+        battle_magic_confirm_ = false;
+        battle_magic_aim_ = MagicAimMode::None;
+        battle_magic_confirm_tx_ = battle_magic_confirm_ty_ = -1;
         battle_magic_pending_r_ = -1;
         battle_magic_select_ = false;
         battle_item_select_ = false;
@@ -4249,6 +4310,31 @@ bool CombatII::battle_player_input() {
             return;
         }
         battle_player_show_menu(ui); // 1CC09 + redraw the ring (4D7EA)
+    };
+    // Enter the exact targeting state of the selected F13B0 handler. The ring is
+    // hidden first (4C72A's 4B9D7); 4A815-only spells then show the confirm cursor at
+    // the caster, single/area spells wait for the 4A483 click, and Revible runs now.
+    auto begin_magic_aim = [&](int r, int cx, int cy) {
+        const MagicAimMode aim = battle_magic_aim_mode(r);
+        battle_magic_pending_r_ = r;
+        battle_magic_aim_ = aim;
+        battle_magic_confirm_ = false;
+        battle_magic_confirm_tx_ = battle_magic_confirm_ty_ = -1;
+        battle_magic_select_ = false;
+        ring_sub_close();
+        if (aim == MagicAimMode::Immediate) {
+            battle_cast_magic(ui, r, cx, cy);
+            if (battle_tp_changed() && (size_t)ui < units_.size())
+                units_[(size_t)ui].combat_acc57 = 0;
+            back_to_ring();
+            return;
+        }
+        battle_magic_select_ = true;
+        if (aim == MagicAimMode::ConfirmOnly) {
+            battle_magic_confirm_ = true;
+            battle_magic_confirm_tx_ = cx;
+            battle_magic_confirm_ty_ = cy;
+        }
     };
     // sub_4BA7F calls sub_4AC8A only when sub_102FF fires (30 ticks, 171 ms); a click
     // still runs it immediately. Gate the per-frame hover scan with the same cadence.
@@ -4337,9 +4423,11 @@ bool CombatII::battle_player_input() {
                     return true;
                 }
                 case SubRingKind::MagicD:
+                    ring_sub_close(); // 4C72A step-back runs 4B9D7 first
                     ring_sub_open(SubRingKind::MagicG, ui);
                     return true;
                 case SubRingKind::MagicK:
+                    ring_sub_close(); // 4C72A step-back runs 4B9D7 first
                     ring_sub_open(SubRingKind::MagicD, ui);
                     return true;
                 case SubRingKind::Item:
@@ -4420,9 +4508,11 @@ bool CombatII::battle_player_input() {
                         back_to_ring();
                         return false;
                     case SubRingKind::MagicD:
+                        ring_sub_close(); // 4C72A step-back runs 4B9D7 first
                         ring_sub_open(SubRingKind::MagicG, ui);
                         return false;
                     case SubRingKind::MagicK:
+                        ring_sub_close(); // 4C72A step-back runs 4B9D7 first
                         ring_sub_open(SubRingKind::MagicD, ui);
                         return false;
                     case SubRingKind::Item:
@@ -4468,6 +4558,7 @@ bool CombatII::battle_player_input() {
                     ring_sub_magic_g_ = opt - 1;
                     if (battle_trace_)
                         fprintf(stderr, "COMBAT: magic a=%d g=%d (4C72A level 1)\n", opt, ring_sub_magic_g_);
+                    ring_sub_close(); // 4C72A: 4B9D7 before the next 4B8EB
                     ring_sub_open(SubRingKind::MagicD, ui);
                     return false;
                 }
@@ -4477,10 +4568,15 @@ bool CombatII::battle_player_input() {
                     if (battle_trace_)
                         fprintf(stderr, "COMBAT: magic g=%d id=%d b=%d (4C72A level 2)\n",
                                 ring_sub_magic_g_, opt, ring_sub_magic_d_);
+                    ring_sub_close(); // 4C72A: 4B9D7 before the next 4B8EB
                     ring_sub_open(SubRingKind::MagicK, ui);
                     return false;
                 }
                 case SubRingKind::MagicK: {
+                    // 4C72A runs 4B9D7 right after 4BA7F, before 4C605's Wrong Spell /
+                    // No TP! / No MP! returns. Hide the level-3 ring first so those
+                    // labels appear over the map, not over the ring.
+                    ring_sub_close();
                     // sub_4C72A: id 0 -> c=7, ids 15..21 -> c=0..6; then unk_74FA8.
                     const int g = ring_sub_magic_g_, b = ring_sub_magic_d_;
                     const int c = (opt == 0) ? 7 : opt - 15;
@@ -4528,27 +4624,9 @@ bool CombatII::battle_player_input() {
                         back_to_ring();
                         return false;
                     }
-                    // The 2A75A family (Meteor, Star Tearer, Mega Thunder, Heal Wind, Sun
-                    // Light) has no 28982/4A483 target cursor in the original, but sub_2A75A
-                    // still runs sub_4A815 in manual mode: wait for that confirm before the
-                    // cast (cancel returns -1 and 4C605 spends nothing).
-                    const int q1_direct = r / 3;
-                    if (q1_direct == 6 || q1_direct == 13 || q1_direct == 20 ||
-                        q1_direct == 25 || q1_direct == 27) {
-                        // sub_2A75A calls sub_4A815 in manual mode (dword_74492 == 0) and
-                        // returns -1 on cancel; defer the cast until the confirm.
-                        battle_magic_confirm_2a75a_ = true;
-                        battle_magic_pending_r_ = r;
-                        battle_magic_select_ = true;
-                        ring_sub_close();
-                        return false;
-                    }
-                    battle_magic_pending_r_ = r;
-                    // After R is fixed, wait for the target click: close the sub-ring and
-                    // let the map click path take over (the original's 4C605 opens the
-                    // cursor once 4C72A returns R).
-                    ring_sub_close();
-                    // battle_magic_select_ stays set (waiting for a target).
+                    // The selected handler decides whether it needs 4A483, 4A815,
+                    // both, or neither. Enter that aim state before hiding the ring.
+                    begin_magic_aim(r, (int)(int8_t)u.x, (int)(int8_t)u.y);
                     return false;
                 }
                 case SubRingKind::Item: {
@@ -4744,6 +4822,19 @@ bool CombatII::battle_player_input() {
         back_to_ring();
         return true;
     }
+    // 4A483 target cancellation (right click/1Bh/3 -> -1): a single-target or area
+    // centre selection returns to the ring without spending MP/TP. The 4A815 confirm
+    // state above handles its own cancel path.
+    if (battle_magic_select_ && !battle_magic_confirm_ &&
+        battle_magic_pending_r_ >= 0 && input_.get_mouse().right_clicked) {
+        if (battle_trace_) fprintf(stderr, "COMBAT: 4A483 right-cancel unit=%d R=%d\n",
+                                    u.id, battle_magic_pending_r_);
+        battle_magic_select_ = false;
+        battle_magic_pending_r_ = -1;
+        battle_magic_aim_ = MagicAimMode::None;
+        back_to_ring();
+        return true;
+    }
     {
         const MouseState& mst = input_.get_mouse();
         if (mst.right_clicked && !battle_magic_select_ && !battle_item_select_ && !battle_weapon_select_) {
@@ -4753,28 +4844,57 @@ bool CombatII::battle_player_input() {
         }
     }
 
-    // sub_4A815 confirm for the sub_2A75A family (manual cast only): Enter/left click
-    // continues, Esc/right click returns to the ring without spending MP/TP.
-    if (battle_magic_confirm_2a75a_) {
+    // sub_4A815 confirm: Enter/left click continues; Esc/right click cancels. For a
+    // 28B24/28C8A/2B031 area centre the cancel returns to the 4A483 centre cursor,
+    // while a caster-only confirm returns to the ring.
+    if (battle_magic_confirm_) {
         const MouseState& cm = input_.get_mouse();
         const bool ok = input_.was_left_clicked() || input_.is_key_pressed(SDLK_RETURN) ||
                         input_.is_key_pressed(SDLK_KP_ENTER);
         const bool cancel = input_.is_key_pressed(SDLK_ESCAPE) || cm.right_clicked;
         if (!ok && !cancel) return true;
         const int r = battle_magic_pending_r_;
-        battle_magic_confirm_2a75a_ = false;
-        battle_magic_pending_r_ = -1;
-        battle_magic_select_ = false;
+        const MagicAimMode aim = battle_magic_aim_;
+        const int ctx = battle_magic_confirm_tx_;
+        const int cty = battle_magic_confirm_ty_;
+        battle_magic_confirm_ = false;
+        battle_magic_confirm_tx_ = battle_magic_confirm_ty_ = -1;
         if (cancel) {
-            if (battle_trace_) fprintf(stderr, "COMBAT: 4A815 cancelled R=%d unit=%d\n", r, u.id);
+            if (battle_trace_)
+                fprintf(stderr, "COMBAT: 4A815 cancelled R=%d unit=%d area=%d\n",
+                        r, u.id, aim == MagicAimMode::AreaCenter ? 1 : 0);
+            if (aim == MagicAimMode::AreaCenter) {
+                // 28B24/28C8A/2B031 jump back to 4A483, keeping R and the area mode.
+                battle_magic_select_ = true;
+                battle_magic_aim_ = MagicAimMode::AreaCenter;
+                return true;
+            }
+            battle_magic_select_ = false;
+            battle_magic_pending_r_ = -1;
+            battle_magic_aim_ = MagicAimMode::None;
             back_to_ring();
             return true;
         }
-        const int cx = (int)(int8_t)u.x, cy = (int)(int8_t)u.y;
-        battle_cast_magic(ui, r, cx, cy);
-        if (battle_tp_changed() && (size_t)ui < units_.size())
-            units_[(size_t)ui].combat_acc57 = 0; // 83317
-        back_to_ring();
+        const int si = battle_cast_magic(ui, r, ctx, cty);
+        if (si == 0) {
+            battle_magic_select_ = false;
+            battle_magic_pending_r_ = -1;
+            battle_magic_aim_ = MagicAimMode::None;
+            if (battle_tp_changed() && (size_t)ui < units_.size())
+                units_[(size_t)ui].combat_acc57 = 0; // 83317
+            back_to_ring();
+        } else if (si == 3 && aim == MagicAimMode::AreaCenter) {
+            // The area listing was empty: 28B24 loops back to its centre cursor.
+            if (battle_trace_) fprintf(stderr, "COMBAT: area centre R=%d has no targets, reselect\n", r);
+            battle_magic_select_ = true;
+            battle_magic_pending_r_ = r;
+            battle_magic_aim_ = MagicAimMode::AreaCenter;
+        } else {
+            battle_magic_select_ = false;
+            battle_magic_pending_r_ = -1;
+            battle_magic_aim_ = MagicAimMode::None;
+            back_to_ring();
+        }
         return true;
     }
     // Esc: cancels a selection back to the ring, or cancels the menu (-1) to free wait.
@@ -4864,20 +4984,37 @@ bool CombatII::battle_player_input() {
             back_to_ring();
             return false;
         }
-        // Magic target selection (manual sub_28982 path: click after R is fixed).
+        // Magic target selection: 4A483 unit click for 28982, or the centre click
+        // that opens 4A815 for 28B24/28C8A/2B031.
         if (battle_magic_select_) {
-            if (battle_magic_pending_r_ < 0) return false; // waiting for a spell number (ignore click)
+            if (battle_magic_pending_r_ < 0) return false; // ignore a click before R is fixed
             const int rc = battle_magic_pending_r_;
+            const MagicAimMode aim = battle_magic_aim_mode(rc);
+            if (aim == MagicAimMode::AreaCenter) {
+                battle_magic_aim_ = aim;
+                battle_magic_confirm_ = true;
+                battle_magic_confirm_tx_ = tx;
+                battle_magic_confirm_ty_ = ty;
+                if (battle_trace_)
+                    fprintf(stderr, "COMBAT: 4A483 area centre R=%d tile=(%d,%d) -> 4A815\n",
+                            rc, tx, ty);
+                return false;
+            }
             const int si = battle_cast_magic(ui, rc, tx, ty);
             if (si == 0) {
                 battle_magic_select_ = false;
                 battle_magic_pending_r_ = -1;
+                battle_magic_aim_ = MagicAimMode::None;
                 if (battle_tp_changed() && (size_t)ui < units_.size()) units_[(size_t)ui].combat_acc57 = 0; // 83317
                 back_to_ring();
             } else if (si == 3) {
-                // Retarget: the magic target cursor (sub_28982 -> sub_4A483) continues.
+                // 28982 keeps its 4A483 cursor after an invalid target.
             } else {
-                battle_magic_pending_r_ = -1; // keep the failure message, reselect the spell
+                // Any other handler result skips the 4C605 cost and returns to 4D674.
+                battle_magic_select_ = false;
+                battle_magic_pending_r_ = -1;
+                battle_magic_aim_ = MagicAimMode::None;
+                back_to_ring();
             }
             return false;
         }
@@ -5064,20 +5201,9 @@ bool CombatII::battle_player_input() {
     for (int k = 0; k < 7; ++k) {
         if (!input_.is_test_key_pressed((SDL_Keycode)(SDLK_1 + k))) continue;
         if (battle_magic_select_ && (size_t)k < battle_magic_options_.size()) {
-            battle_magic_pending_r_ = battle_magic_options_[(size_t)k];
-            const int r = battle_magic_pending_r_;
+            const int r = battle_magic_options_[(size_t)k];
             if (battle_trace_) fprintf(stderr, "COMBAT: magic pick unit=%d R=%d %s\n", u.id, r, kSpellNames[r]);
-            // 2A75A spells skip the 28982/4A483 target cursor but still require the manual
-            // sub_4A815 confirm (see the MagicK case).
-            const int q1_direct = r / 3;
-            if (q1_direct == 6 || q1_direct == 13 || q1_direct == 20 ||
-                q1_direct == 25 || q1_direct == 27) {
-                // sub_2A75A -> sub_4A815 confirm (manual cast); no MP/TP is spent on cancel.
-                battle_magic_confirm_2a75a_ = true;
-                battle_magic_pending_r_ = r;
-                battle_magic_select_ = true;
-                ring_sub_close();
-            }
+            begin_magic_aim(r, (int)(int8_t)u.x, (int)(int8_t)u.y);
             return false;
         }
         if (battle_item_select_ && (size_t)k < battle_item_options_.size()) {
@@ -5148,6 +5274,15 @@ void CombatII::render_player_move_overlay() {
     if (battle_ring_dim_active()) {
         draw_speaker_frame(battle_player_unit_);
         battle_render_ring_panels(battle_player_unit_);
+        // sub_4C72A draws "MP %d" at x=60h on every magic-ring stage; y is 1Eh or C2h
+        // depending on whether the ring centre is above/below A0h.
+        if ((ring_subkind_ == SubRingKind::MagicG || ring_subkind_ == SubRingKind::MagicD ||
+             ring_subkind_ == SubRingKind::MagicK) && ring_sub_open_) {
+            char mp[16];
+            snprintf(mp, sizeof(mp), "MP %d", (int)(int16_t)u.combat_mp_50);
+            const int mp_y = ring_sub_center_y_ < 0xA0 ? 0xC2 : 0x1E;
+            draw_small_text(0x60, mp_y, mp, 0xFF, 1);
+        }
     }
     if (battle_atk_phase_ != 0) {
         // render_attack_range() draws the range shading behind the tiles; only the cursor
@@ -5203,9 +5338,11 @@ void CombatII::render_player_move_overlay() {
         }
         return;
     }
-    if (battle_magic_confirm_2a75a_) {
-        // sub_4A815 cursor on the caster tile: the confirm loop draws a 1x1 frame.
-        const int tx = (int)(int8_t)u.x, ty = (int)(int8_t)u.y;
+    if (battle_magic_confirm_) {
+        // sub_4A815 cursor: the selected area centre, or the caster for a
+        // confirmation-only handler. The confirm loop draws a 1x1 frame.
+        const int tx = battle_magic_confirm_tx_ >= 0 ? battle_magic_confirm_tx_ : (int)(int8_t)u.x;
+        const int ty = battle_magic_confirm_ty_ >= 0 ? battle_magic_confirm_ty_ : (int)(int8_t)u.y;
         const int x0 = (tx - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X;
         const int y0 = (ty - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y;
         auto put = [&](int x, int y) {
@@ -5600,6 +5737,9 @@ bool CombatII::battle_player_enter_ring(int unit_index) {
     battle_item_select_ = false;
     battle_weapon_select_ = false;
     battle_magic_pending_r_ = -1;
+    battle_magic_aim_ = MagicAimMode::None;
+    battle_magic_confirm_ = false;
+    battle_magic_confirm_tx_ = battle_magic_confirm_ty_ = -1;
     battle_item_pending_dx_ = -1;
     // sub_455BD: when the mouse covers the HUD panel at ring entry, move the panel to
     // another slot. Original call sites: 78827 (sub_4A483 destination cursor loop -
@@ -5646,6 +5786,9 @@ void CombatII::battle_ring_cancel_to_free(int unit_index) {
     battle_item_select_ = false;
     battle_weapon_select_ = false;
     battle_magic_pending_r_ = -1;
+    battle_magic_aim_ = MagicAimMode::None;
+    battle_magic_confirm_ = false;
+    battle_magic_confirm_tx_ = battle_magic_confirm_ty_ = -1;
     battle_item_pending_dx_ = -1;
     battle_used_bits_ = 0;
     battle_var24_action_end_ = false;
@@ -6243,6 +6386,9 @@ void CombatII::battle_player_end_turn(bool action_end) {
     battle_magic_select_ = false;
     battle_item_select_ = false;
     battle_magic_pending_r_ = -1;
+    battle_magic_aim_ = MagicAimMode::None;
+    battle_magic_confirm_ = false;
+    battle_magic_confirm_tx_ = battle_magic_confirm_ty_ = -1;
     battle_item_pending_dx_ = -1;
     battle_used_bits_ = 0;
     battle_var24_action_end_ = false;
@@ -8294,7 +8440,10 @@ int CombatII::battle_spell_2a1c6(int unit_index, int kind, int k) {
     if (kind == 4) radius -= 2;
     const int mode = (kind == 4) ? 0 : 1;                        // 28A97 filter (1201D result)
     std::vector<int> targets = battle_spell_diamond(unit_index, cx, cy, radius, mode);
-    if (targets.empty()) return 3;
+    // Manual 2A1C6 still runs 4A815, announces and returns 1 even when the
+    // diamond is empty (4C605 then spends MP/TP). Only the AI target collector
+    // fails early with -1 when it has no target.
+    if (targets.empty() && battle_spell_auto_) return 3;
     battle_spell_announce(unit_index, battle_spell_name_);       // sub_28889
     if (should_exit_) return 0;
     switch (kind) {
@@ -8793,6 +8942,10 @@ int CombatII::battle_spell_field(int unit_index, int g, int k, int tx, int ty) {
         for (int dy = -rad; dy <= rad; ++dy) {
             const int half = rad - (dy < 0 ? -dy : dy);
             for (int dx = -half; dx <= half; ++dx) add_victim(tx + dx, ty + dy);
+        }
+        if (victims.empty()) {
+            if (battle_trace_) fprintf(stderr, "COMBAT: field diamond empty unit=%d tile=(%d,%d)\n", u.id, tx, ty);
+            return 3;                                        // 28B24 loops back to 4A483
         }
     }
     battle_spell_announce(unit_index, battle_spell_name_);        // 29514 -> sub_28889
@@ -9723,8 +9876,9 @@ void CombatII::render_magic_effect_layer() {
 }
 
 // sub_4C605 + F13B0: validate R -> pick target -> run -> spend MP -> drain TP.
-// Returns 0 = done (back to the ring), 3 = pick another target, 4 = show a failure label
-// and stay in selection.
+// Returns 0 = done, 3 = the handler wants its target/area cursor again, 4 = failure.
+// The caller keeps the 4A483 cursor on 3 for 28982 and loops the 4A483 centre for
+// 28B24/28C8A/2B031; every failure returns to 4D674 (the ring).
 // The handler table follows the order sub_2C643 writes into dword_F13B0[49]:
 //   q1 = g*7+d -> {row 0: 2B73F,2B74A,2B75A,2B79C,2B7C0,2B7DC,2B822},
 //   {row 1: 2B82D,2B83D,2B848,2B86C,2B890,2B8A6,2B8F3},
@@ -10137,7 +10291,7 @@ void CombatII::battle_weapon_301bb(int unit_index, int weapon_idx, int is_leader
 //   idx0=2F47F, idx8=2F68C: dx1 -> 5, dx2 -> 7, dx3 -> 0x0C passed to 2CC3A, else -1.
 //   idx2=2F56C: 2D5A3 plus the [13h] bits (and E3h, or 4<<(dx-1)), always 1.
 //   idx4/12=2F5A7: 2D684 and [13h] &= 9Fh, then or 20h when dx < 3 else or 40h, always 1.
-//   idx11=2F71E: front single 1D124 plus 2CAF7(mul dx==1?0:dx, add 3000).
+//   idx11=2F71E: 1D124 area collection + 1E2EA trails + 2CAF7(mul dx==1?0:dx, add 3000).
 //   The remaining vectors (2F592/2F5D7/2F5EF/loc_2F4DE/2F68C/2F6EB/2F706/2F80B/2F98A/
 //   2FA1E/2FA41/2FA6E/2FD03/2FED7/2FF36/2FF4B/2FFF9/30049) are handled in
 //   battle_weapon_f1474 / battle_weapon_f1474_ext above; the ext dispatcher is entered for
@@ -10183,50 +10337,86 @@ int CombatII::battle_weapon_f1474(int unit_index, int idx, int dx) {
                                     idx, u.id, dx, (unsigned)u.combat_flags_13);
         return 1;
     }
-    if (idx == 11) { // sub_2F71E: front single 1D124 + 2CAF7 mul 0/2/3 + 3000
+    if (idx == 11) { // sub_2F71E: 1D124 gate -> poses 7/8/9 + 1E2EA arcs -> 2CAF7
         if (dx < 1 || dx > 3) {
             if (battle_trace_) fprintf(stderr, "COMBAT: warning: f1474[11]=2F71E unit=%d dx=%d invalid -> -1\n",
                                         u.id, dx);
             return -1;
         }
-        const int n = battle_weapon_collect_front(unit_index);
+        // sub_1D124(unit, x, y, facing): rebuild F0648 from the caster's own tile/facing;
+        // 2CAF7 then damages every collected target.
+        const int n = battle_range_collect(unit_index);
         if (n <= 0) {
-            if (battle_trace_) fprintf(stderr, "COMBAT: f1474[11]=2F71E unit=%d dx=%d front empty -> -1\n",
+            if (battle_trace_) fprintf(stderr, "COMBAT: f1474[11]=2F71E unit=%d dx=%d empty -> -1\n",
                                         u.id, dx);
             return -1;
         }
-        const int mul = (dx == 1) ? 0 : dx; // emu: dx1->0, dx2->2, dx3->3
-        const int r = battle_weapon_2caf7_loop(unit_index, mul, 3000);
-        if (battle_trace_) fprintf(stderr, "COMBAT: f1474[11]=2F71E unit=%d dx=%d -> 2CAF7(%d,3000) -> %d\n",
-                                    u.id, dx, mul, r);
-        return r;
+        load_effect_sprites();                                   // sub_11BB8 (WEA_EFFC table)
+        const int mul = (dx == 1) ? 0 : dx;                      // `cmp di,1` -> edi=0
+        // loc_2F751: poses 7/8 with 45559+499E4, 4F4CD(14h)+499E4, 4F4CD(1),
+        // pose 9, then two 454B3 + 1E2EA(1/2) + 5E9E8 frames.
+        u.anim_frame = 7;                                        // mov [esi+64h],7
+        game_timer_set(0x10);                                    // sub_1033B(10h)
+        battle_fx_present();                                     // sub_45559
+        wait_game_tick();                                        // sub_499E4
+        u.anim_frame = 8;
+        battle_fx_present();                                     // sub_45559
+        wait_game_tick();                                        // sub_499E4
+        sfx(0x14);                                               // sub_4F4CD(14h)
+        wait_game_tick();                                        // sub_499E4
+        sfx(1);                                                  // sub_4F4CD(1)
+        u.anim_frame = 9;
+        render_battle_frame();                                   // 454B3 + 454D5 (fall-through)
+        battle_draw_weapon_trail(unit_index, 0, 1);              // sub_1E2EA(edx=1, ebx=1)
+        battle_fx_commit();                                      // sub_5E9E8
+        wait_game_tick();                                        // sub_499E4
+        if (should_exit_) return 1;
+        render_battle_frame();                                   // 454B3 + 454D5
+        battle_draw_weapon_trail(unit_index, 1, 1);              // sub_1E2EA(edx=2, ebx=1)
+        battle_fx_commit();                                      // sub_5E9E8
+        battle_weapon_2caf7_loop(unit_index, mul, 3000);
+        if (battle_trace_) fprintf(stderr, "COMBAT: f1474[11]=2F71E unit=%d dx=%d -> 2CAF7(%d,3000)\n",
+                                    u.id, dx, mul);
+        return 1;                                               // sub_2F71E: mov eax,1
     }
     if (idx == 1 || idx == 7) { // loc_2F4DE (restrain.nsp, F14D8 auto approximation)
         // The original fills F0648 with a 1AC08 diamond of radius 2D4EB+2CBFB
         // (ITEM[5Bh][0x38]+dx) through 1AC59/1A1F8 and then runs 2D527 (restrain.nsp)
         // plus 197AD (queue removal) per target, with no damage. The port matches the
         // diamond collection, 2CBA1/dim, the per-target 2D527 loop and 197AD. An empty
-        // collection returns -1.
+        // collection still runs the shared 2CBA1/dim/cleanup tail and returns -1.
         if (dx < 1 || dx > 3) {
             if (battle_trace_) fprintf(stderr, "COMBAT: warning: f1474[%d]=2F4DE unit=%d dx=%d invalid -> -1\n",
                                         idx, u.id, dx);
             return -1;
         }
+        // loc_2F4DE: 2D4EB intro (timer 19h, poses 7/8) and bolt1.ssp before the
+        // diamond collection; the restrain table load also precedes it.
+        game_timer_set(0x19);                                   // sub_1033B(19h)
+        for (int i = 0; i < 2 && !should_exit_; ++i) {
+            u.anim_frame = (uint8_t)(7 + i);                    // `add al,7`
+            battle_fx_present();                                // 454B3 + 5E9E8
+            wait_game_tick();                                   // sub_499E4
+        }
+        if (should_exit_) return 1;
+        const bool have_restrain = battle_nsp_load("restrain.nsp"); // sub_1FEA4
+        battle_ssp_play("bolt1.ssp", 0x32);                     // sub_4F460
         const int base_r = (int8_t)battle_lookup_184a4(u.combat_type_5b, 0x38) + dx; // sub_2CBFB
         const int radius = base_r < 0 ? 0 : base_r;
         const int n = battle_weapon_collect_diamond(unit_index, radius);
-        if (n <= 0) {
-            if (battle_trace_) fprintf(stderr, "COMBAT: f1474[%d]=2F4DE unit=%d dx=%d radius=%d empty -> -1\n",
-                                        idx, u.id, dx, radius);
-            return -1;
+        const bool has_targets = n > 0;
+        if (battle_trace_) {
+            if (has_targets)
+                fprintf(stderr, "COMBAT: f1474[%d]=2F4DE unit=%d dx=%d radius=%d targets=%zu (restrain)\n",
+                        idx, u.id, dx, radius, battle_target_list_.size());
+            else
+                fprintf(stderr, "COMBAT: f1474[%d]=2F4DE unit=%d dx=%d radius=%d empty (cleanup, return -1)\n",
+                        idx, u.id, dx, radius);
         }
-        if (battle_trace_) fprintf(stderr, "COMBAT: f1474[%d]=2F4DE unit=%d dx=%d radius=%d targets=%zu (restrain)\n",
-                                    idx, u.id, dx, radius, battle_target_list_.size());
-        // loc_2E80C: 2CBA1 register -> 44D6E(1,0) -> per target {4F4CD(32h), 2D527, 197AD}
-        // -> 44D6E(0) -> 44D75 -> 12124 -> 1FFCD. 2D527 itself is 24 frames of restrain.nsp.
+        // loc_2E80C is shared even with an empty F0648: 2CBA1 register -> 44D6E(1,0) ->
+        // per target {4F4CD(32h), 2D527, 197AD} -> 44D6E(0) -> 44D75 -> 12124 -> 1FFCD.
         battle_highlight_add_depth(unit_index);                 // sub_2CBA1
         battle_dim_row0_ = true;                                // sub_44D6E(1,0)
-        const bool have_restrain = battle_nsp_load("restrain.nsp"); // sub_1FEA4
         for (int ti : battle_target_list_) {
             if (ti < 0 || (size_t)ti >= units_.size()) continue;
             if (!units_[(size_t)ti].active) continue;
@@ -10241,8 +10431,8 @@ int CombatII::battle_weapon_f1474(int unit_index, int idx, int dx) {
         battle_target_list_.clear();
         if (!should_exit_ && (size_t)unit_index < units_.size())
             reset_unit_pose(units_[(size_t)unit_index]);        // sub_12124
-        if (have_restrain) battle_nsp_release();                 // sub_1FFCD
-        return 1;
+        battle_nsp_release();                                   // sub_1FFCD (also on empty)
+        return has_targets ? 1 : -1;                            // loc_2E80C: count == 0 -> -1
     }
     if (idx == 3 || idx == 9 || idx == 21) { // sub_2F592/2F6EB/2FF36 -> sub_2EB61 (single 1D770+2CACA, add 3000/3000/0)
         const int edi2eb = (idx == 3) ? 0 : (idx == 9 ? 1 : 2); // 2EB61 edx: radius +6+edx; edx<2 adds 2E896 knockback
@@ -10256,6 +10446,17 @@ int CombatII::battle_weapon_f1474(int unit_index, int idx, int dx) {
             if (battle_trace_) fprintf(stderr, "COMBAT: warning: f1474[%d]=2EB61 unit=%d dx=%d invalid -> -1\n",
                                         idx, u.id, dx);
             return -1;
+        }
+        // sub_200DE(unit, 3): centre the camera three tiles ahead before the sweep.
+        {
+            int ccx = (int)(int8_t)u.x, ccy = (int)(int8_t)u.y;
+            switch (u.facing & 3) {
+                case 0: ccy += 3; break;
+                case 1: ccx -= 3; break;
+                case 2: ccy -= 3; break;
+                default: ccx += 3; break;
+            }
+            camera_center_on(ccx, ccy);                         // sub_200DE(unit, 3)
         }
         const int base_r = (int8_t)battle_lookup_184a4(u.combat_type_5b, 0x38); // sub_2CBFB
         const int n = battle_weapon_collect_2ea0c(unit_index, (int16_t)(base_r + 6 + edi2eb));
@@ -10279,11 +10480,13 @@ int CombatII::battle_weapon_f1474(int unit_index, int idx, int dx) {
         if (battle_trace_) fprintf(stderr, "COMBAT: f1474[%d]=2EB61 unit=%d dx=%d -> target=%d base=%d tmp=%d final=%d (2DA5E)\n",
                                     idx, u.id, dx, units_[(size_t)ti].id, base, tmp, fin);
         battle_highlight_add_depth(unit_index);                 // sub_2CBA1 (2EB61 loc_2ECB5)
-        A.anim_frame = 5;
+        // 2EB61 writes no pose here; 2DA5E sets [64h]=9 itself after the 7/8 intro.
         // 2EB61 loc_2ECB5: 49ADF/2CBA1 -> 44D6E(1) -> sub_2DA5E(slight/spearfly/fistlv3) ->
         //   44D6E(0) -> 44D75 -> 1D770/2CACA damage.
         battle_dim_row0_ = true;                                 // sub_44D6E(1)
-        battle_fx_2da5e(unit_index, (int)(int8_t)A.x, (int)(int8_t)A.y, edi2eb);
+        // 2EB61 passes the 4A483/2EA0C target tile as edx (49ADF distance) and edi as the variant.
+        battle_fx_2da5e(unit_index, (int)(int8_t)units_[(size_t)ti].x,
+                        (int)(int8_t)units_[(size_t)ti].y, edi2eb);
         battle_dim_row0_ = false;                                // sub_44D6E(0)
         battle_highlight_clear();                                // sub_44D75
         if (should_exit_ || (size_t)unit_index >= units_.size()) return 1;
@@ -10320,10 +10523,11 @@ int CombatII::battle_weapon_f1474(int unit_index, int idx, int dx) {
                                         idx, u.id, dx);
             return -1;
         }
-        const int add = (idx == 5) ? 5000 : 3000; // emu ecx
+        const int add = (idx == 5) ? 5000 : 3000; // 7449C>>16=1388h, 744A4>>16=0BB8h
         const int base_r = (int8_t)battle_lookup_184a4(u.combat_type_5b, 0x38); // sub_2CBFB
         const int radius = base_r + (idx == 5 ? 5 : 6);
-        const int n = battle_weapon_collect_2e0f0(unit_index, radius);
+        int end_x = (int)(int8_t)u.x, end_y = (int)(int8_t)u.y;
+        const int n = battle_weapon_collect_2e0f0(unit_index, radius, &end_x, &end_y);
         const bool picked = battle_weapon_apply_pick(unit_index);
         if (n <= 0 && !picked) {
             if (battle_trace_) fprintf(stderr, "COMBAT: f1474[%d]=2E25B unit=%d dx=%d R=%d empty -> -1\n",
@@ -10370,8 +10574,13 @@ int CombatII::battle_weapon_f1474(int unit_index, int idx, int dx) {
         const int ax = ((int)u.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X + 0x0C;
         const int ay = ((int)u.y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y - 2;
         int ex = ax, ey = ay;
-        if (!targets.empty()) {
-            const auto& T = units_[(size_t)targets[0]];           // far end of the 2E0F0 ray
+        if (battle_f14d8_ == 1 && n > 0) {
+            // sub_2E0F0 output: the empty E8 tile behind the farthest hostile, not the
+            // hostile's own tile. sub_2E25B interpolates the trail to this point.
+            ex = (end_x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X + 0x0C;
+            ey = (end_y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y - 2;
+        } else if (!targets.empty()) {
+            const auto& T = units_[(size_t)targets[0]];
             ex = ((int)T.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X + 0x0C;
             ey = ((int)T.y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y - 2;
         }
@@ -10473,9 +10682,10 @@ int CombatII::battle_weapon_f1474(int unit_index, int idx, int dx) {
     }
     if (idx == 6) { // sub_2F5EF (r5 diamond + 2CBA1 + 2D7D2 + 2CAF7 add 4000)
         // The original fills F0648 with a 1AC08 r5 diamond through 1A1F8, goes through
-        // 2CBA1/2D7D2 (presentation stub) and applies the damage in one go with 2CAF7.
-        // add = 7449C+2>>16 = 4000 (static dd). mul is approximated by dx (1..3); the exact
-        // [esp+2]>>16 value is unknown. An empty collection returns -1.
+        // 2CBA1/2D7D2 (swstr.nsp) and applies the damage in one go with 2CAF7.
+        // add = 7449C+2>>16 = 4000. mul = [esp+2]>>16 = var_8 = dx (the stack alias at
+        // [esp+4]); both are exact. An empty collection still runs the presentation and
+        // returns 1.
         if (dx < 1 || dx > 3) {
             if (battle_trace_) fprintf(stderr, "COMBAT: warning: f1474[6]=2F5EF unit=%d dx=%d invalid -> -1\n",
                                         u.id, dx);
@@ -10792,16 +11002,18 @@ int CombatII::battle_weapon_collect_line(int unit_index, int range) {
 
 // sub_2E0F0 automatic (emulator-confirmed):
 //   eax = actor, edx = R (2CBFB base+5/6; 308EE fixes it at 7). 169D7 lays down E8
-//   (empty -1 / blocked -2) and the front ray (R tiles, 49ABC straight) is scanned far to
-//   near. After seeing an empty tile (E8 == -1) it records var_4 = 1; a following hostile
-//   (1201D == 1 plus 11DB2 occupancy) then breaks with success. Exhausting the ray (cx == di)
-//   fails with 0. On success 1A25F collects every hostile on the ray far to near into F0648.
-//   An empty ray or a side/rear target fails, unlike the screen sweep. The far point
-//   (dist == R) is always treated as empty and excluded (only dist < R counts; the emulator
-//   fails for dist 7 / R 7).
-//   The port skips the E8 gate and uses hostile presence on the ray instead (equivalent on
-//   open terrain; a blocked ray remains an open question). Collection order stays far to near.
-int CombatII::battle_weapon_collect_2e0f0(int unit_index, int radius) {
+//   (empty -1 / blocked -2); the front ray is scanned from the far point (dist R) back
+//   toward the caster. Every empty walkable tile updates the recorded endpoint, and the
+//   first hostile encountered after one succeeds (1201D + 11DB2). Exhausting the ray
+//   without such an endpoint/hostile pair fails with 0. On success 1A25F starts at the
+//   tile where the scan stopped (the first hostile after an empty tile) and collects
+//   inward; hostiles farther out that were passed before the endpoint are not collected.
+//   The far endpoint itself is therefore never a target; a blocked or occupied segment
+//   behind the farthest hostile is the E8 gate that makes the whole scan fail. out_x/out_y
+//   are the last empty E8==-1 tile before that hostile, which sub_2E25B uses as the
+//   trail/landing endpoint.
+int CombatII::battle_weapon_collect_2e0f0(int unit_index, int radius,
+                                          int* out_x, int* out_y) {
     battle_target_list_.clear();
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return 0;
     const auto& A = units_[(size_t)unit_index];
@@ -10815,12 +11027,49 @@ int CombatII::battle_weapon_collect_2e0f0(int unit_index, int radius) {
         case 2: dy = -1; break; // north y-1 (bx=2)
         default: dx = 1; break; // east x+1 (bx=3)
     }
-    for (int s = radius - 1; s >= 1; --s) { // far to near, far point excluded (emulator order)
-        const int tx = A.x + dx * s, ty = A.y + dy * s;
+
+    // sub_169D7 precondition for the automatic path. sub_2E25B's player branch does not
+    // call 2E0F0 (it uses the 1A452/1A552 ray plus the 4A483 landing cursor); the port
+    // retains its prior ray approximation there, so only F14D8==1 gets the E8 gate.
+    const bool require_e8 = (battle_f14d8_ == 1);
+    std::vector<int> grid;
+    int end_x = (int)(int8_t)A.x, end_y = (int)(int8_t)A.y;
+    int collect_from = radius - 1; // player path keeps the full front-ray approximation
+    if (require_e8) {
+        battle_ai_169d7_reset(unit_index, grid);
+        bool empty_seen = false;
+        bool success = false;
+        for (int s = radius; s >= 1; --s) { // far to near, including the far endpoint
+            const int tx = (int)(int8_t)A.x + dx * s;
+            const int ty = (int)(int8_t)A.y + dy * s;
+            const int oi = battle_unit_index_at(tx, ty);
+            bool hostile = false;
+            if (oi >= 0 && (size_t)oi < units_.size()) {
+                const auto& o = units_[(size_t)oi];
+                hostile = o.active && o.hp > 0 &&
+                    battle_armies_hostile(ax_eff, battle_effective_army(o), battle_hostility_inverted_);
+            }
+            if (hostile) {
+                if (empty_seen) { success = true; collect_from = s; break; }
+            } else if (oi < 0 && battle_ai_wc5_diff_read(grid, tx, ty) == -1) {
+                empty_seen = true;
+                end_x = tx;
+                end_y = ty;
+            }
+        }
+        if (!success) return 0;
+        if (out_x) *out_x = end_x;
+        if (out_y) *out_y = end_y;
+    }
+
+    for (int s = collect_from; s >= 1; --s) { // 1A25F: from the scan stop inward
+        const int tx = (int)(int8_t)A.x + dx * s;
+        const int ty = (int)(int8_t)A.y + dy * s;
         const int oi = battle_unit_index_at(tx, ty);
         if (oi < 0 || (size_t)oi >= units_.size()) continue;
         const auto& o = units_[(size_t)oi];
         if (!o.active || o.hp <= 0) continue;
+        if ((o.combat_flags_14 & 1) && !(A.combat_flags_14 & 1)) continue;
         if (!battle_armies_hostile(ax_eff, battle_effective_army(o), battle_hostility_inverted_)) continue;
         battle_target_list_.push_back(oi);
     }
@@ -11112,10 +11361,10 @@ int CombatII::battle_weapon_2ef4a(int unit_index, int di, int type, int add) {
             if (nudge_ti >= 0 && (size_t)nudge_ti < units_.size()) {
                 auto& T = units_[(size_t)nudge_ti];
                 switch (A.facing & 3) {                       // off_2EF3A
-                    case 0: T.walk_off_y -= 1; break;
-                    case 1: T.walk_off_y += 1; break;
-                    case 2: T.walk_off_x -= 1; break;
-                    default: T.walk_off_x += 1; break;
+                    case 0: T.walk_off_y += 1; break;         // inc [edi+66h]
+                    case 1: T.walk_off_x -= 1; break;         // dec [edi+65h]
+                    case 2: T.walk_off_y -= 1; break;         // dec [edi+66h]
+                    default: T.walk_off_x += 1; break;        // inc [edi+65h]
                 }
             }
             wait_game_tick();                                 // sub_499E4
@@ -11187,7 +11436,11 @@ int CombatII::battle_weapon_f1474_ext(int unit_index, int idx, int dx) {
             if (should_exit_ || (size_t)unit_index >= units_.size()) return 1;
             if (n > 0) battle_weapon_2caf7_loop(unit_index, (int16_t)(dx + 2), 6000);
             else {
-                run_unit_hp_trigger(unit_index, -1, 1);
+                // sub_2CAF7 runs sub_287AF even with an empty F0648 (24 frames + 499DA 24h),
+                // then sub_1ED45(caster), which is a no-op on the empty list. 2DFC1 already
+                // restored the pose.
+                std::vector<BattleDamageFx> none;
+                battle_damage_fx_play(none, {});                // sub_287AF
                 reset_unit_pose(units_[(size_t)unit_index]);
             }
             return 1;
@@ -11287,20 +11540,23 @@ int CombatII::battle_weapon_f1474_ext(int unit_index, int idx, int dx) {
         }
         case 18: { // sub_2FD03: with F14D8 == 1 (AI/script) there is no target (-1). The player
             // Picks one with the 1F19C cursor, then 2CAF7(mul=dx, add=[744B6]=4000) -> 12124.
-            // battle_use_weapon passes the 4A483 cursor tile in battle_pick_tx_/ty_ and
-            // this case moves that unit to the head of F0648 (the other candidates stay as the
-            // 12x12 screen collection).
+            // sub_2FD03 uses sub_1F19C(edx=1) directly: the confirmed cursor unit is the
+            // only F0648 entry (count 1), not a 12x12 screen collection.
             if (battle_f14d8_ == 1) {
                 if (battle_trace_) fprintf(stderr, "COMBAT: f1474[18]=2FD03 unit=%d dx=%d auto(no target) -> -1\n", u.id, dx);
                 return -1;
             }
-            const int n = battle_weapon_collect_screen(unit_index, 0);
-            // Put the 1F19C cursor target first (2CAF7 mul=dx, add=4000).
-            battle_weapon_apply_pick(unit_index);
+            const int picked = battle_weapon_pick_target(unit_index, true);
+            if (picked < 0) {
+                if (battle_trace_) fprintf(stderr, "COMBAT: f1474[18]=2FD03 unit=%d dx=%d no hostile cursor target -> -1\n", u.id, dx);
+                return -1;
+            }
+            battle_target_list_.assign(1, picked);
+            battle_atk_tx_ = battle_pick_tx_;                     // sub_46E19
+            battle_atk_ty_ = battle_pick_ty_;
             if (battle_trace_)
-                fprintf(stderr, "COMBAT: f1474[18]=2FD03 unit=%d dx=%d player cursor tile=(%d,%d) targets=%d\n",
-                        u.id, dx, battle_pick_tx_, battle_pick_ty_, n);
-            if (battle_target_list_.empty()) return -1;
+                fprintf(stderr, "COMBAT: f1474[18]=2FD03 unit=%d dx=%d player cursor tile=(%d,%d) target=%d\n",
+                        u.id, dx, battle_pick_tx_, battle_pick_ty_, picked);
             // ASM 43922..43944: 1124A(caster tile) -> 1033B(18h) -> 1F179 branch.
             camera_center_on((int)u.x, (int)u.y);            // sub_1124A
             game_timer_set(0x18);                            // sub_1033B(18h)
@@ -11338,11 +11594,14 @@ int CombatII::battle_weapon_f1474_ext(int unit_index, int idx, int dx) {
             reset_unit_pose(units_[(size_t)unit_index]);         // sub_12124
             return 1;
         }
-        case 22: // sub_2FF4B: fistlv4 presentation then [13h] |= 80h, always 1
-            u.combat_flags_13 = (uint8_t)(u.combat_flags_13 | 0x80);
+        case 22: { // sub_2FF4B: fistlv4 presentation then [13h] |= 80h, always 1
+            battle_fx_2ff4b(unit_index);                    // sub_2FF4B (fistlv4.nsp)
+            if (should_exit_ || (size_t)unit_index >= units_.size()) return 1;
             if (battle_trace_) fprintf(stderr, "COMBAT: f1474[22]=2FF4B unit=%d -> [13h]=%02X (return 1)\n",
-                                        u.id, (unsigned)u.combat_flags_13);
+                                        units_[(size_t)unit_index].id,
+                                        (unsigned)units_[(size_t)unit_index].combat_flags_13);
             return 1;
+        }
         case 23: { // sub_2FFF9: 1D124 gate -> 2F3B2(0) presentation -> 2E896 knockback on the
                    //   first target -> 12124, always 1
             if (battle_range_collect(unit_index) <= 0 || battle_target_list_.empty()) return -1;
@@ -11557,7 +11816,7 @@ int CombatII::battle_weapon_2caf7_loop(int unit_index, int mul, int add) {
 // sub_308EE (edi 0, fire.ssp+bird.nsp): front 7-tile ray + bird landing + [1E] |= 1 /
 //   [1F] = 5Ah + 2CAF7(2,10000).
 //   With F14D8 == 1 (AI/script) it collects targets with 2E0F0(edx=7) and uses the distance
-//   to the first target (ASM 44917..44940).
+//   to the selected ray endpoint (ASM 44917..44940).
 //   With F14D8 == 0 (player) it scans 1A452 (width 1, length 7)/1A552 from the 1A1DE front
 //   tile, collects hostiles with 1A1F8, then picks an empty tile as the landing spot with
 //   the 4A483 cursor (sub_49ADF distance >= 2, no 11DB2 occupant) (ASM 44946..45040).

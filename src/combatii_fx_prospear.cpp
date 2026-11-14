@@ -190,24 +190,24 @@ int CombatII::battle_fx_21944(int unit_index, int tx, int ty, int k) {
 }
 
 // ---- sub_2DA5E (dasm 40898..41164): spear fall (f-fall.ssp + slight/spearfly/fistlv3.nsp) ----
-// eax = unit, edx = frame count (the original uses 2*edx+1), ebx = variant
-// (0 slight / 1 spearfly / otherwise fistlv3).
+// eax = unit, edx = sub_49ADF(caster, target tile) (the original uses 2*edx+1),
+// ebx = variant (0 slight / 1 spearfly / otherwise fistlv3).
 //   (1) sub_4F460("f-fall.ssp") starts the fall sound, sub_1FEA4 loads the table, sub_135EB
 //       takes the unit centre.
 //   (2) sub_2D4EB: 1033B(19h), then poses 7 and 8, each presented once.
 //   (3) game_timer_set(5), [unit+0x64] = 9 (pose locked), frame count = 2*edx+1.
-//   (4) For variant 1 the start position shifts by +-(8, 0x0C) according to facing [0x63]
-//       (off_2DA3E).
+//   (4) For variant 1 the start position shifts by y+8 / x-0Ch / y-8 / x+0Ch according to
+//       facing [0x63] (off_2DA3E; 135EB stores x in [var_14] and y in [var_10]).
 //   (5) sfx(0x32), then the frame loop: sub_454B3 -> draw the existing trail through sub_5F093
 //       (solid silhouette, colours 0x11/0x13/0x15 at loc_2CA21+1; frame = facing*4 +
-//       (counter+3-slot)/4) -> shift the four dword entries -> main frame through sub_1FFFE
-//       (frame = facing*4 + counter/4) -> sub_5E9E8 -> sub_499E4 -> count up to 3, store the
+//       (counter+3-slot)%4) -> shift the four dword entries -> main frame through sub_1FFFE
+//       (frame = facing*4 + counter%4) -> sub_5E9E8 -> sub_499E4 -> count up to 3, store the
 //       current point at slot 0, counter++, advance by facing (off_2DA4E).
 //   (6) While a trail remains (var_C > 0) keep presenting sub_454B3 plus the trail, then restore
 //       the pose with sub_12124 and release the table with sub_1FFCD.
-// The port takes the variant as k (0 slight / 1 spearfly / 2 fistlv3) and derives the frame count
-// from the start-to-target distance: the edx passed by 2EB61 is produced by sub_2CBA1's overlay
-// bookkeeping and cannot be recovered statically, so the duration remains an approximation.
+// The port takes the variant as k (0 slight / 1 spearfly / 2 fistlv3). 2EB61 passes
+// edx = sub_49ADF(caster, target tile) (ASM 42493..42496), so the frame count is exactly
+// 2*Manhattan(caster, target)+1.
 int CombatII::battle_fx_2da5e(int unit_index, int tx, int ty, int k) {
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return 0;
     auto& u = units_[(size_t)unit_index];
@@ -216,7 +216,7 @@ int CombatII::battle_fx_2da5e(int unit_index, int tx, int ty, int k) {
     if (!battle_nsp_load(nsp) || magic_frames_.empty()) return 0;
     const int nframes = (int)magic_frames_.size();
 
-    camera_center_on(tx, ty);
+    // The camera move (sub_200DE(unit, 3)) belongs to the caller 2EB61, not to this driver.
     int cx = 0, cy = 0;
     unit_screen_center(u, cx, cy);                   // sub_135EB
     const bool variant1 = (k == 1);
@@ -231,11 +231,9 @@ int CombatII::battle_fx_2da5e(int unit_index, int tx, int ty, int k) {
     }
     if (should_exit_) { reset_unit_pose(u); battle_nsp_release(); return 1; }
 
-    // Frame count = 2*edx+1 in the original; the port substitutes the Manhattan distance to the
-    // target tile (see the note above).
-    const int dist = (tx >= 0 && ty >= 0) ? (std::abs(tx - (int)u.x) + std::abs(ty - (int)u.y)) : 0;
-    int frames = (dist > 0) ? (2 * dist + 1) : 7;
-    if (frames > 0x40) frames = 0x40;                // clamp so the effect cannot run too long
+    // edx = sub_49ADF(caster, target tile); the loop bound is 2*edx+1 (ASM 42506..42510).
+    const int dist = std::abs(tx - (int)u.x) + std::abs(ty - (int)u.y);
+    const int frames = 2 * dist + 1;
     u.anim_frame = 9;                                // `mov byte [ebp+64h],9`
     game_timer_set(5);                               // sub_1033B(5)
 
@@ -243,10 +241,10 @@ int CombatII::battle_fx_2da5e(int unit_index, int tx, int ty, int k) {
     int wx = cx, wy = cy;
     if (variant1) {
         switch (facing) {
-            case 0: wx += 8; break;                  // loc_2DB0A
-            case 1: wy -= 0x0C; break;               // loc_2DB12
-            case 2: wx -= 8; break;                  // loc_2DB1A
-            default: wy += 0x0C; break;              // loc_2DB22
+            case 0: wy += 8; break;                  // loc_2DB0A ([var_10] = y)
+            case 1: wx -= 0x0C; break;               // loc_2DB12 ([var_14] = x)
+            case 2: wy -= 8; break;                  // loc_2DB1A
+            default: wx += 0x0C; break;              // loc_2DB22
         }
     }
 
@@ -259,7 +257,7 @@ int CombatII::battle_fx_2da5e(int unit_index, int tx, int ty, int k) {
     static const uint8_t kTrailColor[3] = {0x11, 0x13, 0x15};   // loc_2CA21+1
     auto draw_trail = [&](int n) {                   // loc_2DB3E / loc_2DCB3
         for (int s = n - 1; s >= 0; --s) {
-            const int f = ((counter + 3 - s) / 4) + facing * 4;
+            const int f = ((counter + 3 - s) % 4) + facing * 4;   // idiv 4 -> remainder (edx)
             if (f < 0 || f >= nframes) continue;
             const MagicFxFrame& fr = magic_frames_[(size_t)f];
             battle_fx_blit_silhouette(f, trail[s].x + fr.xo, trail[s].y + fr.yo,
@@ -268,17 +266,17 @@ int CombatII::battle_fx_2da5e(int unit_index, int tx, int ty, int k) {
     };
     auto step_offsets = [&]() {                      // off_2DA4E
         switch (facing) {
-            case 0: wx += 8; break;
-            case 1: wy -= 0x0C; break;
-            case 2: wx -= 8; break;
-            default: wy += 0x0C; break;
+            case 0: wy += 8; break;                  // off_2DA4E: [var_10] = y
+            case 1: wx -= 0x0C; break;               // off_2DA4E: [var_14] = x
+            case 2: wy -= 8; break;
+            default: wx += 0x0C; break;
         }
     };
     for (int t = 0; t < frames && !should_exit_; ++t) {      // loc_2DC69
         draw_trail(trail_n);                                  // twice: 454B3 then the trail
         for (int s = trail_n; s > 0; --s) trail[s] = trail[s - 1];  // loc_2DBAF
-        // Main frame: facing*4 + counter/4 through 1FFFE.
-        const int f = (counter / 4) + facing * 4;
+        // Main frame: facing*4 + counter%4 through 1FFFE.
+        const int f = (counter % 4) + facing * 4;              // idiv 4 -> remainder (edx)
         if (f >= 0 && f < nframes) {
             const MagicFxFrame& fr = magic_frames_[(size_t)f];
             battle_fx_blit(f, wx + fr.xo, wy + fr.yo);        // sub_1FFFE

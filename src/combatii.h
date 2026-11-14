@@ -21,6 +21,17 @@
 #include "combatii_range.h"
 #include "combatii_move.h"
 
+// sub_4C605 handler targeting mode. Single = 4A483 unit cursor; AreaCenter =
+// 4A483 centre cursor followed by the 4A815 confirm; ConfirmOnly = 4A815
+// confirmation at the caster; Immediate = no cursor/confirmation.
+enum class MagicAimMode : uint8_t {
+    None,
+    Single,
+    AreaCenter,
+    ConfirmOnly,
+    Immediate,
+};
+
 // ==== COMBATII: battle scenario module ====
 // Pre-battle cutscenes, map rendering and scrolling, sprites, portraits and dialogue,
 // plus the tactical battle driven by SCE scripts and the AI.
@@ -1154,6 +1165,7 @@ private:
     // (sub_10971+10h+[65h]+xo, sub_10988+4+[66h]+18h+yo) through sub_5F3FD (480 stride).
     bool load_item_spr();
     void battle_draw_shield_icon(int unit_index);
+    void battle_draw_weapon_trail(int unit_index, int f8, int s); // sub_1E2EA (WEA_EFFC arc)
     // sub_28889: spell-name announce, called by the handlers (F13B0 -> sub_28982/29273/29514/
     // 29722/29F4D/2A75A ...) once the target is fixed. The name is off_7423C[R], stored in
     // dword_F13AC by sub_28883 (battle_spell_name_).
@@ -2027,8 +2039,11 @@ private:
     std::vector<int> battle_magic_options_;  // R codes (g*21+d*3+k) for the 7 entries of the current page
     std::vector<int> battle_magic_groups_;   // learned groups; replaces the level-3 4C72A pick (M pages through them)
     int battle_magic_page_ = 0;              // current group page
-    int battle_magic_pending_r_ = -1;        // chosen R waiting for a target click (-1 = none)
-    bool battle_magic_confirm_2a75a_ = false; // sub_2A75A manual sub_4A815 confirm pending
+    int battle_magic_pending_r_ = -1;        // chosen R waiting for a target/confirm (-1 = none)
+    MagicAimMode battle_magic_aim_ = MagicAimMode::None;
+    bool battle_magic_confirm_ = false;      // sub_4A815 confirmation is on screen
+    int battle_magic_confirm_tx_ = -1;       // 4A815 cursor tile (area centre or caster)
+    int battle_magic_confirm_ty_ = -1;
     bool battle_item_select_ = false;        // item selection in progress (sub_4CDBD)
     std::vector<int> battle_item_options_;   // dx list (sub_4C19D order), 7 entries of the current page
     std::vector<int> battle_item_full_options_; // full dx list, kept for page changes
@@ -2337,6 +2352,7 @@ private:
     int battle_fx_2d7d2(int unit_index, int k);                   // sub_2D7D2 swstr.nsp (sword strike)
     int battle_fx_2dfc1(int unit_index, int k);                   // sub_2DFC1 madaxe.nsp
     int battle_fx_2f3b2(int unit_index, int k);                   // sub_2F3B2 fistlv5/6.nsp
+    int battle_fx_2ff4b(int unit_index);                          // sub_2FF4B fistlv4.nsp (F1474 idx22)
     int battle_fx_22d18(int unit_index, int tx, int ty, int k);   // sub_22D18 p_light.nsp (Ice Dragon)
     int battle_fx_2dd7a(int unit_index, int tx, int ty, int k);   // sub_2DD7A axefly.nsp (2F80B idx13)
     int battle_fx_3b9e1(int unit_index, int tx, int ty, int k);   // sub_3B9E1 swirl.nsp (whirl)
@@ -2412,7 +2428,8 @@ private:
     int battle_weapon_collect_nearest(int unit_index); // 4A483/356DB single-target automatic approximation (nearest hostile)
     int battle_weapon_collect_2ea0c(int unit_index, int radius); // sub_2EA0C automatic: front ray, dist 2..R, lowest 17531/1762C score, one unit
     int battle_weapon_collect_line(int unit_index, int range); // 37FA4 single target on a 7-cell straight line (first hostile)
-    int battle_weapon_collect_2e0f0(int unit_index, int radius); // sub_2E0F0 automatic: front ray dist 1..R, every hostile, far to near
+    int battle_weapon_collect_2e0f0(int unit_index, int radius,
+                                     int* out_x = nullptr, int* out_y = nullptr); // sub_2E0F0: E8-gated front ray, every hostile far to near
     void battle_weapon_apply_status(int target_index, int bit, int duration); // [+1Eh]|=bit, [+1Fh]=dur
     // One prepared 45BFB entry (number, screen anchor, colour) for the shared 287AF pass.
     struct BattleDamageFx {
