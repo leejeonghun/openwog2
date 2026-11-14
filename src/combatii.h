@@ -2428,7 +2428,8 @@ private:
     int battle_weapon_collect_nearest(int unit_index); // 4A483/356DB single-target automatic approximation (nearest hostile)
     int battle_weapon_collect_2ea0c(int unit_index, int radius); // sub_2EA0C automatic: front ray, dist 2..R, lowest 17531/1762C score, one unit
     int battle_weapon_collect_line(int unit_index, int range); // 37FA4 single target on a 7-cell straight line (first hostile)
-    int battle_weapon_collect_2e0f0(int unit_index, int radius); // sub_2E0F0 automatic: front ray dist 1..R, every hostile, far to near
+    int battle_weapon_collect_2e0f0(int unit_index, int radius,
+                                     int* out_x = nullptr, int* out_y = nullptr); // sub_2E0F0: E8-gated front ray, every hostile far to near
     void battle_weapon_apply_status(int target_index, int bit, int duration); // [+1Eh]|=bit, [+1Fh]=dur
     // One prepared 45BFB entry (number, screen anchor, colour) for the shared 287AF pass.
     struct BattleDamageFx {

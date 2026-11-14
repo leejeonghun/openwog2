@@ -75,10 +75,9 @@
 int CombatII::battle_fx_308ee_anim(int unit_index) {
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return -1;
     auto& A = units_[(size_t)unit_index];
-    std::vector<int> grid;
-    battle_ai_169d7_reset(unit_index, grid);                              // sub_169D7
 
     // ---- (2) target collection and distance ----
+    // battle_weapon_collect_2e0f0 runs the sub_169D7 E8 rebuild internally.
     int dist = 0;                                                        // edi
     if (battle_f14d8_ == 1) {
         if (battle_weapon_collect_2e0f0(unit_index, 7) <= 0) {           // sub_2E0F0(unit, 7)

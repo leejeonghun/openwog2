@@ -10526,7 +10526,8 @@ int CombatII::battle_weapon_f1474(int unit_index, int idx, int dx) {
         const int add = (idx == 5) ? 5000 : 3000; // 7449C>>16=1388h, 744A4>>16=0BB8h
         const int base_r = (int8_t)battle_lookup_184a4(u.combat_type_5b, 0x38); // sub_2CBFB
         const int radius = base_r + (idx == 5 ? 5 : 6);
-        const int n = battle_weapon_collect_2e0f0(unit_index, radius);
+        int end_x = (int)(int8_t)u.x, end_y = (int)(int8_t)u.y;
+        const int n = battle_weapon_collect_2e0f0(unit_index, radius, &end_x, &end_y);
         const bool picked = battle_weapon_apply_pick(unit_index);
         if (n <= 0 && !picked) {
             if (battle_trace_) fprintf(stderr, "COMBAT: f1474[%d]=2E25B unit=%d dx=%d R=%d empty -> -1\n",
@@ -10573,8 +10574,13 @@ int CombatII::battle_weapon_f1474(int unit_index, int idx, int dx) {
         const int ax = ((int)u.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X + 0x0C;
         const int ay = ((int)u.y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y - 2;
         int ex = ax, ey = ay;
-        if (!targets.empty()) {
-            const auto& T = units_[(size_t)targets[0]];           // far end of the 2E0F0 ray
+        if (battle_f14d8_ == 1 && n > 0) {
+            // sub_2E0F0 output: the empty E8 tile behind the farthest hostile, not the
+            // hostile's own tile. sub_2E25B interpolates the trail to this point.
+            ex = (end_x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X + 0x0C;
+            ey = (end_y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y - 2;
+        } else if (!targets.empty()) {
+            const auto& T = units_[(size_t)targets[0]];
             ex = ((int)T.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X + 0x0C;
             ey = ((int)T.y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y - 2;
         }
@@ -10996,16 +11002,16 @@ int CombatII::battle_weapon_collect_line(int unit_index, int range) {
 
 // sub_2E0F0 automatic (emulator-confirmed):
 //   eax = actor, edx = R (2CBFB base+5/6; 308EE fixes it at 7). 169D7 lays down E8
-//   (empty -1 / blocked -2) and the front ray (R tiles, 49ABC straight) is scanned far to
-//   near. After seeing an empty tile (E8 == -1) it records var_4 = 1; a following hostile
-//   (1201D == 1 plus 11DB2 occupancy) then breaks with success. Exhausting the ray (cx == di)
-//   fails with 0. On success 1A25F collects every hostile on the ray far to near into F0648.
-//   An empty ray or a side/rear target fails, unlike the screen sweep. The far point
-//   (dist == R) is always treated as empty and excluded (only dist < R counts; the emulator
-//   fails for dist 7 / R 7).
-//   The port skips the E8 gate and uses hostile presence on the ray instead (equivalent on
-//   open terrain; a blocked ray remains an open question). Collection order stays far to near.
-int CombatII::battle_weapon_collect_2e0f0(int unit_index, int radius) {
+//   (empty -1 / blocked -2); the front ray is scanned from the far point (dist R) back
+//   toward the caster. Every empty walkable tile updates the recorded endpoint, and the
+//   first hostile encountered after one succeeds (1201D + 11DB2). Exhausting the ray
+//   without such an endpoint/hostile pair fails with 0. On success 1A25F collects every
+//   hostile at dist 1..R-1 into F0648 far to near. The far endpoint itself is therefore
+//   never a target; a blocked or occupied segment behind the farthest hostile is the E8
+//   gate that makes the whole scan fail. out_x/out_y are the last empty E8==-1 tile, which
+//   sub_2E25B uses as the trail/landing endpoint.
+int CombatII::battle_weapon_collect_2e0f0(int unit_index, int radius,
+                                          int* out_x, int* out_y) {
     battle_target_list_.clear();
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return 0;
     const auto& A = units_[(size_t)unit_index];
@@ -11019,12 +11025,48 @@ int CombatII::battle_weapon_collect_2e0f0(int unit_index, int radius) {
         case 2: dy = -1; break; // north y-1 (bx=2)
         default: dx = 1; break; // east x+1 (bx=3)
     }
-    for (int s = radius - 1; s >= 1; --s) { // far to near, far point excluded (emulator order)
-        const int tx = A.x + dx * s, ty = A.y + dy * s;
+
+    // sub_169D7 precondition for the automatic path. sub_2E25B's player branch does not
+    // call 2E0F0 (it uses the 1A452/1A552 ray plus the 4A483 landing cursor); the port
+    // retains its prior ray approximation there, so only F14D8==1 gets the E8 gate.
+    const bool require_e8 = (battle_f14d8_ == 1);
+    std::vector<int> grid;
+    int end_x = (int)(int8_t)A.x, end_y = (int)(int8_t)A.y;
+    if (require_e8) {
+        battle_ai_169d7_reset(unit_index, grid);
+        bool empty_seen = false;
+        bool success = false;
+        for (int s = radius; s >= 1; --s) { // far to near, including the far endpoint
+            const int tx = (int)(int8_t)A.x + dx * s;
+            const int ty = (int)(int8_t)A.y + dy * s;
+            const int oi = battle_unit_index_at(tx, ty);
+            bool hostile = false;
+            if (oi >= 0 && (size_t)oi < units_.size()) {
+                const auto& o = units_[(size_t)oi];
+                hostile = o.active && o.hp > 0 &&
+                    battle_armies_hostile(ax_eff, battle_effective_army(o), battle_hostility_inverted_);
+            }
+            if (hostile) {
+                if (empty_seen) { success = true; break; }
+            } else if (oi < 0 && battle_ai_wc5_diff_read(grid, tx, ty) == -1) {
+                empty_seen = true;
+                end_x = tx;
+                end_y = ty;
+            }
+        }
+        if (!success) return 0;
+        if (out_x) *out_x = end_x;
+        if (out_y) *out_y = end_y;
+    }
+
+    for (int s = radius - 1; s >= 1; --s) { // 1A25F: all hostiles, far to near
+        const int tx = (int)(int8_t)A.x + dx * s;
+        const int ty = (int)(int8_t)A.y + dy * s;
         const int oi = battle_unit_index_at(tx, ty);
         if (oi < 0 || (size_t)oi >= units_.size()) continue;
         const auto& o = units_[(size_t)oi];
         if (!o.active || o.hp <= 0) continue;
+        if ((o.combat_flags_14 & 1) && !(A.combat_flags_14 & 1)) continue;
         if (!battle_armies_hostile(ax_eff, battle_effective_army(o), battle_hostility_inverted_)) continue;
         battle_target_list_.push_back(oi);
     }
@@ -11316,10 +11358,10 @@ int CombatII::battle_weapon_2ef4a(int unit_index, int di, int type, int add) {
             if (nudge_ti >= 0 && (size_t)nudge_ti < units_.size()) {
                 auto& T = units_[(size_t)nudge_ti];
                 switch (A.facing & 3) {                       // off_2EF3A
-                    case 0: T.walk_off_y -= 1; break;
-                    case 1: T.walk_off_y += 1; break;
-                    case 2: T.walk_off_x -= 1; break;
-                    default: T.walk_off_x += 1; break;
+                    case 0: T.walk_off_y += 1; break;         // inc [edi+66h]
+                    case 1: T.walk_off_x -= 1; break;         // dec [edi+65h]
+                    case 2: T.walk_off_y -= 1; break;         // dec [edi+66h]
+                    default: T.walk_off_x += 1; break;        // inc [edi+65h]
                 }
             }
             wait_game_tick();                                 // sub_499E4
@@ -11495,20 +11537,23 @@ int CombatII::battle_weapon_f1474_ext(int unit_index, int idx, int dx) {
         }
         case 18: { // sub_2FD03: with F14D8 == 1 (AI/script) there is no target (-1). The player
             // Picks one with the 1F19C cursor, then 2CAF7(mul=dx, add=[744B6]=4000) -> 12124.
-            // battle_use_weapon passes the 4A483 cursor tile in battle_pick_tx_/ty_ and
-            // this case moves that unit to the head of F0648 (the other candidates stay as the
-            // 12x12 screen collection).
+            // sub_2FD03 uses sub_1F19C(edx=1) directly: the confirmed cursor unit is the
+            // only F0648 entry (count 1), not a 12x12 screen collection.
             if (battle_f14d8_ == 1) {
                 if (battle_trace_) fprintf(stderr, "COMBAT: f1474[18]=2FD03 unit=%d dx=%d auto(no target) -> -1\n", u.id, dx);
                 return -1;
             }
-            const int n = battle_weapon_collect_screen(unit_index, 0);
-            // Put the 1F19C cursor target first (2CAF7 mul=dx, add=4000).
-            battle_weapon_apply_pick(unit_index);
+            const int picked = battle_weapon_pick_target(unit_index, true);
+            if (picked < 0) {
+                if (battle_trace_) fprintf(stderr, "COMBAT: f1474[18]=2FD03 unit=%d dx=%d no hostile cursor target -> -1\n", u.id, dx);
+                return -1;
+            }
+            battle_target_list_.assign(1, picked);
+            battle_atk_tx_ = battle_pick_tx_;                     // sub_46E19
+            battle_atk_ty_ = battle_pick_ty_;
             if (battle_trace_)
-                fprintf(stderr, "COMBAT: f1474[18]=2FD03 unit=%d dx=%d player cursor tile=(%d,%d) targets=%d\n",
-                        u.id, dx, battle_pick_tx_, battle_pick_ty_, n);
-            if (battle_target_list_.empty()) return -1;
+                fprintf(stderr, "COMBAT: f1474[18]=2FD03 unit=%d dx=%d player cursor tile=(%d,%d) target=%d\n",
+                        u.id, dx, battle_pick_tx_, battle_pick_ty_, picked);
             // ASM 43922..43944: 1124A(caster tile) -> 1033B(18h) -> 1F179 branch.
             camera_center_on((int)u.x, (int)u.y);            // sub_1124A
             game_timer_set(0x18);                            // sub_1033B(18h)
