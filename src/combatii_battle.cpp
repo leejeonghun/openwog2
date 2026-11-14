@@ -11005,11 +11005,13 @@ int CombatII::battle_weapon_collect_line(int unit_index, int range) {
 //   (empty -1 / blocked -2); the front ray is scanned from the far point (dist R) back
 //   toward the caster. Every empty walkable tile updates the recorded endpoint, and the
 //   first hostile encountered after one succeeds (1201D + 11DB2). Exhausting the ray
-//   without such an endpoint/hostile pair fails with 0. On success 1A25F collects every
-//   hostile at dist 1..R-1 into F0648 far to near. The far endpoint itself is therefore
-//   never a target; a blocked or occupied segment behind the farthest hostile is the E8
-//   gate that makes the whole scan fail. out_x/out_y are the last empty E8==-1 tile, which
-//   sub_2E25B uses as the trail/landing endpoint.
+//   without such an endpoint/hostile pair fails with 0. On success 1A25F starts at the
+//   tile where the scan stopped (the first hostile after an empty tile) and collects
+//   inward; hostiles farther out that were passed before the endpoint are not collected.
+//   The far endpoint itself is therefore never a target; a blocked or occupied segment
+//   behind the farthest hostile is the E8 gate that makes the whole scan fail. out_x/out_y
+//   are the last empty E8==-1 tile before that hostile, which sub_2E25B uses as the
+//   trail/landing endpoint.
 int CombatII::battle_weapon_collect_2e0f0(int unit_index, int radius,
                                           int* out_x, int* out_y) {
     battle_target_list_.clear();
@@ -11032,6 +11034,7 @@ int CombatII::battle_weapon_collect_2e0f0(int unit_index, int radius,
     const bool require_e8 = (battle_f14d8_ == 1);
     std::vector<int> grid;
     int end_x = (int)(int8_t)A.x, end_y = (int)(int8_t)A.y;
+    int collect_from = radius - 1; // player path keeps the full front-ray approximation
     if (require_e8) {
         battle_ai_169d7_reset(unit_index, grid);
         bool empty_seen = false;
@@ -11047,7 +11050,7 @@ int CombatII::battle_weapon_collect_2e0f0(int unit_index, int radius,
                     battle_armies_hostile(ax_eff, battle_effective_army(o), battle_hostility_inverted_);
             }
             if (hostile) {
-                if (empty_seen) { success = true; break; }
+                if (empty_seen) { success = true; collect_from = s; break; }
             } else if (oi < 0 && battle_ai_wc5_diff_read(grid, tx, ty) == -1) {
                 empty_seen = true;
                 end_x = tx;
@@ -11059,7 +11062,7 @@ int CombatII::battle_weapon_collect_2e0f0(int unit_index, int radius,
         if (out_y) *out_y = end_y;
     }
 
-    for (int s = radius - 1; s >= 1; --s) { // 1A25F: all hostiles, far to near
+    for (int s = collect_from; s >= 1; --s) { // 1A25F: from the scan stop inward
         const int tx = (int)(int8_t)A.x + dx * s;
         const int ty = (int)(int8_t)A.y + dy * s;
         const int oi = battle_unit_index_at(tx, ty);
@@ -11813,7 +11816,7 @@ int CombatII::battle_weapon_2caf7_loop(int unit_index, int mul, int add) {
 // sub_308EE (edi 0, fire.ssp+bird.nsp): front 7-tile ray + bird landing + [1E] |= 1 /
 //   [1F] = 5Ah + 2CAF7(2,10000).
 //   With F14D8 == 1 (AI/script) it collects targets with 2E0F0(edx=7) and uses the distance
-//   to the first target (ASM 44917..44940).
+//   to the selected ray endpoint (ASM 44917..44940).
 //   With F14D8 == 0 (player) it scans 1A452 (width 1, length 7)/1A552 from the 1A1DE front
 //   tile, collects hostiles with 1A1F8, then picks an empty tile as the landing spot with
 //   the 4A483 cursor (sub_49ADF distance >= 2, no 11DB2 occupant) (ASM 44946..45040).
