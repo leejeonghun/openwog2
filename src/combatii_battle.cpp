@@ -1537,14 +1537,16 @@ void CombatII::battle_draw_weapon_trail(int unit_index, int f8, int s) {
     if (it != nc2_chars_.end()) np = it->second.get();
     if (!np) return;
     const int d = A.facing & 3;
-    const int base = np->head(d * 10 + s * 5 + 0);
+    // sub_1E2EA normalises ebx to 0/1 (`test bx,bx; jz; mov ebx,1`); s is a flag.
+    const int sn = s ? 1 : 0;
+    const int base = np->head(d * 10 + sn * 5 + 0);
     if (base < 0) return;
     const int kx = (f8 == 1) ? 3 : 1;
     const int ky = (f8 == 1) ? 4 : 2;
     const int idx = base + f8;
     if (idx < 0 || (size_t)idx >= wea_effc_.size() || wea_effc_[(size_t)idx].rle.empty()) return;
-    const int ox = np->head(d * 10 + s * 5 + kx);
-    const int oy = np->head(d * 10 + s * 5 + ky);
+    const int ox = np->head(d * 10 + sn * 5 + kx);
+    const int oy = np->head(d * 10 + sn * 5 + ky);
     const int ax = (A.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ +
                    TILE_ANCHOR_X + CENTER_ADD_X - ox;
     const int ay = (A.y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ +
@@ -10289,7 +10291,7 @@ void CombatII::battle_weapon_301bb(int unit_index, int weapon_idx, int is_leader
 //   idx0=2F47F, idx8=2F68C: dx1 -> 5, dx2 -> 7, dx3 -> 0x0C passed to 2CC3A, else -1.
 //   idx2=2F56C: 2D5A3 plus the [13h] bits (and E3h, or 4<<(dx-1)), always 1.
 //   idx4/12=2F5A7: 2D684 and [13h] &= 9Fh, then or 20h when dx < 3 else or 40h, always 1.
-//   idx11=2F71E: front single 1D124 plus 2CAF7(mul dx==1?0:dx, add 3000).
+//   idx11=2F71E: 1D124 area collection + 1E2EA trails + 2CAF7(mul dx==1?0:dx, add 3000).
 //   The remaining vectors (2F592/2F5D7/2F5EF/loc_2F4DE/2F68C/2F6EB/2F706/2F80B/2F98A/
 //   2FA1E/2FA41/2FA6E/2FD03/2FED7/2FF36/2FF4B/2FFF9/30049) are handled in
 //   battle_weapon_f1474 / battle_weapon_f1474_ext above; the ext dispatcher is entered for
@@ -10353,8 +10355,8 @@ int CombatII::battle_weapon_f1474(int unit_index, int idx, int dx) {
         const int mul = (dx == 1) ? 0 : dx;                      // `cmp di,1` -> edi=0
         // loc_2F751: poses 7/8 with 45559+499E4, 4F4CD(14h)+499E4, 4F4CD(1),
         // pose 9, then two 454B3 + 1E2EA(1/2) + 5E9E8 frames.
+        u.anim_frame = 7;                                        // mov [esi+64h],7
         game_timer_set(0x10);                                    // sub_1033B(10h)
-        u.anim_frame = 7;
         battle_fx_present();                                     // sub_45559
         wait_game_tick();                                        // sub_499E4
         u.anim_frame = 8;
@@ -10382,7 +10384,7 @@ int CombatII::battle_weapon_f1474(int unit_index, int idx, int dx) {
         // (ITEM[5Bh][0x38]+dx) through 1AC59/1A1F8 and then runs 2D527 (restrain.nsp)
         // plus 197AD (queue removal) per target, with no damage. The port matches the
         // diamond collection, 2CBA1/dim, the per-target 2D527 loop and 197AD. An empty
-        // collection returns -1.
+        // collection still runs the shared 2CBA1/dim/cleanup tail and returns -1.
         if (dx < 1 || dx > 3) {
             if (battle_trace_) fprintf(stderr, "COMBAT: warning: f1474[%d]=2F4DE unit=%d dx=%d invalid -> -1\n",
                                         idx, u.id, dx);
@@ -10402,15 +10404,17 @@ int CombatII::battle_weapon_f1474(int unit_index, int idx, int dx) {
         const int base_r = (int8_t)battle_lookup_184a4(u.combat_type_5b, 0x38) + dx; // sub_2CBFB
         const int radius = base_r < 0 ? 0 : base_r;
         const int n = battle_weapon_collect_diamond(unit_index, radius);
-        if (n <= 0) {
-            if (battle_trace_) fprintf(stderr, "COMBAT: f1474[%d]=2F4DE unit=%d dx=%d radius=%d empty -> -1\n",
-                                        idx, u.id, dx, radius);
-            return -1;
+        const bool has_targets = n > 0;
+        if (battle_trace_) {
+            if (has_targets)
+                fprintf(stderr, "COMBAT: f1474[%d]=2F4DE unit=%d dx=%d radius=%d targets=%zu (restrain)\n",
+                        idx, u.id, dx, radius, battle_target_list_.size());
+            else
+                fprintf(stderr, "COMBAT: f1474[%d]=2F4DE unit=%d dx=%d radius=%d empty (cleanup, return -1)\n",
+                        idx, u.id, dx, radius);
         }
-        if (battle_trace_) fprintf(stderr, "COMBAT: f1474[%d]=2F4DE unit=%d dx=%d radius=%d targets=%zu (restrain)\n",
-                                    idx, u.id, dx, radius, battle_target_list_.size());
-        // loc_2E80C: 2CBA1 register -> 44D6E(1,0) -> per target {4F4CD(32h), 2D527, 197AD}
-        // -> 44D6E(0) -> 44D75 -> 12124 -> 1FFCD. 2D527 itself is 24 frames of restrain.nsp.
+        // loc_2E80C is shared even with an empty F0648: 2CBA1 register -> 44D6E(1,0) ->
+        // per target {4F4CD(32h), 2D527, 197AD} -> 44D6E(0) -> 44D75 -> 12124 -> 1FFCD.
         battle_highlight_add_depth(unit_index);                 // sub_2CBA1
         battle_dim_row0_ = true;                                // sub_44D6E(1,0)
         for (int ti : battle_target_list_) {
@@ -10427,8 +10431,8 @@ int CombatII::battle_weapon_f1474(int unit_index, int idx, int dx) {
         battle_target_list_.clear();
         if (!should_exit_ && (size_t)unit_index < units_.size())
             reset_unit_pose(units_[(size_t)unit_index]);        // sub_12124
-        if (have_restrain) battle_nsp_release();                 // sub_1FFCD
-        return 1;
+        battle_nsp_release();                                   // sub_1FFCD (also on empty)
+        return has_targets ? 1 : -1;                            // loc_2E80C: count == 0 -> -1
     }
     if (idx == 3 || idx == 9 || idx == 21) { // sub_2F592/2F6EB/2FF36 -> sub_2EB61 (single 1D770+2CACA, add 3000/3000/0)
         const int edi2eb = (idx == 3) ? 0 : (idx == 9 ? 1 : 2); // 2EB61 edx: radius +6+edx; edx<2 adds 2E896 knockback
