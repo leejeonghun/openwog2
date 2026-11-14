@@ -251,6 +251,8 @@ int CombatII::battle_fx_58e95(int unit_index, int tx, int ty, int k) {
                 const MagicFxFrame& fr = magic_frames_[(size_t)fb];
                 battle_fx_blit(fb, beam_b_x + fr.xo, beam_b_y + fr.yo);
             }
+            beam_b_x -= 0x10;                                           // sub var_28,10h
+            beam_b_y -= 0x10;                                           // sub var_20,10h
             if (fc < nframes) {
                 const MagicFxFrame& fr = magic_frames_[(size_t)fc];
                 battle_fx_blit(fc, beam_c_x + fr.xo, beam_c_y + fr.yo);
@@ -363,7 +365,7 @@ int CombatII::battle_fx_592b0(int unit_index, int tx, int ty, int k) {
             cam_fine_x_ = (beam_life % 2 == 0) ? 5 : -5;                    // dword_BA838 = 5/-5
             if (beam_life == 9) {                                           // loc_59569
                 sfx(0x34);                                                  // sub_4F4CD(34h)
-                battle_dim_row0_ = true;                                    // sub_44D6E(1)
+                battle_dim_row0_ = false;                                   // sub_44D6E(0)
                 pal_scale_range(0, 0x100, &battle_palette_[0][0], 0x64);    // sub_5FA2C(100)
             } else if (beam_life > 2) {                                     // loc_5959B
                 battle_dim_row0_ = true;                                    // sub_44D6E(1)

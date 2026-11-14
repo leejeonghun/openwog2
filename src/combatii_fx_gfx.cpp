@@ -340,7 +340,7 @@ void CombatII::pal_ramp_apply(int pct) {
     for (int i = 0; i < 256 * 3; ++i) {                 // (2) sub_5FC21
         temp[i] = (uint8_t)(temp[i] - master[i]);
     }
-    const int p = pct > 100 ? 100 : (pct < 0 ? 0 : pct); // `cmp arg,64h; jle`
+    const int p = pct > 100 ? 100 : pct;                // `cmp arg,64h; jle` (no lower clamp)
     for (int i = 0; i < 0xFE; ++i) {                    // (3) sub_5FD1C (end = 0FEh)
         const int dr = (int)(int8_t)temp[i * 3 + 0];     // movsx
         const int dg = (int)(int8_t)temp[i * 3 + 1];
@@ -352,22 +352,27 @@ void CombatII::pal_ramp_apply(int pct) {
     }
 }
 
-// Palette stage of 276B9/2799A/27C5A (5F945 -> delta -> 5FC21 -> 5FD1C):
-//   The delta is the master palette minus a copy shifted one entry (unk_12824F =
-//   unk_12824C + 3), so delta[i] = master[i+1] - master[i] and 5FD1C writes
-//   DAC[i] = master[i] + delta[i]*mul/100. As mul grows frame by frame the palette brightens
-//   towards the next colour and the screen appears to burn.
-void CombatII::pal_shift_fade(int mul_pct) {
+// Palette stage of 23074/25DFE/276B9/2799A/27C5A/5A267/5A566
+//   (5F945 -> delta -> 5FC21 -> 5FD1C). The copy loop always reloads unk_12824F
+//   (= unk_12824C + 3 = palette[1]) inside the loop, so every entry of the temporary
+//   buffer is palette[1]. 5FC21 then builds delta[i] = palette[1] - palette[i], and
+//   5FD1C writes DAC[i] = palette[i] + delta[i]*mul/100.  The end index is not constant:
+//   23074, 276B9 and the 27C5A restore pass use 0FEh; 25DFE/2799A/5A267/5A566 use 100h.
+//   5FD1C also has no lower clamp for negative pct (23074's first frames pass -8).
+void CombatII::pal_shift_fade(int mul_pct, int end) {
     const uint8_t* master = &battle_palette_[0][0];       // unk_12824C (read only)
-    const int p = mul_pct > 100 ? 100 : (mul_pct < 0 ? 0 : mul_pct);
-    for (int i = 0; i < 0xFE; ++i) {
-        const int n = (i + 1 < 256) ? i + 1 : i;           // unk_12824F = master shifted one entry
-        uint8_t rgb[3];
-        for (int c = 0; c < 3; ++c) {
-            const int d = (int)(int8_t)(uint8_t)(master[n * 3 + c] - master[i * 3 + c]);
-            rgb[c] = (uint8_t)(master[i * 3 + c] + d * p / 100);
-        }
-        palette_set_entry((uint8_t)i, rgb[0], rgb[1], rgb[2]);
+    const int p = mul_pct > 100 ? 100 : mul_pct;          // upper clamp only, as in 5FD1C
+    if (end < 0) end = 0;
+    if (end > 0x100) end = 0x100;
+    const uint8_t br = master[3], bg = master[4], bb = master[5]; // palette[1]
+    for (int i = 0; i < end; ++i) {
+        const int dr = (int)(int8_t)(uint8_t)(br - master[i * 3 + 0]);
+        const int dg = (int)(int8_t)(uint8_t)(bg - master[i * 3 + 1]);
+        const int db = (int)(int8_t)(uint8_t)(bb - master[i * 3 + 2]);
+        palette_set_entry((uint8_t)i,
+                          (uint8_t)(master[i * 3 + 0] + dr * p / 100),
+                          (uint8_t)(master[i * 3 + 1] + dg * p / 100),
+                          (uint8_t)(master[i * 3 + 2] + db * p / 100));
     }
 }
 

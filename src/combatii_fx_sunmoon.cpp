@@ -205,13 +205,15 @@ int CombatII::battle_fx_58619(int unit_index, int tx, int ty, int k) {
 //   Port signature: (unit_index, tx, ty, k); only unit_index is used (the caster).
 //   (1) 611AA (9-byte table dword_560F0, shade 0x3C) builds the tint LUT, 1FEA4("sunl.nsp"), 103A8.
 //   (2) 1033B(5) -> 11EE4 (release occupancy) -> anchor via 10971+0Ch / 10988, var_C = 0x19.
-//   (3) Palette delta: subtract the master from a copy of unk_12824F (= master+3) with 5FC21;
-//       each frame 5FD1C(mul) brightens toward the next colour (port: pal_shift_fade).
+//   (3) Palette delta: 5FC21 subtracts the master from 100h copies of unk_12824F
+//       (= palette[1]); each frame 5FD1C(mul) fades toward that one colour
+//       (port: pal_shift_fade).
 //   (4) sfx(0x32) -> while var_C > 5, two frames at a time: frame 0 at the anchor via 5F611
 //       (scaled), then 5E9E8+499E4; var_C--.
 //   (5) While var_C < 8, same 5F611 draw; var_C++ (grows again).
-//   (6) sfx(0x33) -> frame [var_8 = 1] at the anchor via 5F29D (tinted), 10 frames x 6 rounds;
-//       each frame 5FD1C(mul += 2, capped 0x64) brightens the palette.
+//   (6) sfx(0x33) -> 5 rounds x 10 frames: frame [var_8 = 1..5] at the anchor via 5F29D
+//       (tinted), then 12F2A redraws the caster; each frame 5FD1C(old mul) is called after
+//       the tick and mul += 2, capped at 0x64.
 //   (7) 11E04 (rewrite occupancy) -> 5FD1C(0) -> 61115 -> 103A0 -> 1FFCD.
 int CombatII::battle_fx_5a267(int unit_index, int tx, int ty, int k) {
     (void)tx; (void)ty; (void)k;
@@ -219,7 +221,9 @@ int CombatII::battle_fx_5a267(int unit_index, int tx, int ty, int k) {
     if (!battle_nsp_load("sunl.nsp") || magic_frames_.empty()) return 0;
     const int nframes = (int)magic_frames_.size();
     auto& caster = units_[(size_t)unit_index];
-    camera_center_on((int)(int8_t)caster.x, (int)(int8_t)caster.y);       // 1124A, called by 2A75A
+    // 1124A is not inside 5A267; the preceding 28889 announce path centres the camera.
+    // It is repeated here for direct driver calls and has no effect after 28889.
+    camera_center_on((int)(int8_t)caster.x, (int)(int8_t)caster.y);
     int ax = 0, ay = 0;
     sunmoon_anchor(caster, cam_tile_x_, cam_tile_y_, cam_fine_x_, cam_fine_y_, ax, ay);
 
@@ -254,19 +258,21 @@ int CombatII::battle_fx_5a267(int unit_index, int tx, int ty, int k) {
         ++counter;
     }
 
-    // (6) 60 frames (10 x 6): draw frame 1 tinted and brighten the palette
+    // (6) 50 frames (5 rounds x 10): frame = round (1..5), then 12F2A redraws the caster.
+    //   5FD1C gets the old mul after the tick, then mul += 2 (capped at 0x64).
     sfx(0x33);                                                 // sub_4F4CD(33h)
     int mul = 0;                                               // si: 0 -> 0x64 in steps of 2
-    const int frame_no = 1;                                    // var_8 = 1
-    for (int outer = 0; outer < 6 && !should_exit_; ++outer) {
+    for (int round = 1; round <= 5 && !should_exit_; ++round) {
         for (int i = 0; i < 10 && !should_exit_; ++i) {
-            if (frame_no < nframes)
-                battle_fx_blit_tinted_unclipped(frame_no, ax + magic_frames_[frame_no].xo,
-                                                ay + magic_frames_[frame_no].yo, 0x3C);
+            if (round < nframes)
+                battle_fx_blit_tinted_unclipped(round, ax + magic_frames_[round].xo,
+                                                ay + magic_frames_[round].yo, 0x3C,
+                                                {0x01, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17});
+            battle_fx_redraw_unit(unit_index);                 // sub_12F2A after 5F29D
             battle_fx_present();
             wait_game_tick();
+            pal_shift_fade(mul);                               // 5FD1C(old mul)
             mul = std::min(0x64, mul + 2);
-            pal_shift_fade(mul);                               // 5FD1C
         }
     }
 
@@ -282,7 +288,8 @@ int CombatII::battle_fx_5a267(int unit_index, int tx, int ty, int k) {
 //   (2) 5 rounds (var_10 = 1..5), each 8 frames (var_1C = 6..13): draws var_10 copies of
 //       frame var_1C at size 8*(count-1)+step-5, centered, with 454D5 + 5E9E8 per copy.
 //   (3) sfx(0x32) -> 5 rounds (var_8 = 1..5) x 10 frames: 5F29D frame var_8 at the anchor,
-//       then frame 6 via 5F570 at size 41..90, with 5FD1C(mul += 2), mul capped at 0x64.
+//       then 12F2A redraws the caster, then frame 6 via 5F570 at size 41..90, with
+//       5FD1C(old mul) after the tick and mul += 2, capped at 0x64.
 //   (4) 11E04 -> sfx(0x33) -> 5FD1C(0) -> 61115 -> 103A0 -> 1FFCD.
 int CombatII::battle_fx_5a566(int unit_index, int tx, int ty, int k) {
     (void)tx; (void)ty; (void)k;
@@ -290,6 +297,8 @@ int CombatII::battle_fx_5a566(int unit_index, int tx, int ty, int k) {
     if (!battle_nsp_load("sunl2.nsp") || magic_frames_.empty()) return 0;
     const int nframes = (int)magic_frames_.size();
     auto& caster = units_[(size_t)unit_index];
+    // 1124A comes from the caller's 28889 announce path, not from 5A566. Kept for direct
+    // driver calls; it is a no-op when the caller has already centred the camera.
     camera_center_on((int)(int8_t)caster.x, (int)(int8_t)caster.y);
     int ax = 0, ay = 0;
     sunmoon_anchor(caster, cam_tile_x_, cam_tile_y_, cam_fine_x_, cam_fine_y_, ax, ay);
@@ -313,16 +322,18 @@ int CombatII::battle_fx_5a566(int unit_index, int tx, int ty, int k) {
         }
     }
 
-    // (3) 5 rounds: 5F29D frame 1..5 at the anchor, then frame 6 via 5F570 with the size
-    // 41..90 growing by one each frame (probe-confirmed).
+    // (3) 5 rounds: 5F29D frame 1..5 at the anchor, then 12F2A redraws the caster, then
+    // frame 6 via 5F570 with the size 41..90 growing by one each frame (probe-confirmed).
     sfx(0x32);                                                 // sub_4F4CD(32h)
     int fade = 0;
     for (int round = 1; round <= 5 && !should_exit_; ++round) {
         for (int i = 0; i < 10 && !should_exit_; ++i) {
             if (round < nframes) {
                 const MagicFxFrame& e = magic_frames_[(size_t)round];
-                battle_fx_blit_tinted_unclipped(round, ax + e.xo, ay + e.yo, 60); // 5F29D (611AA 3Ch)
+                battle_fx_blit_tinted_unclipped(round, ax + e.xo, ay + e.yo, 60,
+                                                {0x01, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17}); // 611AA 3Ch
             }
+            battle_fx_redraw_unit(unit_index);                 // sub_12F2A after 5F29D
             const int sz = 41 + (round - 1) * 10 + i;
             if (6 < nframes) {
                 const MagicFxFrame& e = magic_frames_[6];

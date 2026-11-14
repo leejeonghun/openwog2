@@ -1,6 +1,7 @@
 #pragma once
 #include <array>
 #include <cstdint>
+#include <initializer_list>
 #include <deque>
 #include <functional>
 #include <string>
@@ -2212,7 +2213,10 @@ private:
     //   shrink_only = true forces the 5F611 downscale even when the destination is larger than
     //   the source (5A267/2690B call 5F611 explicitly).
     //   silhouette >= 0 selects sub_5F093: every non-0FFh source pixel becomes that colour.
-    struct MagicFxDraw { int frame; int x, y; int tint_pct; int dst_w, dst_h; bool expand_only = false; bool unclipped = false; bool clip319 = false; bool shrink_only = false; int silhouette = -1; };
+    //   tint_mask/tint_limited mirror sub_611AA's colour list: a source colour without a LUT
+    //   is copied unchanged by sub_5F29D/sub_5F305 instead of being shaded.
+    //   redraw_unit >= 0 queues the 12F2A caster redraw between earlier and later sprites.
+    struct MagicFxDraw { int frame; int x, y; int tint_pct; int dst_w, dst_h; bool expand_only = false; bool unclipped = false; bool clip319 = false; bool shrink_only = false; int silhouette = -1; std::array<uint64_t, 4> tint_mask{}; bool tint_limited = false; int redraw_unit = -1; };
     std::vector<MagicFxDraw> magic_fx_draws_;
     // dword_F9F08 + word ptr dword_FA8B6+2: units that sub_44DCC redraws inside 454D5.
     // The original stores raw unit pointers and does not deduplicate (at most 59h entries).
@@ -2239,14 +2243,20 @@ private:
     void battle_fx_blit(int frame, int x, int y);
     void battle_fx_blit_clipped(int frame, int x, int y);
     void battle_fx_blit_tinted(int frame, int x, int y, int tint_pct);
+    void battle_fx_blit_tinted(int frame, int x, int y, int tint_pct,
+                               std::initializer_list<int> colors);
     void battle_fx_blit_tinted_unclipped(int frame, int x, int y, int tint_pct);
+    void battle_fx_blit_tinted_unclipped(int frame, int x, int y, int tint_pct,
+                                        std::initializer_list<int> colors);
+    void battle_fx_redraw_unit(int unit_index); // 12F2A redraw marker inside the 5F29D/5F570 order
     void battle_fx_blit_silhouette(int frame, int x, int y, int color); // sub_5F093
     // sub_13669: fill the live unit's pose-0 frame with `color` (5F517). When [77h] exists and
     // [5Ch] <= 6, the stored record's sprite is filled at the live unit's anchor too.
     void battle_fx_silhouette_13669(int unit_index, int color);
     void battle_fx_present();                                  // sub_454B3 + sub_5E9E8
     void blit_frame_tinted(int x, int y, const MagicFxFrame& fr, int tint_pct,
-                           bool clip = true); // sub_5F305 (clip) / sub_5F29D (no clip)
+                           bool clip = true,
+                           const std::array<uint64_t, 4>* tint_mask = nullptr); // sub_5F305 (clip) / sub_5F29D (no clip)
     int  battle_fx_frame_count() const { return (int)magic_frames_.size(); }
     bool battle_fx_loaded() const { return !magic_frames_.empty(); }
     // ---- Individual drivers (defined in their own .cpp; arguments are caster index, target tile
@@ -2351,7 +2361,7 @@ private:
     void pal_ramp_set_width(int color_index);                          // sub_5623E (word_11233C)
     void pal_ramp_apply(int pct);                                      // sub_56245 + sub_5FD1C
     int  pal_ramp_step(int base_pct, int dir_start_pct);               // sub_562C1 (returns 1/0/2)
-    void pal_shift_fade(int mul_pct);                                  // 5F945+5FC21+5FD1C (brighten toward the next colour)
+    void pal_shift_fade(int mul_pct, int end = 0x100);                 // 5F945+5FC21+5FD1C (fade toward palette[1])
     void pal_cycle_entries(uint8_t* buf, int count);                   // loc_27B88 (2799A palette cycle)
     uint8_t fx_pal_cycle_[256 * 3] = {};                               // 5F945 copy cycled by step 2 of 2799A
     int pal_ramp_color_ = 0;        // word_11233C = high word of unk_11233A (palette entry the ramp targets)

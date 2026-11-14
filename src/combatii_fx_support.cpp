@@ -461,7 +461,8 @@ int CombatII::battle_fx_26810(int unit_index, int tx, int ty, int k) {
     const int dir = (k / 3) & 0x3;                                       // variant (edi), groups of 4
     for (int t = 0; t < 0x1E && !should_exit_; ++t) {                    // `cmp cx,1Eh`
         const int f = dir * 4 + (t % 4);                                 // `idiv 4` -> remainder
-        if (f < nframes) battle_fx_blit_tinted_unclipped(f, cx, cy, shade); // sub_5F29D
+        if (f < nframes) battle_fx_blit_tinted_unclipped(f, cx, cy, shade,
+                                                         {0x00, 0x57});  // word_1FE6E
         battle_fx_present();
         wait_game_tick();
     }
@@ -494,9 +495,11 @@ int CombatII::battle_fx_26b1f(int unit_index, int tx, int ty, int k) {
     sfx(0x32);                                                           // sub_4F4CD(0x32)
     const int shade = 0x28;                                              // 611AA(ebx=28h)
     for (int t = 0; t < 0x30 && !should_exit_; ++t) {                    // `cmp cx,30h`
-        if (0 < nframes) battle_fx_blit_tinted(0, cx, cy, shade);        // 5F305 (frame 0)
+        if (0 < nframes) battle_fx_blit_tinted(0, cx, cy, shade,
+                                               {0x00, 0x03, 0x05, 0x07}); // dword_1FE70
         const int f2 = (t < 9) ? (t / 2) : 9;                            // `sar eax,1` -> /2
-        if (f2 < nframes) battle_fx_blit_tinted(f2, cx, cy, shade);      // 5F305
+        if (f2 < nframes) battle_fx_blit_tinted(f2, cx, cy, shade,
+                                                {0x00, 0x03, 0x05, 0x07});
         if (t > 0x13) {                                                  // `cmp cx,13h; jle`
             int f3 = 9 - (t - 0x14) / 2;                                 // shaking frame
             if (f3 < 6) f3 = 6 + combat_rand(1);                         // 499BD(1)+6

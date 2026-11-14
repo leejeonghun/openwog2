@@ -12,7 +12,7 @@
 //       y[0]=y[1]=current y, y[2]=y+14h, the other 27 at
 //       x = 499BD(118h)+3Ch, y = 499BD(32h)+y-19h. Then 5F945(0,100h) snapshots the DAC,
 //       overwrites the stack palette from unk_12824F (= master+3) and 5FC21(0,100h,master,delta)
-//       builds delta[i] = master[i+1]-master[i], which pal_shift_fade(pct) reproduces.
+//       builds delta[i] = palette[1]-master[i], which pal_shift_fade(pct) reproduces.
 //       4F4CD(33h).
 //   (4) 30 frames (loc_23296): each frame pushes the palette with
 //       5FD1C(0,0FEh,master,delta,pct) (pct = -8 + 3 per frame), drift (var_C) += 2 every
@@ -34,7 +34,7 @@
 //     variables; every constant is the ASM value.
 //   - The original's vsync wait (sub_5E943) and 454B3 are handled by battle_fx_present() and
 //     wait_game_tick() together with rendering.
-//   - pal_shift_fade applies the 0..100 clamp of 5FD1C unchanged.
+//   - pal_shift_fade keeps 5FD1C's upper clamp only; 23074 passes negative pct and end 0FEh.
 #include "combatii.h"
 #include "combatii_internal.h"
 
@@ -87,7 +87,7 @@ int CombatII::battle_fx_23074(int unit_index, int tx, int ty, int k) {
     // ---- (4) palette strobe + coordinate advance (30 frames) ----
     int drift = 0;                                      // var_C
     for (int i = 0; i < 0x1E && !should_exit_; ++i) {
-        pal_shift_fade(-8 + 3 * i);                     // 5F945 -> 5FC21 -> 5FD1C (pct = -8+3i)
+        pal_shift_fade(-8 + 3 * i, 0xFE);               // 5F945 -> 5FC21 -> 5FD1C (pct = -8+3i)
         if (i % 10 == 0) drift += 2;                    // loc_23320
         // 1FFFE(eax=x, edx=y): eax addresses the 35Ah (var_74) array and edx the 2FEh
         // (var_D0) array, so the +-2 split moves x and drift accumulates on y (frame
@@ -104,7 +104,7 @@ int CombatII::battle_fx_23074(int unit_index, int tx, int ty, int k) {
 
     // ---- (5) spread (20 frames, loc_234DA) ----
     for (int i = 0; i < 0x14 && !should_exit_; ++i) {
-        pal_shift_fade(-8 + 3 * (0x1E + i));            // pct += 3/frame
+        pal_shift_fade(-8 + 3 * (0x1E + i), 0xFE);      // pct += 3/frame
         for (int j = 0; j < 3; ++j) { px[j] -= 2; py[j] += 2; }   // loc_23527 (first three only)
         if (i % 10 == 0) drift += 2;
         for (int j = 0; j < kN; ++j) {
@@ -143,7 +143,7 @@ int CombatII::battle_fx_23074(int unit_index, int tx, int ty, int k) {
     // (100 = full brightness.)
     int pct = 0x64;
     for (int i = 0; i < 0x32 && !should_exit_; ++i) {
-        pal_shift_fade(pct);                            // [var_10+2] -> 5FD1C
+        pal_shift_fade(pct, 0xFE);                      // [var_10+2] -> 5FD1C
         if (pct > 0) pct -= 3;                          // `test cx,cx; jle; sub 3`
         for (int j = 0; j < kM; ++j) {
             const int f = (((qy[j] & 0xFFFF) % 7) + 0x0E);

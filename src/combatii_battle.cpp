@@ -9067,9 +9067,10 @@ bool CombatII::battle_fx_blast_203cc(int unit_index, int tx, int ty) {
         cam_fine_y_ = (int16_t)((i & 1) ? 0 : -2);                  // low word of dword_BA838
         int f = (i % 10) / 2;                                       // `idiv 10; sar edx,1` -> 5 frames per 10
         if (f >= nframes) f = nframes - 1;
-        // 203CC builds dword_12764C with 611AA(table, 5, 0x40) and draws with 5F305: x is the
-        // target centre unchanged, y adds only the frame's [6] (yo).
-        battle_fx_blit_tinted(f, ex, ey + magic_frames_[(size_t)f].yo, 0x40);
+        // 203CC builds dword_12764C with 611AA(dword_1FA02, 5, 0x40) and draws with 5F305:
+        // x is the target centre unchanged, y adds only the frame's [6] (yo).
+        battle_fx_blit_tinted(f, ex, ey + magic_frames_[(size_t)f].yo, 0x40,
+                              {0x10, 0x11, 0x12, 0x13, 0x14});
         present_cutscene_frame();                                   // sub_454B3 + sub_5E9E8
         wait_game_tick();
     }
@@ -9382,9 +9383,38 @@ void CombatII::battle_fx_blit_tinted(int frame, int x, int y, int tint_pct) {
     magic_fx_draws_.push_back(MagicFxDraw{frame, x, y, tint_pct, 0, 0}); // sub_5F305
 }
 
+void CombatII::battle_fx_blit_tinted(int frame, int x, int y, int tint_pct,
+                                     std::initializer_list<int> colors) {
+    if (frame < 0 || (size_t)frame >= magic_frames_.size()) return;
+    MagicFxDraw d{frame, x, y, tint_pct, 0, 0}; // sub_5F305
+    d.tint_limited = true;
+    for (int c : colors)
+        if (c >= 0 && c < 256) d.tint_mask[(size_t)(c >> 6)] |= 1ull << (c & 63);
+    magic_fx_draws_.push_back(d);
+}
+
 void CombatII::battle_fx_blit_tinted_unclipped(int frame, int x, int y, int tint_pct) {
     if (frame < 0 || (size_t)frame >= magic_frames_.size()) return;
     magic_fx_draws_.push_back(MagicFxDraw{frame, x, y, tint_pct, 0, 0, false, true}); // sub_5F29D
+}
+
+void CombatII::battle_fx_blit_tinted_unclipped(int frame, int x, int y, int tint_pct,
+                                               std::initializer_list<int> colors) {
+    if (frame < 0 || (size_t)frame >= magic_frames_.size()) return;
+    MagicFxDraw d{frame, x, y, tint_pct, 0, 0, false, true}; // sub_5F29D
+    d.tint_limited = true;
+    for (int c : colors)
+        if (c >= 0 && c < 256) d.tint_mask[(size_t)(c >> 6)] |= 1ull << (c & 63);
+    magic_fx_draws_.push_back(d);
+}
+
+void CombatII::battle_fx_redraw_unit(int unit_index) {
+    if (unit_index < 0 || (size_t)unit_index >= units_.size()) return;
+    MagicFxDraw d{};
+    d.frame = -1;
+    d.tint_pct = -1;
+    d.redraw_unit = unit_index;                 // sub_12F2A between queued sprites
+    magic_fx_draws_.push_back(d);
 }
 
 // sub_5F093(eax=x, edx=y, ebx=[w][h]+pixels, cl=colour): solid silhouette. Every source pixel
@@ -9427,7 +9457,11 @@ void CombatII::battle_fx_present() {
 //   source colour by it, 609F9 weights the destination by (100 - it) and adds 9 to each
 //   channel. Both sums are stored as bytes, so they wrap modulo 256 exactly like `mov [var],
 //   al`. The nearest palette entry is chosen by L1 distance, first match wins.
-void CombatII::blit_frame_tinted(int x, int y, const MagicFxFrame& fr, int tint_pct, bool clip) {
+//   611AA only allocates LUT pages for the colours in its list. sub_5F29D/sub_5F305 test
+//   dword_12764C[source] and copy the source byte unchanged when it is NULL, so tint_mask
+//   must skip the lookup for every colour outside that list.
+void CombatII::blit_frame_tinted(int x, int y, const MagicFxFrame& fr, int tint_pct, bool clip,
+                                 const std::array<uint64_t, 4>* tint_mask) {
     if (fr.flat.empty() || fr.w <= 0 || fr.h <= 0) return;
     uint8_t* dst = video_.get_backbuffer();
     if (!dst) return;
@@ -9460,6 +9494,11 @@ void CombatII::blit_frame_tinted(int x, int y, const MagicFxFrame& fr, int tint_
             }
             const uint8_t px = fr.flat[(size_t)row * (size_t)fr.w + (size_t)col];
             if (px == 0xFF) continue;                               // transparent
+            if (tint_mask &&
+                (((*tint_mask)[(size_t)(px >> 6)] >> (px & 63)) & 1ull) == 0) {
+                dst[(size_t)off] = px;                               // no LUT: source colour
+                continue;
+            }
             const uint32_t key = ((uint32_t)px << 8) | (uint32_t)arg;
             auto it = cache.find(key);
             if (it == cache.end()) {
@@ -9493,6 +9532,10 @@ void CombatII::blit_frame_tinted(int x, int y, const MagicFxFrame& fr, int tint_
 // sub_5EE51: blit a [w][h]+flat block (0xFF transparent) to the back buffer.
 void CombatII::render_magic_effect_layer() {
     for (const MagicFxDraw& d : magic_fx_draws_) {
+        if (d.redraw_unit >= 0) {
+            battle_draw_unit_now(d.redraw_unit);                 // sub_12F2A marker
+            continue;
+        }
         if (d.frame < 0 || (size_t)d.frame >= magic_frames_.size()) continue;
         const MagicFxFrame& fr = magic_frames_[(size_t)d.frame];
         if (fr.flat.empty()) continue;
@@ -9525,7 +9568,8 @@ void CombatII::render_magic_effect_layer() {
         } else if (d.tint_pct < 0) {
             blit_flat_transparent(d.x, d.y, dbuf.data());                   // sub_5EE51
         } else {
-            blit_frame_tinted(d.x, d.y, fr, d.tint_pct, !d.unclipped);      // sub_5F305 / 5F29D
+            blit_frame_tinted(d.x, d.y, fr, d.tint_pct, !d.unclipped,
+                              d.tint_limited ? &d.tint_mask : nullptr);       // sub_5F305 / 5F29D
         }
     }
     magic_fx_draws_.clear();

@@ -93,8 +93,9 @@ int CombatII::battle_fx_25c88(int unit_index, int tx, int ty, int k) {
 //   above are the resolved layout.
 // Flow:
 //   1. 1FEA4("healwind.nsp"), 1124A(caster tile), 1033B(8), then clear both 0x4B-entry arrays.
-//   2. Palette: buffer = master shifted one entry (unk_12824F), delta via 5FC21(0,100h,master,
-//      buffer); ramp via 5FD1C(0,100h,master,delta,pct) for pct 0,20,40,60,80 then 100.
+//   2. Palette: buffer = 100h copies of palette[1] (unk_12824F), delta via
+//      5FC21(0,100h,master,buffer); ramp via 5FD1C(0,100h,master,delta,pct) for pct
+//      0,20,40,60,80 then 100.
 //   3. 4F4CD(0x32) sfx.
 //   4. Dim: the same 5FD1C from pct = 100 down by 0x0A while pct > 0 (100..10).
 //   5. Main loop while nTarget < 25*(k+1):
@@ -114,8 +115,6 @@ int CombatII::battle_fx_25c88(int unit_index, int tx, int ty, int k) {
 //   1033B -> game_timer_set, 4F4CD -> sfx, 45559 -> present_cutscene_frame,
 //   5FC21+5FD1C -> pal_shift_fade (same delta and formula), 1124A -> camera_center_on.
 // Deviations:
-//   - 5FD1C's end index is 0x100 in the original but 0xFE in pal_shift_fade (two entries);
-//     kept so this shares the helper with the 2799A group.
 //   - The per-frame 5FD1C of the main loop runs at pct = 0 after step 4, i.e. no change; the
 //     original reads the same slot, so the call is omitted.
 //   - Slot revive uses the low word of the centre-y dword while the original's overlapping IDA

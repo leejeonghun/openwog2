@@ -79,7 +79,6 @@ constexpr int kPalLen = 0x100 * 3;
 
 // dword_560DB (COMBATII.LST 109718). sub_59A70 copies 7 bytes and uses them as the 611AA
 // colour table: 01h 30h 31h 32h 33h 34h 35h - palette entry 1 plus the 30h..35h gradient.
-constexpr uint8_t kTintTable[7] = {0x01, 0x30, 0x31, 0x32, 0x33, 0x34, 0x35};
 
 // Fourth argument of 5F517 (solid colour). The original reads the high word of the table's
 // third dword (`mov ecx,[var_24+2]; sar ecx,10h`) and 5F517 uses only cl, which gives 32h
@@ -93,7 +92,6 @@ int CombatII::battle_fx_59a70(int caster_index, int revived_index) {
     if (revived_index < 0 || (size_t)revived_index >= units_.size()) return 0;
     auto& A = units_[(size_t)caster_index];                       // eax = caster record
     const int dir = (int)units_[(size_t)revived_index].facing & 3; // edx>>16 = revived facing
-    (void)kTintTable;                       // 611AA colour table (tint is blit_tinted pct)
 
     if (!battle_nsp_load("revible.nsp") || magic_frames_.empty()) return 0;   // sub_1FEA4
     const int nframes = (int)magic_frames_.size();
@@ -202,7 +200,8 @@ int CombatII::battle_fx_59a70(int caster_index, int revived_index) {
         const int ft = 5 + (f & 1);
         if (ft < nframes) {
             const MagicFxFrame& fr = magic_frames_[(size_t)ft];
-            battle_fx_blit_tinted_unclipped(ft, 0xA0 + fr.xo, 0x4C + fr.yo, 0x50); // sub_5F29D(611AA)
+            battle_fx_blit_tinted_unclipped(ft, 0xA0 + fr.xo, 0x4C + fr.yo, 0x50,
+                                            {0x01, 0x30, 0x31, 0x32, 0x33, 0x34, 0x35}); // sub_5F29D(611AA)
         }
         battle_fx_present();
         apply_pal(0, 0x100, wash, 0x64 - f * 0x0A);                // 5FD1C(pct 64h,5Ah,...)
@@ -221,18 +220,21 @@ int CombatII::battle_fx_59a70(int caster_index, int revived_index) {
         const int ft = 7 + (f & 1);
         if (ft < nframes) {
             const MagicFxFrame& fr = magic_frames_[(size_t)ft];
-            battle_fx_blit_tinted_unclipped(ft, 0xA0 + fr.xo, 0x4C + fr.yo, 0x50);
+            battle_fx_blit_tinted_unclipped(ft, 0xA0 + fr.xo, 0x4C + fr.yo, 0x50,
+                                            {0x01, 0x30, 0x31, 0x32, 0x33, 0x34, 0x35});
         }
         if (f <= 0x0C) {                                            // frame ((edi&3)+9)
             const int fx = (f & 3) + 9;
             if (fx < nframes) {
                 const MagicFxFrame& fr = magic_frames_[(size_t)fx];
-                battle_fx_blit_tinted_unclipped(fx, 0xA0 + fr.xo, 0x4C + fr.yo, 0x50); // sub_5F29D(611AA)
+                battle_fx_blit_tinted_unclipped(fx, 0xA0 + fr.xo, 0x4C + fr.yo, 0x50,
+                                                {0x01, 0x30, 0x31, 0x32, 0x33, 0x34, 0x35}); // sub_5F29D(611AA)
             }
         } else if (f <= 0x0F) {                                     // frame edi (0Dh..0Fh), tinted
             if (f < nframes) {
                 const MagicFxFrame& fr = magic_frames_[(size_t)f];
-                battle_fx_blit_tinted_unclipped(f, 0xA0 + fr.xo, 0x4C + fr.yo, 0x50);
+                battle_fx_blit_tinted_unclipped(f, 0xA0 + fr.xo, 0x4C + fr.yo, 0x50,
+                                                {0x01, 0x30, 0x31, 0x32, 0x33, 0x34, 0x35});
             }
         }
         render_battle_frame();                                      // sub_454B3

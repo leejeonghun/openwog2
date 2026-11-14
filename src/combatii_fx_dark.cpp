@@ -190,8 +190,9 @@ int CombatII::battle_fx_26e1f(int unit_index, int tx, int ty, int k) {
 //     top-left = 0xA6/0x64 - (size+1)/2 + frame offset, half a pixel larger than the blit.
 //     Both counters (width/height) start at 0Ah: 1FEA4 keeps the passed ecx=0Ah and 1124A
 //     preserves ecx itself.
-//   The palette is then rebuilt from the unk_12824F copy (5F945/5FC21), 4F4CD(0x33) plays and 50
-//   frames run (si<0x64, si+=2) { 5FD1C(palette, si), shake (di>>1)&1, 454B3,
+//   The palette is then rebuilt from 100h copies of palette[1] (5F945/5FC21), 4F4CD(0x33)
+//   plays and 50
+//   frames run (si<0x64, si+=2) { 5FD1C(palette, si, end=0FEh), shake (di>>1)&1, 454B3,
 //   frame = di%3+4 cycling 4,5,6, 5F570 (the counter grows by 3 before the blit, so
 //   41,44,...,188; centring uses size/2 rounded down) } -> 454D5+5E9E8+499E4.
 //   Finally 1033B(0x0C) + 45559, the palette steps back by 3 while si>3 (no sprites), 5F9AE
@@ -242,7 +243,7 @@ int CombatII::battle_fx_276b9(int unit_index, int tx, int ty, int k) {
     // blit (41..188).
     for (int i = 0, di = 0; i < 0x64 && !should_exit_; i += 2, ++di) {
         cam_fine_y_ = (int16_t)(((di >> 1) & 1) ? 0 : -4);
-        pal_shift_fade(i);                                         // sub_5FD1C (si)
+        pal_shift_fade(i, 0xFE);                                   // sub_5FD1C (si, end 0FEh)
         battle_fx_world_454b3_12d65();                             // sub_454B3 + sub_12D65
         w += 3; h += 3;                                            // the original adds 3 before the blit
         blit(di % 3 + 4, w, h, false);                             // sub_5F570
@@ -256,7 +257,7 @@ int CombatII::battle_fx_276b9(int unit_index, int tx, int ty, int k) {
     game_timer_set(0x0C);                                          // sub_1033B(0Ch)
     present_cutscene_frame();                                      // sub_45559
     for (int t = 0x64; t > 3 && !should_exit_; t -= 3) {
-        pal_shift_fade(t);                                         // 5FD1C restore
+        pal_shift_fade(t, 0xFE);                                   // 5FD1C restore (end 0FEh)
         present_cutscene_frame();
         wait_game_tick();
     }
@@ -420,7 +421,7 @@ int CombatII::battle_fx_27c5a(int unit_index, int tx, int ty, int k) {
     }
     // Step 3: restore the palette only; the original draws no sprites here.
     for (int t = 0x66; t > 3 && !should_exit_; t -= 3) {
-        pal_shift_fade(t);                                         // 5FD1C restore
+        pal_shift_fade(t, 0xFE);                                   // 5FD1C restore (end 0FEh)
         present_cutscene_frame();
         wait_game_tick();
     }

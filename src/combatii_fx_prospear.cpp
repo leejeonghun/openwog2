@@ -150,9 +150,11 @@ int CombatII::battle_fx_21944(int unit_index, int tx, int ty, int k) {
     auto blit_t = [&](int f, int x, int y, int pct) { // sub_5F29D (tinted blit)
         if (f < 0 || f >= nframes) return;
         const MagicFxFrame& fr = magic_frames_[(size_t)f];
-        battle_fx_blit_tinted_unclipped(f, x + fr.xo, y + fr.yo, pct);
+        // 611AA(1 colour, shade = 1Eh): only palette entry 1 gets a LUT.
+        battle_fx_blit_tinted_unclipped(f, x + fr.xo, y + fr.yo, pct, {0x01});
     };
     // Tint: 611AA(1 colour, shade = 1Eh) -> brightness weight 100-30 = 70 (0x46).
+    // The shared tinter only allocates a LUT for palette entry 1.
     game_timer_set(3);                               // 21944 runs at period 3 during the rows
     for (int r = 0; r < h && !should_exit_; ++r) {   // loc_21BAC: var_14 < [edx+3]
         const int p = r % 5;                         // remainder of `idiv 5`
