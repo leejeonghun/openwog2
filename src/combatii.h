@@ -2351,6 +2351,7 @@ private:
     int battle_fx_2d7d2(int unit_index, int k);                   // sub_2D7D2 swstr.nsp (sword strike)
     int battle_fx_2dfc1(int unit_index, int k);                   // sub_2DFC1 madaxe.nsp
     int battle_fx_2f3b2(int unit_index, int k);                   // sub_2F3B2 fistlv5/6.nsp
+    int battle_fx_2ff4b(int unit_index);                          // sub_2FF4B fistlv4.nsp (F1474 idx22)
     int battle_fx_22d18(int unit_index, int tx, int ty, int k);   // sub_22D18 p_light.nsp (Ice Dragon)
     int battle_fx_2dd7a(int unit_index, int tx, int ty, int k);   // sub_2DD7A axefly.nsp (2F80B idx13)
     int battle_fx_3b9e1(int unit_index, int tx, int ty, int k);   // sub_3B9E1 swirl.nsp (whirl)

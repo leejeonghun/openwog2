@@ -10383,6 +10383,17 @@ int CombatII::battle_weapon_f1474(int unit_index, int idx, int dx) {
                                         idx, u.id, dx);
             return -1;
         }
+        // sub_200DE(unit, 3): centre the camera three tiles ahead before the sweep.
+        {
+            int ccx = (int)(int8_t)u.x, ccy = (int)(int8_t)u.y;
+            switch (u.facing & 3) {
+                case 0: ccy += 3; break;
+                case 1: ccx -= 3; break;
+                case 2: ccy -= 3; break;
+                default: ccx += 3; break;
+            }
+            camera_center_on(ccx, ccy);                         // sub_200DE(unit, 3)
+        }
         const int base_r = (int8_t)battle_lookup_184a4(u.combat_type_5b, 0x38); // sub_2CBFB
         const int n = battle_weapon_collect_2ea0c(unit_index, (int16_t)(base_r + 6 + edi2eb));
         // Put the player's manual target (4A483) at the head of F0648; proceed even when
@@ -10405,11 +10416,13 @@ int CombatII::battle_weapon_f1474(int unit_index, int idx, int dx) {
         if (battle_trace_) fprintf(stderr, "COMBAT: f1474[%d]=2EB61 unit=%d dx=%d -> target=%d base=%d tmp=%d final=%d (2DA5E)\n",
                                     idx, u.id, dx, units_[(size_t)ti].id, base, tmp, fin);
         battle_highlight_add_depth(unit_index);                 // sub_2CBA1 (2EB61 loc_2ECB5)
-        A.anim_frame = 5;
+        // 2EB61 writes no pose here; 2DA5E sets [64h]=9 itself after the 7/8 intro.
         // 2EB61 loc_2ECB5: 49ADF/2CBA1 -> 44D6E(1) -> sub_2DA5E(slight/spearfly/fistlv3) ->
         //   44D6E(0) -> 44D75 -> 1D770/2CACA damage.
         battle_dim_row0_ = true;                                 // sub_44D6E(1)
-        battle_fx_2da5e(unit_index, (int)(int8_t)A.x, (int)(int8_t)A.y, edi2eb);
+        // 2EB61 passes the 4A483/2EA0C target tile as edx (49ADF distance) and edi as the variant.
+        battle_fx_2da5e(unit_index, (int)(int8_t)units_[(size_t)ti].x,
+                        (int)(int8_t)units_[(size_t)ti].y, edi2eb);
         battle_dim_row0_ = false;                                // sub_44D6E(0)
         battle_highlight_clear();                                // sub_44D75
         if (should_exit_ || (size_t)unit_index >= units_.size()) return 1;
@@ -11313,7 +11326,11 @@ int CombatII::battle_weapon_f1474_ext(int unit_index, int idx, int dx) {
             if (should_exit_ || (size_t)unit_index >= units_.size()) return 1;
             if (n > 0) battle_weapon_2caf7_loop(unit_index, (int16_t)(dx + 2), 6000);
             else {
-                run_unit_hp_trigger(unit_index, -1, 1);
+                // sub_2CAF7 runs sub_287AF even with an empty F0648 (24 frames + 499DA 24h),
+                // then sub_1ED45(caster), which is a no-op on the empty list. 2DFC1 already
+                // restored the pose.
+                std::vector<BattleDamageFx> none;
+                battle_damage_fx_play(none, {});                // sub_287AF
                 reset_unit_pose(units_[(size_t)unit_index]);
             }
             return 1;
@@ -11464,11 +11481,14 @@ int CombatII::battle_weapon_f1474_ext(int unit_index, int idx, int dx) {
             reset_unit_pose(units_[(size_t)unit_index]);         // sub_12124
             return 1;
         }
-        case 22: // sub_2FF4B: fistlv4 presentation then [13h] |= 80h, always 1
-            u.combat_flags_13 = (uint8_t)(u.combat_flags_13 | 0x80);
+        case 22: { // sub_2FF4B: fistlv4 presentation then [13h] |= 80h, always 1
+            battle_fx_2ff4b(unit_index);                    // sub_2FF4B (fistlv4.nsp)
+            if (should_exit_ || (size_t)unit_index >= units_.size()) return 1;
             if (battle_trace_) fprintf(stderr, "COMBAT: f1474[22]=2FF4B unit=%d -> [13h]=%02X (return 1)\n",
-                                        u.id, (unsigned)u.combat_flags_13);
+                                        units_[(size_t)unit_index].id,
+                                        (unsigned)units_[(size_t)unit_index].combat_flags_13);
             return 1;
+        }
         case 23: { // sub_2FFF9: 1D124 gate -> 2F3B2(0) presentation -> 2E896 knockback on the
                    //   first target -> 12124, always 1
             if (battle_range_collect(unit_index) <= 0 || battle_target_list_.empty()) return -1;

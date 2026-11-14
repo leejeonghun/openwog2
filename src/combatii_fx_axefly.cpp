@@ -65,8 +65,9 @@ int CombatII::battle_fx_2dd7a(int unit_index, int tx, int ty, int k) {
     int step = 0x0C;                                                 // var_8 = dl(0Ch)
 
     const int nframes = (int)magic_frames_.size();
-    const int base = k ? 0x0C : 8;                                   // `var_4 ? 0Ch : 8`
-    const int total = base + 0x10;                                   // `eax += 10h`
+    const int base = k ? 0x0C : 8;                                   // loc_2DDE7: `var_4 ? 0Ch : 8`
+    // loc_2DEF0: `(var_4 ? 8 : 0) + 10h`, i.e. 18h frames when k != 0 and 10h otherwise.
+    const int total = (k ? 8 : 0) + 0x10;
     for (int cx = 0; cx < total && !should_exit_; ++cx) {            // loc_2DEF0/loc_2DF98
         const int facing = (int)u.facing & 3;                        // [esi+63h]
         if (cx < base) {
@@ -111,5 +112,6 @@ int CombatII::battle_fx_2dd7a(int unit_index, int tx, int ty, int k) {
     present_cutscene_frame();                                        // sub_45559
     game_timer_set(0x20);                                            // sub_499DA(20h)
     wait_game_tick();                                                // 499DA falls through to 499E4
+    battle_nsp_release();                                            // sub_1FFCD (loc_2DA2B)
     return 1;
 }
