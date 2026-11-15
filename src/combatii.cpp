@@ -1302,11 +1302,12 @@ int CombatII::run(const std::string& scenario_param){
             // mouse position (sub_5CEE3...).
         }
         // loc_55B19: Space resumes when F042E != 0 and the cooldown has expired. The original only
-        // handles it in the free loop (5580F); the blocking ring loop (4BA7F) never reads Space.
-        // The
-        // port ignores it during ring, move and attack targeting and resumes only in free wait or
-        // while paused with the ring closed.
+        // handles it in the free loop (5580F); 4D674 blocks inside that loop and the outer loop,
+        // including this resume check, does not run until 4D674 returns. battle_player_unit_ marks
+        // that active interval, including ring-closed magic/item/weapon target cursors. Keep the
+        // resume key out of every such state, not just the visible ring, move and attack phases.
         if (input_.is_key_pressed(SDLK_SPACE) &&
+            battle_player_unit_ < 0 &&
             !ring_open_ && !ring_sub_open_ && battle_move_phase_ == 0 && battle_atk_phase_ == 0)
             battle_resume_key();
     }
