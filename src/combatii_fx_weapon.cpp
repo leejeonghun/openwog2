@@ -1328,8 +1328,9 @@ bool CombatII::battle_fx_32bcb_anim(int unit_index) {
                 battle_fx_blit_tinted_unclipped(idx, ux + e.xo, uy + e.yo, 70, {0x1F}); // 5F29D (61147 1Fh,46h)
             }
             if (v >= 0x26 && v < 0x64 && 29 < nframes) {
-                // 33D3F: F0F06 is F0DAA + 0x15C = entry 29. ASM 48621..48647 applies the
-                // parity as x = tx + (even ? +1 : -1) + xo; y is ty + yo in both branches.
+                // 33D3F: F0F06 is F0DAA + 0x15C = entry 29. sub_5F29D takes eax = x,
+                // edx = y; entry 29's [+2] is xo and [+4] is yo. The parity is applied to x:
+                // x = tx + xo + (even ? +1 : -1), y = ty + yo in both branches.
                 const MagicFxFrame& b = magic_frames_[29];
                 const int parity = (frame_counter & 1) ? -1 : 1;
                 battle_fx_blit_tinted_unclipped(29, ux + b.xo + parity, uy + b.yo, 70, {0x1F});

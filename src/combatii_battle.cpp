@@ -12980,7 +12980,8 @@ void CombatII::render_ai_ready_markers() {
     const int first_visible_x = (cam_fine_x_ < 6) ? 1 : 0;
     const int first_visible_y = (cam_fine_y_ + 6 < -4) ? 1 : 0;
     for (const CombatUnitPlacement& u : units_) {
-        if (!u.active || u.battle_gauge != 0xFF) continue;
+        // sub_12161 scans CC998; sub_11EE4 removed hidden units from that grid.
+        if (!u.active || u.fx_sprite_hidden || u.battle_gauge != 0xFF) continue;
 
         const int tile_x = u.x - cam_tile_x_;
         const int tile_y = u.y - cam_tile_y_;

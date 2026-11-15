@@ -87,11 +87,11 @@
 //   - Per-unit 12F2A calls use battle_draw_unit_now at the same points as the original. On
 //     the cleared stages the port draws one target, flushes its queued effects, draws that
 //     target, and only then moves to the next target, matching the ASM's effect/12F2A order.
-//   - 11EE4/11E04 only touch the CC998 occupancy grid. The port derives occupancy from
-//     units_, and neither the presentation nor the 2CAF7 tail performs an occupancy lookup.
-//     1214F is the target anim_frame assignment in (6). The tail's 12124 maps to
-//     reset_unit_pose; its extra port-only knock_dx/dy clear is overwritten by 2CAF7 for
-//     every damaged target.
+//   - 11EE4/11E04 clear and restore the CC998 occupancy footprint. The port models the
+//     cleared cells with fx_sprite_hidden, keeping the caster and targets out of the map
+//     pass while their explicit 12F2A draws remain visible. 1214F is the target anim_frame
+//     assignment in (6). The tail's 12124 maps to reset_unit_pose; its extra port-only
+//     knock_dx/dy clear is overwritten by 2CAF7 for every damaged target.
 //   - 61147/6104A/61115 (LUT setup and restore) are covered by the port's palette path;
 //     103A8/103A0 map to weather_tick_enabled_.
 //   - 30F98 clears the visible 200x480 viewport to colour 0 and toggles the 1px shake. The
@@ -221,6 +221,12 @@ int CombatII::battle_fx_31283_anim(int unit_index) {
     fx_pal_mix(0x60, 0x100, 0, 0x28);                      // sub_30824(0, 28h); edx from 44D6E
     C.facing = 0;                                          // mov byte [ebp+63h],0
     if (should_exit_) { battle_dim_row0_ = false; battle_nsp_release(); return 1; }
+    // sub_11EE4: clear the caster and every target footprint in CC998. The map pass walks
+    // the occupancy grid, so the explicit 12F2A draws below are the only unit sprites.
+    C.fx_sprite_hidden = true;
+    for (int k = 0; k < count; ++k) {
+        if (CombatUnitPlacement* T = target_at(k)) T->fx_sprite_hidden = true;
+    }
     battle_fx_world_dim();                                 // sub_454B3 + sub_454D5
     draw_target_units();                                   // 12F2A targets
     battle_draw_unit_now(unit_index);                      // 12F2A caster
@@ -708,6 +714,11 @@ int CombatII::battle_fx_31283_anim(int unit_index) {
     battle_dim_row0_ = false;                                // sub_44D6E(0)
     cam_fine_y_ = CAM_FINE_Y_REST;                           // dword_BA838 = 0
     C.anim_frame = 4;                                        // mov byte [ebp+64h],4
+    // sub_11E04: restore the caster first, then every target, before 2CAF7.
+    C.fx_sprite_hidden = false;
+    for (int k = 0; k < count; ++k) {
+        if (CombatUnitPlacement* T = target_at(k)) T->fx_sprite_hidden = false;
+    }
     C.facing = saved_facing;                                 // mov al,[var_28]; mov [ebp+63h],al
     for (int k = 0; k < count; ++k) {
         if (CombatUnitPlacement* T = target_at(k)) reset_unit_pose(*T);  // sub_12124(target)

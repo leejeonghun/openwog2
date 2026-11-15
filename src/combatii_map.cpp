@@ -3208,8 +3208,8 @@ void CombatII::draw_unit_hp_number(const CombatUnitPlacement& u) {
 // call sub_13498.
 // Original window: X in [camX, camX+12] (13 columns, var_4 = camX+0x0D exclusive),
 //                  Y in [camY+1, camY+11] (11 rows, var_C = camY+1+0x0B exclusive).
-// The port walks units_ and culls by the window, which is equivalent (the CC998 stale guard is a
-// coordinate match).
+// The port walks units_ and culls by the window; the CC998 stale guard is a coordinate match.
+// sub_11EE4 removes hidden units from CC998, so they are skipped here as well.
 // Call order (sub_454D5): after dim, after 12161/44DCC and before 45431 (HUD), so the HUD bars
 // cover the overdraw. The FA8BA gate is battle_show_all_hp() (ring_open_ || ring_sub_open_).
 void CombatII::render_all_unit_hp() {
@@ -3220,7 +3220,7 @@ void CombatII::render_all_unit_hp() {
     const int y1 = cam_tile_y_ + 11;   // inclusive
     int n = 0;
     for (const CombatUnitPlacement& u : units_) {
-        if (!u.active) continue;
+        if (!u.active || u.fx_sprite_hidden) continue;   // 11EE4 cleared its CC998 cells
         if (u.x < x0 || u.x > x1 || u.y < y0 || u.y > y1) continue;
         draw_unit_hp_number(u);
         n++;
