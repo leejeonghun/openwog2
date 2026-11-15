@@ -500,7 +500,8 @@ int CombatII::battle_fx_31283_anim(int unit_index) {
     }
 
     // ---- (9) 6 rounds x (esi 9..0Bh) x 3 frames of silhouette drops (loc_31EE3) ----
-    C.anim_frame = 7;                                        // mov byte [ebp+64h],7
+    // [64h] stays 9 from stage (6) through this stage; loc_31FF9 sets it to 7 only
+    // after the 6 rounds, before the caster-rise loop.
     const int base_x = screen_x(C.x) + 0x0C;                 // var_48
     int base_y = screen_y(C.y) + 0x16;                       // var_20
     int tail_round = 0;
@@ -528,12 +529,13 @@ int CombatII::battle_fx_31283_anim(int unit_index) {
         sfx(0x34);
     }
 
+    // loc_31FF9: stage (9) has finished; the rise and silhouette use pose 7.
+    C.anim_frame = 7;                                        // mov byte [ebp+64h],7
     // ---- (9b) caster rise and the D66A8 RLE silhouette (loc_32019..loc_322A9) ----
     //   [64h]=7, then the caster tile y descends one step at a time (until 10988 < 0)
     //   running 30F98 + target effects + 12F2A(caster). After that, var_38 = 0x12C stepping
     //   down by 1Eh and var_60 += 14h drop the D66A8 record (+0D0h = facing 1, pose 5)
     //   through 5F517 (solid, six rows) and 5F3FD, incrementing var_24.
-    C.anim_frame = 7;                                        // mov byte [ebp+64h],7
     const NC2Frame* sil = nc2_frame_for(C.sprite_type, 1, 5);   // D66A8 + 0D0h
     while (!should_exit_) {
         C.y = (int8_t)(C.y - 1);                             // dec [ebp+1]
