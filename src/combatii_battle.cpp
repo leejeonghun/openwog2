@@ -12005,7 +12005,10 @@ int CombatII::battle_weapon_341c7(int unit_index) {
     }
     battle_fx_341c7_anim(unit_index);   // 44D89 registers all, 5E9D0/305A2/30824 for 10 frames, f_quake 6+7 frames
     reset_unit_pose(units_[(size_t)unit_index]); // sub_12124(caster), ASM 49658 before 2CAF7
-    return battle_weapon_2caf7_loop(unit_index, 2, 0x4E20);
+    const int result = battle_weapon_2caf7_loop(unit_index, 2, 0x4E20); // sub_2CAF7(2, 4E20h)
+    battle_nsp_release();                        // sub_1FFCD
+    weather_tick_enabled_ = true;                // sub_103A0
+    return result;
 }
 
 // sub_34C48 (edi 5, ju+shak2.nsp): 1A1DE front tile -> 1A452(1 wide, 3 deep) -> 1A552/1A1F8

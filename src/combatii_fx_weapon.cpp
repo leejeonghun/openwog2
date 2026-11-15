@@ -36,6 +36,7 @@
 //   (F0DAA + 12k + 8), so the port uses frames 25/26/27.
 #include "combatii.h"
 #include "combatii_internal.h"
+#include "palette.h"
 
 #include <algorithm>
 #include <cmath>
@@ -174,23 +175,29 @@ void CombatII::fx_trail_drop() {
     fx_trail_start_ = (fx_trail_start_ + 1) % 24;
 }
 
-// sub_30824 / sub_307A6: mix a master-palette range toward colour K by pct%.
-//   5F945 snapshots the master palette, 5FC21 builds (K - master) and 5FD1C applies pct.
+// sub_30824 / sub_307A6: mix a range of the live DAC toward colour K by pct%.
+//   5F945 snapshots the current DAC (the port's g_palette) and copies its entry K over the
+//   whole range of a second buffer, 5FC21 builds (K - snapshot) and 5FD1C applies pct. K is
+//   read from the live DAC before the range is written, so repeated calls compound: every
+//   call moves the current DAC a further pct% toward the value K had at that moment.
 //   30824 = 0x60..0xFF, 307A6 = 0x00..0x68; K = 0 is a plain darkening.
 void CombatII::fx_pal_mix(int start, int end, int color_index, int pct) {
     const int k = color_index & 0xFF;
-    const int kr = battle_palette_[(size_t)k][0];
-    const int kg = battle_palette_[(size_t)k][1];
-    const int kb = battle_palette_[(size_t)k][2];
+    const int kr = g_palette[k][0];
+    const int kg = g_palette[k][1];
+    const int kb = g_palette[k][2];
     const int p = pct > 100 ? 100 : (pct < 0 ? 0 : pct);       // cmp arg,64h; jle
     for (int i = start; i < end && i < 0x100; ++i) {
-        const int dr = (int)(int8_t)(uint8_t)(kr - battle_palette_[(size_t)i][0]);
-        const int dg = (int)(int8_t)(uint8_t)(kg - battle_palette_[(size_t)i][1]);
-        const int db = (int)(int8_t)(uint8_t)(kb - battle_palette_[(size_t)i][2]);
+        const int base_r = g_palette[i][0];
+        const int base_g = g_palette[i][1];
+        const int base_b = g_palette[i][2];
+        const int dr = (int)(int8_t)(uint8_t)(kr - base_r);
+        const int dg = (int)(int8_t)(uint8_t)(kg - base_g);
+        const int db = (int)(int8_t)(uint8_t)(kb - base_b);
         palette_set_entry((uint8_t)i,
-                          (uint8_t)(battle_palette_[(size_t)i][0] + dr * p / 100),
-                          (uint8_t)(battle_palette_[(size_t)i][1] + dg * p / 100),
-                          (uint8_t)(battle_palette_[(size_t)i][2] + db * p / 100));
+                          (uint8_t)(base_r + dr * p / 100),
+                          (uint8_t)(base_g + dg * p / 100),
+                          (uint8_t)(base_b + db * p / 100));
     }
 }
 
@@ -398,7 +405,8 @@ int CombatII::battle_fx_2cc3a_anim(int unit_index, int variant, int sfx_id) {
 // ==== sub_341C7: f_quake.nsp earthquake ====
 //   Precondition: the units of the 12x12 screen window are in battle_target_list_, gathered
 //   like battle_weapon_collect_screen. Original order:
-//     (1) register the whole F0648 list through sub_44D89              (49072~49080)
+//     (0) sub_1FEA4("f_quake.nsp") -> sub_103A8 -> [63h]=0 -> sub_11EE4  (49062~49086)
+//     (1) register the whole F0648 list through sub_44D89              (49088~49102)
 //     (2) sub_44D6E(1) dim, sub_30544 (reset trail), sub_1033B(10h)
 //     (3) 8 frames = sub_305A2(caster, pose) for poses 0..3 then sub_305A2(0,0) four times.
 //         The port uses i as the pose; the original edx is a word of the collected array
@@ -414,15 +422,23 @@ int CombatII::battle_fx_2cc3a_anim(int unit_index, int variant, int sfx_id) {
 //     (8) 2 frames: 5E9D0 -> 44DCC -> 5EE51(NSP 0Ch+i, y+0Ch) -> 5EFB9(NSP 0Eh+i)
 //         -> 5E9E8 -> 499E4                                             (loc_346B7)
 //     (9) 0x40 (64) frames of falling rocks, see the (9) block below   (loc_34785)
-//   Frame total = 8+6+7+3+2+64 = 90. Damage in the tail (28728/287AF) belongs to
-//   battle_weapon_2caf7_loop; the palette ramp is replaced by an immediate restore.
+//   Frame total = 8+6+7+3+2+64 = 90. The original tail continues with sub_12124 ->
+//   sub_2CAF7 -> sub_1FFCD -> sub_103A0; battle_weapon_341c7 runs those after this routine.
 void CombatII::battle_fx_341c7_anim(int unit_index) {
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return;
     auto& A = units_[(size_t)unit_index];
-    for (int ti : battle_target_list_) battle_highlight_add(ti);      // (1)
-    // ASM 3429B: save [63h] and set it to 0 (south = frontal pose for the whole effect).
-    const int8_t saved_facing = A.facing;
-    A.facing = 0;
+    // ASM 34276..34282: load the NSP first, then stop the weather tick (sub_103A8),
+    // save [63h], force it to 0 (south = frontal pose) and release the caster footprint
+    // with sub_11EE4 before the target loop.
+    if (!battle_nsp_load("f_quake.nsp") || magic_frames_.empty()) {   // 1FEA4
+        if (battle_trace_) fprintf(stderr, "COMBAT: warning: 341C7 unit=%d f_quake.nsp missing\n", A.id);
+        return;
+    }
+    weather_tick_enabled_ = false;                                    // sub_103A8
+    const int8_t saved_facing = A.facing;                             // var_18
+    A.facing = 0;                                                     // [63h] = 0
+    A.fx_sprite_hidden = true;                                        // sub_11EE4
+    for (int ti : battle_target_list_) battle_highlight_add(ti);      // (1) 44D89 loop
     battle_dim_row0_ = true;                                          // (2) 44D6E(1)
     fx_trail_reset();                                                 // 30544
     game_timer_set(0x10);                                             // 1033B(10h)
@@ -443,10 +459,6 @@ void CombatII::battle_fx_341c7_anim(int unit_index) {
 
     battle_dim_row0_ = false;                                         // (4) 44D6E(0)
     sfx(0x32);                                                        // 4F4CD(32h)
-    if (!battle_nsp_load("f_quake.nsp") || magic_frames_.empty()) {   // 1FEA4
-        if (battle_trace_) fprintf(stderr, "COMBAT: warning: 341C7 unit=%d f_quake.nsp missing\n", A.id);
-        return;
-    }
     const int nframes = (int)magic_frames_.size();
     const int sx = (A.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + UNIT_ANCHOR_X;
     const int sy = (A.y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + UNIT_ANCHOR_Y;
@@ -529,10 +541,8 @@ void CombatII::battle_fx_341c7_anim(int unit_index) {
         }
     }
 
-    // The original keeps [66h] = 0E8h (-24) into (8) and (9), but those blocks only redraw
-    // the highlighted targets, so the offset is cleared here to keep it out of the damage loop.
-    A.walk_off_y = 0;
-    A.walk_off_x = 0;
+    // [66h] stays at 0E8h (-24) through (8), (9) and the tail's 45559 redraw, exactly as in
+    // the original; the caller's sub_12124 clears it after the closing fade.
 
     // Between (7) and (8): sub_6106C(3, 11h, 46h) -> 4F4CD(35h). The LUT is the shade table
     // used by all of (9); 6104A(3) selects it at the start of (9).
@@ -650,7 +660,8 @@ void CombatII::battle_fx_341c7_anim(int unit_index) {
     // ---- tail (loc_34B5A..) ----
     //   (1) Fill a 300h stack buffer with unk_12827C (= unk_12824C + 30h = colour 10h) and
     //       call 5F9AE(0, 100h, buffer): the whole DAC becomes colour 10h for one flash frame.
-    //   (2) 5ECC7(0) (5EDDE back to fill mode), dword_BA838 = 0, 44D75 (clear the list), then
+    //   (2) 5ECC7(0) (5EDDE back to fill mode), dword_BA838 = 0, 44D75 (clear the list),
+    //       sub_11E04 (re-occupy the caster, still at [64h]=8 / [66h]=-24), then
     //       45559 = 454B3 + 5E9E8 redraws and presents the map with the solid palette.
     //   (3) 49A3E(0, 100h, solid, unk_12824C, 0Ah) copies unk_12824C (ecx) into unk_FABE0,
     //       builds (copy - solid) with sub_5FC21, then walks si = 0..64h by 0Ah and writes
@@ -658,7 +669,8 @@ void CombatII::battle_fx_341c7_anim(int unit_index) {
     //       solid colour back to the master palette.
     //       5FD1C waits for vertical retrace (5E943) each step, so the port also ticks per
     //       step (same rule as the 276B9/2799A fades). The reference palette is the
-    //       weather-applied unk_12824C, hence dlg_shade_pal_.
+    //       weather-applied unk_12824C, hence dlg_shade_pal_. Finally sub_103A0 resumes the
+    //       weather tick after sub_1FFCD.
     cam_fine_y_ = 0;                                                  // dword_BA838 = 0
     if (!dlg_shade_pal_set_) snapshot_dialog_shade_palette();         // copy of unk_12824C
     const uint8_t (*master)[3] = dlg_shade_pal_;
@@ -672,12 +684,11 @@ void CombatII::battle_fx_341c7_anim(int unit_index) {
     video_.present();
     wait_game_tick();                                                 // equivalent of 5E943 (retrace) in 5F9AE
     battle_highlight_clear();                                         // 44D75
+    A.fx_sprite_hidden = false;                                       // sub_11E04 (re-occupy)
     battle_fx_world();                                                // 45559 = 454B3
     battle_fx_commit();                                               //          + 5E9E8
     pal_crossfade(0, 0x100, solid, &master[0][0], 0x0A);              // 49A3E: 11 steps back to master
     A.facing = saved_facing;                                          // restore [63h] after the fade
-    game_timer_set(6);                                                // tail 1033B(6)
-    battle_nsp_release();                                             // sub_1FFCD
     if (battle_trace_)
         fprintf(stderr, "COMBAT: 341C7 unit=%d f_quake frames=%d registered=%zu\n",
                 A.id, nframes, battle_highlight_units_.size());
@@ -871,7 +882,11 @@ void CombatII::battle_fx_37fa4_dash_and_lightning(int unit_index, bool load_nsp)
         if (!battle_nsp_load("irus.nsp") || magic_frames_.empty()) {    // 1FEA4
             if (battle_trace_) fprintf(stderr, "COMBAT: warning: 37FA4 unit=%d irus.nsp missing\n", A.id);
             battle_dim_row0_ = false;
-            fx_pal_mix(0x00, 0x100, 0, 0);
+            // Port-only cleanup (the original does not branch on 1FEA4): restore the master
+            // explicitly. fx_pal_mix is a faithful 5F945/5FD1C port now, so pct 0 is a no-op
+            // instead of the old accidental "write battle_palette_" restore.
+            snapshot_dialog_shade_palette();
+            pal_load_range(0, 0x100, &dlg_shade_pal_[0][0]);
             return;
         }
     } else if (magic_frames_.empty()) {
