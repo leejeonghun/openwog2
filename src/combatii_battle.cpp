@@ -29,8 +29,9 @@ static MagicAimMode battle_magic_aim_mode(int r_code) {
         case 35: case 36: case 37: case 38: case 39: case 40: case 41:
         case 45: case 48:
             return MagicAimMode::ConfirmOnly;
-        case 2: case 9: case 16: case 22:
-        case 28: case 29: case 30: case 31: case 32: case 34: case 47:
+        // 23 = sub_2BBB7 and 42 = sub_2BFEA both call sub_2B1D0 with the 28B24 path.
+        case 2: case 9: case 16: case 22: case 23:
+        case 28: case 29: case 30: case 31: case 32: case 34: case 42: case 47:
             return MagicAimMode::AreaCenter;
         default:
             return MagicAimMode::Single;
@@ -4968,7 +4969,7 @@ bool CombatII::battle_player_input() {
             const int kind = battle_weapon_pending_kind_;
             battle_pick_tx_ = tx;
             battle_pick_ty_ = ty;
-            if (!battle_weapon_pick_valid(ui, kind)) {
+            if (!battle_weapon_pick_valid(ui, kind, si)) {
                 battle_pick_tx_ = battle_pick_ty_ = -1;
                 if (battle_trace_)
                     fprintf(stderr, "COMBAT: warning: weapon si=%d kind=%d cursor tile=(%d,%d) invalid, wait\n",
@@ -5274,14 +5275,15 @@ void CombatII::render_player_move_overlay() {
     if (battle_ring_dim_active()) {
         draw_speaker_frame(battle_player_unit_);
         battle_render_ring_panels(battle_player_unit_);
-        // sub_4C72A draws "MP %d" at x=60h on every magic-ring stage; y is 1Eh or C2h
-        // depending on whether the ring centre is above/below A0h.
+        // sub_4C72A draws "MP %d" at y=60h on every magic-ring stage; x is C2h or 1Eh
+        // depending on whether the ring centre x (the eax argument; sub_4B0FB uses it as
+        // x) is below/above A0h.
         if ((ring_subkind_ == SubRingKind::MagicG || ring_subkind_ == SubRingKind::MagicD ||
              ring_subkind_ == SubRingKind::MagicK) && ring_sub_open_) {
             char mp[16];
             snprintf(mp, sizeof(mp), "MP %d", (int)(int16_t)u.combat_mp_50);
-            const int mp_y = ring_sub_center_y_ < 0xA0 ? 0xC2 : 0x1E;
-            draw_small_text(0x60, mp_y, mp, 0xFF, 1);
+            const int mp_x = ring_sub_center_x_ < 0xA0 ? 0xC2 : 0x1E;
+            draw_small_text(mp_x, 0x60, mp, 0xFF, 1);
         }
     }
     if (battle_atk_phase_ != 0) {
@@ -10528,12 +10530,30 @@ int CombatII::battle_weapon_f1474(int unit_index, int idx, int dx) {
         const int base_r = (int8_t)battle_lookup_184a4(u.combat_type_5b, 0x38); // sub_2CBFB
         const int radius = base_r + (idx == 5 ? 5 : 6);
         int end_x = (int)(int8_t)u.x, end_y = (int)(int8_t)u.y;
-        const int n = battle_weapon_collect_2e0f0(unit_index, radius, &end_x, &end_y);
-        const bool picked = battle_weapon_apply_pick(unit_index);
-        if (n <= 0 && !picked) {
-            if (battle_trace_) fprintf(stderr, "COMBAT: f1474[%d]=2E25B unit=%d dx=%d R=%d empty -> -1\n",
-                                        idx, u.id, dx, radius);
-            return -1;
+        int n = 0;
+        if (battle_f14d8_ == 1) {
+            // sub_2E0F0: automatic E8 landing cell behind the farthest hostile. An empty
+            // result returns -1 (loc_2E2B6).
+            n = battle_weapon_collect_2e0f0(unit_index, radius, &end_x, &end_y);
+            if (n <= 0) {
+                if (battle_trace_) fprintf(stderr, "COMBAT: f1474[%d]=2E25B unit=%d dx=%d R=%d empty -> -1\n",
+                                            idx, u.id, dx, radius);
+                return -1;
+            }
+        } else {
+            if (battle_pick_tx_ < 0 || battle_pick_ty_ < 0) {
+                if (battle_trace_) fprintf(stderr, "COMBAT: warning: f1474[%d]=2E25B unit=%d no 4A483 pick -> -1\n",
+                                            idx, u.id);
+                return -1;
+            }
+            // loc_2E37D accepted the cell. loc_2E405 sees si 1 < 2 and loops back to
+            // loc_2E2C7, which rebuilds F0648 with edi = sub_49ADF(caster, pick) as the
+            // 1A452 range. There is no empty-list gate: the dash and landing still happen.
+            const int cx = (int)(int8_t)u.x, cy = (int)(int8_t)u.y;
+            const int dist = std::abs(cx - battle_pick_tx_) + std::abs(cy - battle_pick_ty_); // sub_49ADF
+            int fx = 0, fy = 0;
+            battle_weapon_front_tile(unit_index, fx, fy);          // sub_1A1DE
+            n = battle_weapon_collect_rect_actor(unit_index, fx, fy, 1, dist); // loc_2E2C7
         }
         const std::vector<int> targets = battle_target_list_;
 
@@ -10575,15 +10595,17 @@ int CombatII::battle_weapon_f1474(int unit_index, int idx, int dx) {
         const int ax = ((int)u.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X + 0x0C;
         const int ay = ((int)u.y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y - 2;
         int ex = ax, ey = ay;
-        if (battle_f14d8_ == 1 && n > 0) {
+        if (battle_f14d8_ == 1) {
             // sub_2E0F0 output: the empty E8 tile behind the farthest hostile, not the
             // hostile's own tile. sub_2E25B interpolates the trail to this point.
             ex = (end_x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X + 0x0C;
             ey = (end_y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y - 2;
-        } else if (!targets.empty()) {
-            const auto& T = units_[(size_t)targets[0]];
-            ex = ((int)T.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X + 0x0C;
-            ey = ((int)T.y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y - 2;
+        } else if (battle_pick_tx_ >= 0 && battle_pick_ty_ >= 0) {
+            // loc_2E37D: sub_4A483 writes the cursor tile into var_1C/var_8. The trail
+            // interpolates to that cell and loc_2E6B5 converts it back into the landing
+            // tile; the 2E25B cursor only accepts an empty cell at distance >= 2.
+            ex = (battle_pick_tx_ - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X + 0x0C;
+            ey = (battle_pick_ty_ - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y - 2;
         }
         int trail_x[12], trail_y[12];
         int tx = ax, ty = ay;                                     // var_20/var_18 start at the caster
@@ -10626,16 +10648,19 @@ int CombatII::battle_weapon_f1474(int unit_index, int idx, int dx) {
             wait_game_tick();                                     // sub_499E4
         }
 
-        // loc_2E6B5: after the last trail frame the caster lands on the tile of its final
-        // interpolated position: sub_109A3(var_20), sub_109CE(var_8+4), then sub_11E04
-        // occupies the new tile (the port's units_ position is the occupancy).
-        // trail_x[0]/trail_y[0] are that final var_20/var_18 (the 12th step).
+        // loc_2E6B5: after the last trail frame the caster lands on the var_1C/var_8
+        // endpoint tile (the 2E0F0 E8 cell or the 4A483 landing cell): sub_109A3(var_1C),
+        // sub_109CE(var_8+4), then sub_11E04 occupies the new tile (the port's units_
+        // position is the occupancy). The original has no target-count gate here, so an
+        // empty list still lands on the picked cell.
+        // var_1C/var_8 are the fixed endpoints ex/ey; var_20/var_18 are only the
+        // interpolated trail positions and never reach the endpoint exactly.
         // 109A3 subtracts only the 4px base (the trail's +0C centre offset stays inside
         // the idiv), while 109CE(var_8+4) cancels its own -4 before the sar 4.
-        if (!targets.empty() && (size_t)unit_index < units_.size()) {
+        if ((size_t)unit_index < units_.size()) {
             auto& M = units_[(size_t)unit_index];
-            const int nx = (trail_x[0] - cam_fine_x_ - TILE_ANCHOR_X) / TOWN_TILE_W + cam_tile_x_;
-            const int ny = ((trail_y[0] - cam_fine_y_) >> 4) + cam_tile_y_;
+            const int nx = (ex - cam_fine_x_ - TILE_ANCHOR_X) / TOWN_TILE_W + cam_tile_x_;
+            const int ny = ((ey - cam_fine_y_) >> 4) + cam_tile_y_;
             M.x = nx;
             M.y = ny;
             M.anim_frame = 6;                                     // [ebp+64h] = 6
@@ -10816,7 +10841,8 @@ bool CombatII::battle_weapon_needs_cursor(int idx) const {
     return idx == 3 || idx == 5 || idx == 9 || idx == 10 || idx == 18 || idx == 21;
 }
 
-// Kind of 4A483 cursor used by the si == 0 path (sub_302E6 routines).
+// Kind of 4A483 cursor used by the si == 0 path (sub_302E6 routines) and by the
+// cursor-using F1474 slots (si > 0, idx = si - 1).
 //   308EE (edi 0): with F14D8 != 1, picks an EMPTY tile (distance >= 2) on the 7-tile front
 //     ray as the landing spot (ASM 44960..45040).
 //   356DB (edi 6): with F14D8 != 1, picks an occupied tile on the 7-tile front ray
@@ -10828,7 +10854,13 @@ bool CombatII::battle_weapon_needs_cursor(int idx) const {
 int CombatII::battle_weapon_cursor_kind(int unit_index, int si) const {
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return 0;
     if (battle_f14d8_ == 1) return 0;                 // AI(sub_3FFD4)/script(loc_51F86) auto target
-    if (si > 0) return battle_weapon_needs_cursor(si - 1) ? 1 : 0;
+    if (si > 0) {
+        const int idx = si - 1;
+        // 2E25B (idx 5/10) runs its own 4A483 loop and picks an EMPTY cell at distance >= 2
+        // on the first 1A452 ray (ASM loc_2E37D: 13CBD, 49ADF >= 2, 11DB2 == 0), not a unit.
+        if (idx == 5 || idx == 10) return 5;
+        return battle_weapon_needs_cursor(idx) ? 1 : 0;
+    }
     const int edi = battle_weapon_match_4bc3c(units_[(size_t)unit_index].id);
     if (edi == 0) return 2;                           // 308EE (bird.nsp)
     if (edi == 6) return 3;                           // 356DB (f-arrow/growl)
@@ -10836,11 +10868,12 @@ int CombatII::battle_weapon_cursor_kind(int unit_index, int si) const {
     return 0;
 }
 
-// Whether the tile chosen in battle_pick_tx_/ty_ fits that cursor rule.
+// Whether the tile chosen in battle_pick_tx_/ty_ fits that cursor rule (si is the 1-based
+// F1474 slot, needed for the 2E25B ray length).
 //   1 = target unit (regular F1474 path), 2 = 308EE landing (empty tile, front 7, distance >= 2),
 //   3 = 356DB (hostile-occupied tile on the front 7), 4 = 39A49 (tile with a hostile in the
-//   radius-2 diamond).
-bool CombatII::battle_weapon_pick_valid(int unit_index, int kind) {
+//   radius-2 diamond), 5 = 2E25B (empty tile on the first base+5/6 ray, distance >= 2).
+bool CombatII::battle_weapon_pick_valid(int unit_index, int kind, int si) {
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return false;
     if (battle_pick_tx_ < 0 || battle_pick_ty_ < 0) return false;
     const int tx = battle_pick_tx_, ty = battle_pick_ty_;
@@ -10850,7 +10883,7 @@ bool CombatII::battle_weapon_pick_valid(int unit_index, int kind) {
     const int ax = (int)(int8_t)A.x, ay = (int)(int8_t)A.y;
     // sub_13CBD guard (2..w-2, 4..h-4)
     if (tx < 2 || tx >= (int)map_w_ - 2 || ty < 4 || ty >= (int)map_h_ - 4) return false;
-    // sub_1A146/1A452 front ray test (count 1, range 7).
+    // sub_1A146/1A452 front ray test (count 1, per-kind range).
     auto in_front_ray = [&](int range) {
         const g2range::Env env = battle_range_env_make();
         g2range::Range rg(env);
@@ -10865,6 +10898,27 @@ bool CombatII::battle_weapon_pick_valid(int unit_index, int kind) {
         }
         return false;
     };
+    if (kind == 5) {
+        // 2E25B: loc_2E2C7 paints the first 1A452(front, count 1, facing, base+5/6) ray into
+        // the E8F46 grid with 13D02, and loc_2E37D only accepts a cell whose grid value is
+        // >= 0 (13CBD). 13D02 runs only when the cell is -1 (loc_2E311), and 169D7 left -1
+        // for walkable empty cells / -2 for blocked or occupied ones, so the cursor is the
+        // ray minus blocked cells; the pick distance then becomes the range of the second
+        // 1A452 collection (loc_2E405).
+        if (si < 1) return false;
+        if (std::abs(ax - tx) + std::abs(ay - ty) < 2) return false;          // sub_49ADF < 2 -> repick
+        const int oi = battle_unit_index_at(tx, ty);                          // sub_11DB2
+        if (oi >= 0 && (size_t)oi < units_.size() && units_[(size_t)oi].active &&
+            units_[(size_t)oi].hp > 0) return false;                          // must be empty
+        std::vector<int> grid;
+        battle_ai_169d7_reset(unit_index, grid);                              // sub_169D7
+        if (grid.size() == (size_t)map_w_ * (size_t)map_h_ &&
+            battle_ai_wc5_diff_read(grid, tx, ty) != -1) return false;        // 13D02 skipped -2
+        const int idx = si - 1;
+        const int base_r = (int)(int8_t)battle_lookup_184a4(A.combat_type_5b, 0x38); // sub_2CBFB
+        const int range = base_r + (idx == 5 ? 5 : 6);
+        return in_front_ray(range);                                           // 13CBD / E8F46 ray
+    }
     if (kind == 2) {
         if (std::abs(ax - tx) + std::abs(ay - ty) < 2) return false;          // sub_49ADF < 2 -> repick
         const int oi = battle_unit_index_at(tx, ty);                          // sub_11DB2
@@ -11045,9 +11099,9 @@ int CombatII::battle_weapon_collect_2e0f0(int unit_index, int radius,
         default: dx = 1; break; // east x+1 (bx=3)
     }
 
-    // sub_169D7 precondition for the automatic path. sub_2E25B's player branch does not
-    // call 2E0F0 (it uses the 1A452/1A552 ray plus the 4A483 landing cursor); the port
-    // retains its prior ray approximation there, so only F14D8==1 gets the E8 gate.
+    // sub_169D7 precondition for the automatic path. sub_2E25B's player branch never calls
+    // 2E0F0 (it uses the first 1A452 ray for the cursor and a second one for the landing),
+    // so only F14D8 == 1 callers (2E25B AI, 308EE) reach the E8 gate here.
     const bool require_e8 = (battle_f14d8_ == 1);
     std::vector<int> grid;
     int end_x = (int)(int8_t)A.x, end_y = (int)(int8_t)A.y;
@@ -11122,6 +11176,23 @@ int CombatII::battle_weapon_collect_rect(int unit_index, int x, int y, int count
         if (last_x) *last_x = px;
         if (last_y) *last_y = py;
     }
+    battle_target_list_ = rg.list;
+    return (int)battle_target_list_.size();
+}
+
+// sub_1A452/1A552 + sub_1A25F: from (x, y) along the actor's facing, add each tile's
+// occupant through the actor variant (the [+14h]&1 rule). 2E25B's player pass rebuilds
+// F0648 this way with the 4A483 pick distance as the range (loc_2E2C7/loc_2E311).
+int CombatII::battle_weapon_collect_rect_actor(int unit_index, int x, int y, int count, int range) {
+    battle_target_list_.clear();
+    if (unit_index < 0 || (size_t)unit_index >= units_.size()) return 0;
+    const g2range::Env env = battle_range_env_make();
+    g2range::Range rg(env);
+    const g2range::Unit au = battle_range_unit(unit_index);
+    rg.rect_init(x, y, count, au.facing, range);                   // sub_1A452
+    int px = x, py = y;
+    for (int guard = 0; guard < 0x10000 && rg.rect_next(px, py); ++guard) // sub_1A552
+        rg.add_by_actor(px, py, au);                               // sub_1A25F
     battle_target_list_ = rg.list;
     return (int)battle_target_list_.size();
 }
@@ -12308,7 +12379,7 @@ int CombatII::battle_use_weapon(int unit_index, int si) {
     // calls this function again).
     if (battle_weapon_needs_cursor(i) && battle_pick_tx_ < 0) {
         battle_weapon_pending_si_ = si;
-        battle_weapon_pending_kind_ = 1;
+        battle_weapon_pending_kind_ = battle_weapon_cursor_kind(unit_index, si);
         if (battle_trace_)
             fprintf(stderr, "COMBAT: weapon unit=%d si=%d -> 4A483 target cursor (no consume)\n", u.id, si);
         return 0;

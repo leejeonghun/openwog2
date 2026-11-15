@@ -1744,11 +1744,12 @@ private:
     int  battle_pick_tx_ = -1;      // tile chosen by the player (-1 = none)
     int  battle_pick_ty_ = -1;
     bool battle_weapon_needs_cursor(int idx) const;              // F1474 handler that opens the 4A483 cursor
-    // Cursor kind for the si==0 (302E6 body) path.
+    // Cursor kind for the si==0 (302E6 body) path and for the F1474 slots.
     //   0 = no cursor (automatic), 1 = F1474 target unit, 2 = 308EE landing cell (empty, distance >= 2),
-    //   3 = occupied cell within 7 cells in front (356DB), 4 = centre cell of the radius-2 diamond (39A49).
+    //   3 = occupied cell within 7 cells in front (356DB), 4 = centre cell of the radius-2 diamond (39A49),
+    //   5 = 2E25B landing cell (empty, distance >= 2, on the first base+5/6 ray).
     int  battle_weapon_cursor_kind(int unit_index, int si) const;
-    bool battle_weapon_pick_valid(int unit_index, int kind);   // validates battle_pick_tx_/ty_
+    bool battle_weapon_pick_valid(int unit_index, int kind, int si);   // validates battle_pick_tx_/ty_
     int  battle_weapon_pick_target(int unit_index, bool hostile_only) const;
     bool battle_weapon_apply_pick(int unit_index);               // moves the picked unit to the head of F0648
     // ---- CC990 roster list (sub_500ED/sub_50105/sub_50D9F loc_50EFF) ----
@@ -2419,6 +2420,7 @@ private:
     int battle_weapon_2cbfb(int unit_index, int delta);              // sub_2CBFB (16-bit)
     int battle_weapon_collect_rect(int unit_index, int x, int y, int count, int range,
                                    int* last_x = nullptr, int* last_y = nullptr); // 1A452/1A552 + 1A1F8
+    int battle_weapon_collect_rect_actor(int unit_index, int x, int y, int count, int range); // 1A452/1A552 + 1A25F
     int battle_weapon_collect_dia_at(int unit_index, int x, int y, int r); // 1AC08/1AC59 + 1A1F8
     void battle_weapon_front_tile(int unit_index, int& fx, int& fy); // 1A1DE + 1A146
     void battle_knockback_2e896(int target_index, int dir);          // sub_2E896
