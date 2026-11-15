@@ -105,7 +105,7 @@ int CombatII::battle_fx_21e16(int unit_index, int tx, int ty, int k) {
         battle_fx_present();                                         // 454B3+454D5+5E9E8
         wait_game_tick();                                            // sub_499E4
     }
-    pal_load_range(0, 0x100, &battle_palette_[0][0]);                // 5F9AE(unk_12824C)
+    pal_load_range(0, 0x100, &battle_master_palette_[0][0]);                // 5F9AE(unk_12824C)
     battle_nsp_release();                                            // sub_1FFCD
     cam_fine_x_ = CAM_FINE_X_REST;                                   // dword_7001C = 0Ch
     cam_fine_y_ = CAM_FINE_Y_REST;                                   // dword_BA838 = 0

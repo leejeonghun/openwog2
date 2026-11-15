@@ -100,7 +100,7 @@ int CombatII::battle_fx_58619(int unit_index, int tx, int ty, int k) {
 
     // (2) 5FA2C: 100% -> 0% (step -2)
     for (int pct = 0x64; pct >= 0 && !should_exit_; pct -= 2) {
-        pal_scale_range(0, 0x100, &battle_palette_[0][0], pct);
+        pal_scale_range(0, 0x100, &battle_master_palette_[0][0], pct);
         wait_game_tick();
     }
     if (should_exit_) { battle_nsp_release(); return 1; }
@@ -112,7 +112,7 @@ int CombatII::battle_fx_58619(int unit_index, int tx, int ty, int k) {
     if (1 < nframes) battle_fx_blit(1, 1, 1);
     battle_fx_present();
     for (int pct = 0; pct <= 0x64 && !should_exit_; pct += 2) {
-        pal_scale_range(0, 0x100, &battle_palette_[0][0], pct);
+        pal_scale_range(0, 0x100, &battle_master_palette_[0][0], pct);
         wait_game_tick();
     }
     game_timer_set(5);                                         // sub_1033B(5)
@@ -186,15 +186,15 @@ int CombatII::battle_fx_58619(int unit_index, int tx, int ty, int k) {
 
     // (6) Finish: darken -> one frame -> brighten -> LUT and pose restore
     for (int pct = 0x64; pct >= 0 && !should_exit_; pct -= 2) {
-        pal_scale_range(0, 0x100, &battle_palette_[0][0], pct);
+        pal_scale_range(0, 0x100, &battle_master_palette_[0][0], pct);
         wait_game_tick();
     }
     battle_fx_present();
     for (int pct = 0; pct <= 0x64 && !should_exit_; pct += 2) {
-        pal_scale_range(0, 0x100, &battle_palette_[0][0], pct);
+        pal_scale_range(0, 0x100, &battle_master_palette_[0][0], pct);
         wait_game_tick();
     }
-    pal_scale_range(0, 0x100, &battle_palette_[0][0], 100);    // 61115 counterpart (original palette)
+    pal_scale_range(0, 0x100, &battle_master_palette_[0][0], 100);    // 61115 counterpart (original palette)
     for (int oi : list) {
         if ((size_t)oi < units_.size()) reset_unit_pose(units_[(size_t)oi]);   // sub_12124
     }

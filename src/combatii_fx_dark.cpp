@@ -263,7 +263,7 @@ int CombatII::battle_fx_276b9(int unit_index, int tx, int ty, int k) {
     }
     cam_fine_x_ = CAM_FINE_X_REST;                                 // dword_7001C = 0Ch
     cam_fine_y_ = CAM_FINE_Y_REST;                                 // dword_BA838 = 0
-    pal_load_range(0, 256, &battle_palette_[0][0]);                // 5F9AE restore master
+    pal_load_range(0, 256, &battle_master_palette_[0][0]);                // 5F9AE restore master
     battle_nsp_release();                                          // sub_1FFCD
     if (battle_trace_)
         fprintf(stderr, "COMBAT: 276B9 amagedon unit=%d\n", units_[(size_t)unit_index].id);
@@ -341,7 +341,7 @@ int CombatII::battle_fx_2799a(int unit_index, int tx, int ty, int k) {
     }
     cam_fine_x_ = CAM_FINE_X_REST;                                 // dword_7001C = 0Ch
     cam_fine_y_ = CAM_FINE_Y_REST;
-    pal_load_range(0, 256, &battle_palette_[0][0]);                // sub_5F9AE restore master
+    pal_load_range(0, 256, &battle_master_palette_[0][0]);                // sub_5F9AE restore master
     battle_nsp_release();                                          // sub_1FFCD
     if (battle_trace_)
         fprintf(stderr, "COMBAT: 2799A atomicbl unit=%d\n", units_[(size_t)unit_index].id);
@@ -427,7 +427,7 @@ int CombatII::battle_fx_27c5a(int unit_index, int tx, int ty, int k) {
     }
     cam_fine_x_ = CAM_FINE_X_REST;                                 // dword_7001C = 0Ch
     cam_fine_y_ = CAM_FINE_Y_REST;                                 // dword_BA838 = 0
-    pal_load_range(0, 256, &battle_palette_[0][0]);                // sub_5F9AE restore master
+    pal_load_range(0, 256, &battle_master_palette_[0][0]);                // sub_5F9AE restore master
     battle_nsp_release();                                          // sub_1FFCD
     if (battle_trace_)
         fprintf(stderr, "COMBAT: 27C5A amagedon-multi unit=%d\n", units_[(size_t)unit_index].id);

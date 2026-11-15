@@ -326,11 +326,11 @@ void CombatII::pal_ramp_set_width(int color_index) {
 //   So pct = 0 is the original palette and pct = 100 tints the whole palette with colour K
 //   (the fire glow).
 void CombatII::pal_ramp_apply(int pct) {
-    uint8_t* master = &battle_palette_[0][0];           // unk_12824C
+    uint8_t* master = &battle_master_palette_[0][0];    // unk_12824C
     const int k = pal_ramp_color_ & 0xFF;
-    const uint8_t kr = battle_palette_[k][0];
-    const uint8_t kg = battle_palette_[k][1];
-    const uint8_t kb = battle_palette_[k][2];
+    const uint8_t kr = master[k * 3 + 0];
+    const uint8_t kg = master[k * 3 + 1];
+    const uint8_t kb = master[k * 3 + 2];
     uint8_t temp[256 * 3];
     for (int i = 0; i < 256; ++i) {                     // (1) fill with colour K
         temp[i * 3 + 0] = kr;
@@ -360,7 +360,7 @@ void CombatII::pal_ramp_apply(int pct) {
 //   23074, 276B9 and the 27C5A restore pass use 0FEh; 25DFE/2799A/5A267/5A566 use 100h.
 //   5FD1C also has no lower clamp for negative pct (23074's first frames pass -8).
 void CombatII::pal_shift_fade(int mul_pct, int end) {
-    const uint8_t* master = &battle_palette_[0][0];       // unk_12824C (read only)
+    const uint8_t* master = &battle_master_palette_[0][0]; // unk_12824C (read only)
     const int p = mul_pct > 100 ? 100 : mul_pct;          // upper clamp only, as in 5FD1C
     if (end < 0) end = 0;
     if (end > 0x100) end = 0x100;

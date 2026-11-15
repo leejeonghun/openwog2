@@ -1328,11 +1328,11 @@ bool CombatII::battle_fx_32bcb_anim(int unit_index) {
                 battle_fx_blit_tinted_unclipped(idx, ux + e.xo, uy + e.yo, 70, {0x1F}); // 5F29D (61147 1Fh,46h)
             }
             if (v >= 0x26 && v < 0x64 && 29 < nframes) {
-                // 33D3F: F0F06 is F0DAA + 0x15C = entry 29, so the second copy uses
-                // entry 29's sprite and offsets, with the parity shift on y (not x).
+                // 33D3F: F0F06 is F0DAA + 0x15C = entry 29. ASM 48621..48647 applies the
+                // parity as x = tx + (even ? +1 : -1) + xo; y is ty + yo in both branches.
                 const MagicFxFrame& b = magic_frames_[29];
                 const int parity = (frame_counter & 1) ? -1 : 1;
-                battle_fx_blit_tinted_unclipped(29, ux + b.xo, uy + b.yo + parity, 70, {0x1F});
+                battle_fx_blit_tinted_unclipped(29, ux + b.xo + parity, uy + b.yo, 70, {0x1F});
             }
             if (v < 0x64 && (frame_counter % 4) == 3) {                    // +1 every 4 frames, after drawing
                 int f = v + 1;

@@ -97,7 +97,7 @@ int CombatII::battle_fx_59a70(int caster_index, int revived_index) {
     const int nframes = (int)magic_frames_.size();
     camera_center_on((int)(int8_t)A.x, (int)(int8_t)A.y);                    // sub_1124A
 
-    const uint8_t* master = &battle_palette_[0][0];               // unk_12824C
+    const uint8_t* master = &battle_master_palette_[0][0];        // unk_12824C
 
     // ---- (2) palette work buffers (no sub_5F945; built from a master copy) ----
     uint8_t shifted[kPalLen];                                     // master[i+31h]

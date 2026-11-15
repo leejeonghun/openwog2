@@ -67,7 +67,7 @@ int CombatII::battle_fx_21be8(int unit_index, int tx, int ty, int k) {
     constexpr int kTint = 0x32;
     // (3) shorter timer period, 90% palette, sound effect
     game_timer_set(5);                                           // sub_1033B(5, 100h)
-    pal_scale_range(0, 0x100, &battle_palette_[0][0], 0x5A);     // sub_5FA2C(ecx=5Ah)
+    pal_scale_range(0, 0x100, &battle_master_palette_[0][0], 0x5A);     // sub_5FA2C(ecx=5Ah)
     sfx(0x32);                                                   // sub_4F4CD(32h)
 
     // (4) dragon (frame 0) rises from below at x = 0x2D (var_4 = 0xC7, -0x0F per frame)
@@ -80,7 +80,7 @@ int CombatII::battle_fx_21be8(int unit_index, int tx, int ty, int k) {
     }
 
     // (5) restore the palette to 100%
-    pal_scale_range(0, 0x100, &battle_palette_[0][0], 0x64);     // sub_5FA2C(ecx=64h)
+    pal_scale_range(0, 0x100, &battle_master_palette_[0][0], 0x64);     // sub_5FA2C(ecx=64h)
 
     // (6) initial placement of 7 particles: var_24 = x (20..299), var_34 = y (40..184)
     int16_t px[7], py[7];

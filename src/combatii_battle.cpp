@@ -10644,7 +10644,7 @@ int CombatII::battle_weapon_f1474(int unit_index, int idx, int dx) {
                 video_.present();
                 game_timer_set(0x14);
                 wait_game_tick();
-                pal_load_range(0, 0x100, &battle_palette_[0][0]);
+                pal_load_range(0, 0x100, &battle_master_palette_[0][0]);
                 video_.present();
                 game_timer_set(3);                                // 2D48A -> 1033B(3)
             }
@@ -10796,11 +10796,11 @@ int CombatII::battle_weapon_collect_screen(int unit_index, int cap, int x_shift)
     return (int)battle_target_list_.size();
 }
 
-// sub_398F3: walk the six-tile front ray with 1A452(1, 6). For every tile that passes
-// 13CBD, collect the radius-2 1AC08 diamond through 1AC59/1A1F8 into the same accumulator and
-// keep the first tile whose cumulative target count is the largest. The accumulator (F0648)
-// is reset only once, after selection, when the chosen diamond is collected again. cell_x/
-// cell_y receive that chosen tile; an empty result returns -1.
+// sub_398F3: walk the six-tile front ray with 1A452(1, 6). Each candidate starts by clearing
+// the F0648 count (`mov word ptr dword_F0B9C+2, cx`, cx == 0), then collects that candidate's
+// radius-2 1AC08 diamond. The tile with the largest per-tile count is kept; ties retain the
+// earlier tile. The original returns -1 when the last processed tile's count is zero, even if
+// an earlier tile had targets. cell_x/cell_y receive the chosen tile.
 int CombatII::battle_weapon_collect_39a49_auto(int unit_index, int* cell_x, int* cell_y) {
     battle_target_list_.clear();
     if (cell_x) *cell_x = -1;
@@ -10811,7 +10811,8 @@ int CombatII::battle_weapon_collect_39a49_auto(int unit_index, int* cell_x, int*
     const int ax_eff = battle_effective_army(A);
 
     // 1AC59 walks the diamond row by row, and 1A1F8 appends only a hostile not already in
-    // F0648. The same list is deliberately kept across all six candidate tiles.
+    // F0648. The caller clears the count before each candidate, so this list holds one
+    // candidate's diamond at a time.
     auto add_diamond = [&](int cx, int cy) {
         for (int dy = -2; dy <= 2; ++dy) {
             for (int dx = -2; dx <= 2; ++dx) {
@@ -10835,20 +10836,27 @@ int CombatII::battle_weapon_collect_39a49_auto(int unit_index, int* cell_x, int*
     const auto front = rg.front_tile(au, au.facing);
     rg.rect_init(front.x, front.y, 1, au.facing, 6);
     int best_count = 0, best_x = -1, best_y = -1;
+    int last_count = 0;
     int px = front.x, py = front.y;
     for (int guard = 0; guard < 0x1000 && rg.rect_next(px, py); ++guard) {
+        // ASM 55903: the count is cleared before 13CBD, so a rejected tile also leaves the
+        // final count at zero. The accumulator is never shared across candidate tiles.
+        battle_target_list_.clear();
+        last_count = 0;
         // 39A49 first clears E8 with 13F8A and marks only the 3..6 band with 13D02, so
         // 13CBD rejects both out-of-map cells and the three nearest ray tiles.
         if (battle_ai_wc5_diff_read(battle_e8_grid_, px, py) < 0) continue; // sub_13CBD
         add_diamond(px, py);
-        const int count = (int)battle_target_list_.size();
-        if (count > best_count) {
-            best_count = count;
+        last_count = (int)battle_target_list_.size();
+        if (best_count < last_count) {
+            best_count = last_count;
             best_x = px;
             best_y = py;
         }
     }
-    if (best_count == 0 || best_x < 0) return -1;
+    // ASM 55941: `cmp word ptr dword_F0B9C+2, 0 / jnz` tests the last candidate, not the best
+    // candidate. A zero final diamond therefore returns -1 even after an earlier hit.
+    if (last_count == 0 || best_x < 0) return -1;
 
     // loc_399DA: reset the count and collect the winning diamond again through 1AC08/1AC59.
     const int n = battle_weapon_collect_dia_at(unit_index, best_x, best_y, 2);

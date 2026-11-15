@@ -142,7 +142,7 @@ int CombatII::battle_fx_58c87(int unit_index, int tx, int ty, int k) {
     for (int oi : hit) {
         if ((size_t)oi < units_.size()) reset_unit_pose(units_[(size_t)oi]); // sub_12124
     }
-    pal_load_range(0, 0x100, &battle_palette_[0][0]);                       // sub_5F9AE
+    pal_load_range(0, 0x100, &battle_master_palette_[0][0]);                       // sub_5F9AE
     battle_dim_row0_ = false;                                               // sub_44D6E(0)
     weather_tick_enabled_ = true;                                           // sub_103A0
     battle_nsp_release();                                                   // sub_1FFCD
@@ -276,7 +276,7 @@ int CombatII::battle_fx_58e95(int unit_index, int tx, int ty, int k) {
     for (int oi : hit) {
         if ((size_t)oi < units_.size()) reset_unit_pose(units_[(size_t)oi]);
     }
-    pal_load_range(0, 0x100, &battle_palette_[0][0]);                       // sub_5F9AE
+    pal_load_range(0, 0x100, &battle_master_palette_[0][0]);                       // sub_5F9AE
     battle_dim_row0_ = false;
     weather_tick_enabled_ = true;                                           // sub_103A0
     battle_nsp_release();
@@ -371,13 +371,13 @@ int CombatII::battle_fx_592b0(int unit_index, int tx, int ty, int k) {
             if (beam_life == 9) {                                           // loc_59569
                 sfx(0x34);                                                  // sub_4F4CD(34h)
                 battle_dim_row0_ = false;                                   // sub_44D6E(0)
-                pal_scale_range(0, 0x100, &battle_palette_[0][0], 0x64);    // sub_5FA2C(100)
+                pal_scale_range(0, 0x100, &battle_master_palette_[0][0], 0x64);    // sub_5FA2C(100)
             } else if (beam_life > 2) {                                     // loc_5959B
                 battle_dim_row0_ = true;                                    // sub_44D6E(1)
                 const int pct = beam_life * 5 + 0x3C;                       // imul 5; add 3Ch
-                pal_scale_range(0, 0x100, &battle_palette_[0][0], pct);     // sub_5FA2C
+                pal_scale_range(0, 0x100, &battle_master_palette_[0][0], pct);     // sub_5FA2C
             } else if (beam_life == 2) {                                    // loc_595C5
-                pal_scale_range(0, 0x100, &battle_palette_[0][0], 0x64);    // full palette
+                pal_scale_range(0, 0x100, &battle_master_palette_[0][0], 0x64);    // full palette
                 battle_dim_row0_ = true;                                    // sub_44D6E(1)
                 fx_pal_mix(0x60, 0x100, 0, 0x28);                           // sub_30824(0, 28h)
             }
@@ -395,7 +395,7 @@ int CombatII::battle_fx_592b0(int unit_index, int tx, int ty, int k) {
     for (int oi : hit) {
         if ((size_t)oi < units_.size()) reset_unit_pose(units_[(size_t)oi]);
     }
-    pal_load_range(0, 0x100, &battle_palette_[0][0]);                       // sub_5F9AE
+    pal_load_range(0, 0x100, &battle_master_palette_[0][0]);                       // sub_5F9AE
     battle_dim_row0_ = false;
     weather_tick_enabled_ = true;                                           // sub_103A0
     battle_nsp_release();

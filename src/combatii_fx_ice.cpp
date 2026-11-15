@@ -291,8 +291,8 @@ int CombatII::battle_fx_241f7(int unit_index, int tx, int ty, int k) {
     for (int frame = 0; frame < total && !should_exit_; ++frame, ++tick) {
         if (tick % 5 == 0) {                                           // var_10 % 5 == 0
             battle_fx_present();                                       // 454B3
-            // sub_5F9E9(0, 100h, unk_12824C, 1): restore the master palette (battle_palette_)
-            pal_load_range(0, 256, &battle_palette_[0][0]);
+            // sub_5F9E9(0, 100h, unk_12824C, 1): restore the weather/time-adjusted master palette
+            pal_load_range(0, 256, &battle_master_palette_[0][0]);
             sfx(0x32);                                                 // 4F4CD(32h)
             wait_game_tick();
         }
@@ -348,7 +348,7 @@ int CombatII::battle_fx_24466(int unit_index, int tx, int ty, int k) {
     for (int frame = 0; frame < 0x30 && !should_exit_; ++frame) {
         if (frame == 0 || frame == 8) {                                // `test cx,cx` / `cmp cx,8`
             battle_fx_present();
-            pal_load_range(0, 256, &battle_palette_[0][0]);             // sub_5F9E9 palette restore
+            pal_load_range(0, 256, &battle_master_palette_[0][0]);             // sub_5F9E9 palette restore
             sfx(0x32);                                                 // sub_4F4CD(32h)
             wait_game_tick();
         }

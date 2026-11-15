@@ -344,7 +344,7 @@ int CombatII::battle_fx_31283_anim(int unit_index) {
     // sub_5FA2C writes one DAC step after 5E943. pal_scale_range is immediate, so present
     // the new palette and wait for that frame to reach the screen before the 499E4 tick.
     auto fade_palette_step = [&](int pct) {
-        pal_scale_range(0, 0x100, &battle_palette_[0][0], pct);   // sub_5FA2C
+        pal_scale_range(0, 0x100, &battle_master_palette_[0][0], pct);   // sub_5FA2C
         if (!auto_advance_) {
             video_.present();
             video_.wait_presented();                              // sub_5E943 (display frame)
