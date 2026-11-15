@@ -9762,12 +9762,14 @@ void CombatII::blit_frame_tinted(int x, int y, const MagicFxFrame& fr, int tint_
     if (fr.flat.empty() || fr.w <= 0 || fr.h <= 0) return;
     uint8_t* dst = video_.get_backbuffer();
     if (!dst) return;
-    // Drop the cache when the palette changes (it is fixed in battle, but be safe).
+    // Drop the cache when the weather- or time-adjusted master palette changes.
     static std::unordered_map<uint32_t, std::vector<uint8_t>> cache;
     static uint32_t cache_pal = 0;
     uint32_t pal_hash = 2166136261u;
     for (int i = 0; i < 256; ++i)
-        pal_hash = (pal_hash ^ (uint32_t)(battle_palette_[i][0] | (battle_palette_[i][1] << 8))) * 16777619u;
+        pal_hash = (pal_hash ^ (uint32_t)(battle_master_palette_[i][0] |
+                                          (battle_master_palette_[i][1] << 8) |
+                                          (battle_master_palette_[i][2] << 16))) * 16777619u;
     if (pal_hash != cache_pal) { cache.clear(); cache_pal = pal_hash; }
 
     const int arg = std::max(0, std::min(100, tint_pct));   // 611AA ebx
@@ -9799,21 +9801,21 @@ void CombatII::blit_frame_tinted(int x, int y, const MagicFxFrame& fr, int tint_
             const uint32_t key = ((uint32_t)px << 8) | (uint32_t)arg;
             auto it = cache.find(key);
             if (it == cache.end()) {
-                // 6098B: effect colour = palette[px] * arg%.
-                const int er = battle_palette_[px][0] * arg / 100;
-                const int eg = battle_palette_[px][1] * arg / 100;
-                const int eb = battle_palette_[px][2] * arg / 100;
+                // 6098B: effect colour = master palette[px] * arg%.
+                const int er = battle_master_palette_[px][0] * arg / 100;
+                const int eg = battle_master_palette_[px][1] * arg / 100;
+                const int eb = battle_master_palette_[px][2] * arg / 100;
                 std::vector<uint8_t> lut(256);
                 for (int d = 0; d < 256; ++d) {
-                    // 609F9: palette[d] * (100-arg)% + effect + 9, stored through al.
-                    const int r = (uint8_t)(battle_palette_[d][0] * dest_weight / 100 + er + 9);
-                    const int g = (uint8_t)(battle_palette_[d][1] * dest_weight / 100 + eg + 9);
-                    const int b = (uint8_t)(battle_palette_[d][2] * dest_weight / 100 + eb + 9);
+                    // 609F9: master palette[d] * (100-arg)% + effect + 9, stored through al.
+                    const int r = (uint8_t)(battle_master_palette_[d][0] * dest_weight / 100 + er + 9);
+                    const int g = (uint8_t)(battle_master_palette_[d][1] * dest_weight / 100 + eg + 9);
+                    const int b = (uint8_t)(battle_master_palette_[d][2] * dest_weight / 100 + eb + 9);
                     int best = 0, best_d = 0x7FFFFFFF;
                     for (int c = 0; c < 256; ++c) {
-                        const int dr = std::abs(r - (int)battle_palette_[c][0]);
-                        const int dg = std::abs(g - (int)battle_palette_[c][1]);
-                        const int db = std::abs(b - (int)battle_palette_[c][2]);
+                        const int dr = std::abs(r - (int)battle_master_palette_[c][0]);
+                        const int dg = std::abs(g - (int)battle_master_palette_[c][1]);
+                        const int db = std::abs(b - (int)battle_master_palette_[c][2]);
                         const int dist = dr + dg + db;              // L1 (12824C sums the 3 deltas)
                         if (dist < best_d) { best_d = dist; best = c; if (!dist) break; }
                     }
