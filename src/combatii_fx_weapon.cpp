@@ -39,6 +39,7 @@
 #include "palette.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -201,9 +202,8 @@ void CombatII::fx_pal_mix(int start, int end, int color_index, int pct) {
     }
 }
 
-// sub_5EE51 / sub_5EFB9: blit one unk_F0DAA frame transparent at (x, y). Most NSP sites use
-// 5EFB9, whose 13Fh/C7h clip is reproduced here (5EE51 itself is unclipped; the port keeps
-// the same safe clip for it).
+// sub_5EFB9: blit one unk_F0DAA frame transparent at (x, y), clipped to the original
+// 13Fh/C7h work area. Sites that call sub_5EE51 use fx_blit_nsp_5ee51 below instead.
 void CombatII::fx_blit_nsp(int frame, int x, int y) {
     if (frame < 0 || (size_t)frame >= magic_frames_.size()) return;
     const MagicFxFrame& fr = magic_frames_[(size_t)frame];
@@ -216,6 +216,21 @@ void CombatII::fx_blit_nsp(int frame, int x, int y) {
     blit_flat_clip319(x, y, buf.data());
 }
 
+// sub_5EE51: the original resolves the destination with sub_5EB00 and writes every
+// non-transparent pixel without the 5EFB9 13Fh/C7h trim. The port cannot write outside its
+// 320x200 buffer, so the buffer bounds remain the only safety limit.
+void CombatII::fx_blit_nsp_5ee51(int frame, int x, int y) {
+    if (frame < 0 || (size_t)frame >= magic_frames_.size()) return;
+    const MagicFxFrame& fr = magic_frames_[(size_t)frame];
+    if (fr.flat.empty()) return;
+    static std::vector<uint8_t> buf;
+    buf.resize(4 + fr.flat.size());
+    buf[0] = (uint8_t)(fr.w & 0xFF); buf[1] = (uint8_t)(fr.w >> 8);
+    buf[2] = (uint8_t)(fr.h & 0xFF); buf[3] = (uint8_t)(fr.h >> 8);
+    std::memcpy(buf.data() + 4, fr.flat.data(), fr.flat.size());
+    blit_flat_transparent(x, y, buf.data());
+}
+
 // sub_6106C(page=3, colour, brightness%): the shade LUT used by 341C7 (9).
 //   The original switches the fill primitive to the LUT variant (5ECC7(1) -> 5EE2B),
 //   selects row 3 (6104A(3)) and paints 5EDDE rectangles, so the rectangle passes existing
@@ -223,8 +238,9 @@ void CombatII::fx_blit_nsp(int frame, int x, int y) {
 //   and effect colour = pal[11h] * 46h / 100, entry[i] is the nearest palette match of
 //   pal[i] * 1Eh / 100 + effect colour + 9. build_shade_row_original matches 6106C exactly.
 void CombatII::fx_shade_lut_build(int color_index, int shade_pct) {
-    if (!dlg_shade_pal_set_) snapshot_dialog_shade_palette();   // LUT base = unk_12824C (weather applied)
-    build_shade_row_original(dlg_shade_pal_, color_index & 0xFF, shade_pct, fx_shade_lut_);
+    // The original 6106C reads unk_12824C at build time, so weather and time-of-day changes
+    // must be visible in this V-weapon LUT instead of the one-time dialogue snapshot.
+    build_shade_row_original(battle_master_palette_, color_index & 0xFF, shade_pct, fx_shade_lut_);
 }
 
 // sub_5EDDE + sub_5EE2B(mode 1): pass every pixel of a rectangle through the LUT.
@@ -251,7 +267,16 @@ void CombatII::fx_shade_rect(int x0, int y0, int x1, int y1) {
 //   to build a column across the screen. The original falls into 5EFB9 (clip) when y leaves
 //   the screen band; the port blitter already clips, so the path is the same.
 void CombatII::fx_bolt_strip(int x, int y, int frame) {
-    for (int k = 0; k < 4; ++k) fx_blit_nsp(frame, x, y + 0x40 * k);
+    // sub_308A3 selects 5EFB9 outside the -28h..0B4h band and 5EE51 inside it. The
+    // difference is the right/bottom trim (column 319 / row 199) and negative-source
+    // handling, so keep the two paths distinct.
+    for (int k = 0; k < 4; ++k) {
+        const int sy = y + 0x40 * k;
+        if (sy < -0x28 || sy > 0xB4)
+            fx_blit_nsp(frame, x, sy);
+        else
+            fx_blit_nsp_5ee51(frame, x, sy);
+    }
 }
 
 // ==== sub_2CC3A: V-weapon normal-tier animation ====
@@ -480,7 +505,7 @@ void CombatII::battle_fx_341c7_anim(int unit_index) {
         const int f1 = 6 + i;
         if (f1 < nframes) {                                           // 5EE51
             const MagicFxFrame& a = magic_frames_[(size_t)f1];
-            fx_blit_nsp(f1, si_x + a.xo, di_y + a.yo);
+            fx_blit_nsp_5ee51(f1, si_x + a.xo, di_y + a.yo);
         }
         if (i < nframes) {                                            // 5EFB9 (y-5Ah)
             const MagicFxFrame& b = magic_frames_[(size_t)i];
@@ -504,7 +529,7 @@ void CombatII::battle_fx_341c7_anim(int unit_index) {
         const int f = 0x0A + (i & 1);                                 // (i & 1) + 0Ah
         if (f < nframes) {                                            // 5EE51
             const MagicFxFrame& a = magic_frames_[(size_t)f];
-            fx_blit_nsp(f, cx + a.xo, var14 + a.yo);
+            fx_blit_nsp_5ee51(f, cx + a.xo, var14 + a.yo);
         }
         battle_draw_unit_now(unit_index);                             // 12F2A ([64h] pose)
         battle_fx_commit();                                           // 5E9E8
@@ -530,7 +555,7 @@ void CombatII::battle_fx_341c7_anim(int unit_index) {
         render_highlight_units_direct();                              // 44DCC
         if (11 < nframes) {                                           // 5EE51 (F0E30 = entry 11+2)
             const MagicFxFrame& a = magic_frames_[11];
-            fx_blit_nsp(11, si_x + 9 + a.xo, di_y + blit_dx + a.yo);
+            fx_blit_nsp_5ee51(11, si_x + 9 + a.xo, di_y + blit_dx + a.yo);
         }
         battle_draw_unit_now(unit_index);                             // 12F2A ([64h] = 8)
         battle_fx_commit();                                           // 5E9E8
@@ -559,7 +584,7 @@ void CombatII::battle_fx_341c7_anim(int unit_index) {
         const int f1 = 0x0C + i;
         if (f1 < nframes) {                                           // 5EE51 (y + 0Ch)
             const MagicFxFrame& a = magic_frames_[(size_t)f1];
-            fx_blit_nsp(f1, sx + a.xo, sy + a.yo + 0x0C);
+            fx_blit_nsp_5ee51(f1, sx + a.xo, sy + a.yo + 0x0C);
         }
         const int f2 = 0x0E + i;
         if (f2 < nframes) {                                           // 5EFB9
@@ -602,7 +627,7 @@ void CombatII::battle_fx_341c7_anim(int unit_index) {
             const int r = combat_rand(2);                             // 499BD(2) shared by ax/bx
             if (fi < nframes) {
                 MagicFxFrame& e = magic_frames_[(size_t)fi];
-                fx_blit_nsp(fi, ax0 + e.xo, ay0 + e.yo + jit);        // 5EE51
+                fx_blit_nsp_5ee51(fi, ax0 + e.xo, ay0 + e.yo + jit);   // 5EE51
                 if (si < 0x24) {                                      // cmp si,24h; no movement at or above
                     if (kRockVel[i][0] > 0) e.xo = (int16_t)(e.xo + r); // add [ecx+4], ax
                     else if (kRockVel[i][0] < 0) e.xo = (int16_t)(e.xo - r); // sub [ecx+4], ax
@@ -669,11 +694,10 @@ void CombatII::battle_fx_341c7_anim(int unit_index) {
     //       solid colour back to the master palette.
     //       5FD1C waits for vertical retrace (5E943) each step, so the port also ticks per
     //       step (same rule as the 276B9/2799A fades). The reference palette is the
-    //       weather-applied unk_12824C, hence dlg_shade_pal_. Finally sub_103A0 resumes the
-    //       weather tick after sub_1FFCD.
+    //       weather-applied unk_12824C, i.e. battle_master_palette_. Finally sub_103A0
+    //       resumes the weather tick after sub_1FFCD.
     cam_fine_y_ = 0;                                                  // dword_BA838 = 0
-    if (!dlg_shade_pal_set_) snapshot_dialog_shade_palette();         // copy of unk_12824C
-    const uint8_t (*master)[3] = dlg_shade_pal_;
+    const uint8_t (*master)[3] = battle_master_palette_;
     uint8_t solid[256 * 3];
     for (int i = 0; i < 256; ++i) {                                   // unk_12827C = colour 10h
         solid[i * 3 + 0] = master[0x10][0];
@@ -883,10 +907,8 @@ void CombatII::battle_fx_37fa4_dash_and_lightning(int unit_index, bool load_nsp)
             if (battle_trace_) fprintf(stderr, "COMBAT: warning: 37FA4 unit=%d irus.nsp missing\n", A.id);
             battle_dim_row0_ = false;
             // Port-only cleanup (the original does not branch on 1FEA4): restore the master
-            // explicitly. fx_pal_mix is a faithful 5F945/5FD1C port now, so pct 0 is a no-op
-            // instead of the old accidental "write battle_palette_" restore.
-            snapshot_dialog_shade_palette();
-            pal_load_range(0, 0x100, &dlg_shade_pal_[0][0]);
+            // explicitly from unk_12824C's live counterpart.
+            pal_load_range(0, 0x100, &battle_master_palette_[0][0]);
             return;
         }
     } else if (magic_frames_.empty()) {
@@ -959,7 +981,7 @@ void CombatII::battle_fx_34c48_anim(int unit_index) {
     for (int ti : battle_target_list_) battle_highlight_add(ti);          // 44D89 all targets
     battle_dim_row0_ = true;                                             // 44D6E(1, 28h)
     fx_pal_mix(0x60, 0x100, 0, 0x28);                                    // 30824(0, 28h)
-    pal_load_range(0, 256, &battle_palette_[0][0]);                       // 5F9AE(0, 100h)
+    pal_load_range(0, 256, &battle_master_palette_[0][0]);                // 5F9AE(0, 100h, unk_12824C)
     for (int ti : battle_target_list_) {                                 // 1214F
         if (ti < 0 || (size_t)ti >= units_.size()) continue;
         auto& T = units_[(size_t)ti];
@@ -1057,7 +1079,7 @@ void CombatII::battle_fx_34c48_anim(int unit_index) {
     for (int ti : battle_target_list_) {
         if (ti >= 0 && (size_t)ti < units_.size()) reset_unit_pose(units_[(size_t)ti]);
     }
-    pal_load_range(0, 256, &battle_palette_[0][0]);                       // 5F9AE
+    pal_load_range(0, 256, &battle_master_palette_[0][0]);                // 5F9AE(unk_12824C)
     battle_dim_row0_ = false;                                            // 44D6E(0)
     battle_highlight_clear();                                            // 44D75
     if (battle_trace_)
@@ -1118,7 +1140,7 @@ void CombatII::battle_fx_32589_anim(int unit_index, int target_index) {
     auto blit = [&](int frame) {
         if (frame < 0 || (size_t)frame >= magic_frames_.size()) return;  // 5EE51
         const MagicFxFrame& e = magic_frames_[(size_t)frame];
-        fx_blit_nsp(frame, ax + e.xo, ay + e.yo);
+        fx_blit_nsp_5ee51(frame, ax + e.xo, ay + e.yo);                  // sub_5EE51
     };
     auto frame = [&](std::initializer_list<int> frames) {
         battle_fx_world();                                              // 454B3
@@ -1179,7 +1201,7 @@ void CombatII::battle_fx_32589_anim(int unit_index, int target_index) {
     // (10) original 47275~47310: 44D6E(0,100h), 5F9AE, 11E04(caster), 1DB1D(caster, target),
     //      1FFCD, 103A0
     battle_dim_row0_ = false;                                            // 44D6E(0, 100h)
-    pal_load_range(0, 256, &battle_palette_[0][0]);                      // 5F9AE
+    pal_load_range(0, 256, &battle_master_palette_[0][0]);               // 5F9AE(unk_12824C)
     if (target_index >= 0 && (size_t)target_index < units_.size() && units_[(size_t)target_index].active)
         play_unit_death(target_index, unit_index);                       // 1DB1D ([48h] = 0)
     battle_nsp_release();                                                // 1FFCD
@@ -1192,10 +1214,13 @@ void CombatII::battle_fx_32589_anim(int unit_index, int target_index) {
 // ==== sub_32BCB: i-star2 + slash + ice + icer.nsp (edi 3) ====
 // The original (ASM 47602~48220) uses three ice-particle routines:
 //   33C31  draws each particle frame byte (var_A0) through 5F29D (1:1, tinted by 61147(1Fh,46h)).
-//          The byte advances every 4 frames and wraps to 1Ch past 0x25 / 0x29.
+//          Normal bytes advance every 4 frames and wrap to 1Ch past 0x25 / 0x29; bytes marked
+//          64h by stage (8) draw entries 31/32/33 and advance once per frame until 70h -> 0.
 //   33E06  steps 60 particles (cos/sin tables flt_74A68/flt_744C8 at 1 degree steps,
-//          colour 18h 3x3 plus).
-//   33A2D  draws 5 bolts with 5EE51 and turns units within +-20 into 26h.
+//          colour 18h 3x3 plus) from the caster anchor.
+//   33A2D  draws one bolt with 5EE51 and turns units within +-20 into 26h. Slot var_28
+//          is re-armed at frame 7 on the caster anchor after each (5), so one bolt
+//          appears per var_28 (slots 0..4) and dies off-screen immediately.
 //
 // Frame breakdown for one target, 429 frames:
 //   0..6     (1) intro 5EE51(F0DAA[0..6]) + 12F2A                              (7)
@@ -1203,24 +1228,21 @@ void CombatII::battle_fx_32589_anim(int unit_index, int target_index) {
 //   13..44   (3) 33C31 + 12F2A + 33E06, spawning with var_A0[si++]=13h          (32*)
 //   45..166  (4) silhouette sweep: 5F517(pose 8) x (var_18+1) + 5F3FD, y -3    (122)
 //   167..235 (5) var_28 0..4 x (var_C 7..9 x 3): 33C31 + 5F3FD(pose var_C)      (45)
-//   176..265 (6) var_28 0..8 x 6: 33C31 + 5F3FD(pose 9) + 5EE51(7) on first    (54, overlaps 5)
+//   176..265 (6) var_28 0..8 x 6: 33C31 + 5F3FD(pose 9); (5) re-arms 33A2D B7  (54, overlaps 5)
 //   266..274 (7) var_8 7..9 x 3 frames                                          (9)
 //   275..295 (8) var_14 0Ch..12h x 3 + 5EE51(F0DAA[var_14]) at (598,138)       (21)
-//   296..304 (9) 3 x 3 frames (5F3FD only)                                      (9)
+//   296..304 (9) 3 x 3 frames: 33C31 burst frames + 5F3FD                        (9)
 //   305..426 (10) y +3 sweep: 5F517(pose 9) x (var_24+1) + 5F3FD               (122)
 //   427      12F2A for one frame
 //   428      tail: 44D75, 5F9AE(0), 44D6E(0), [64h]=4, 11E04, restore [63h],
 //            12124 x CNT, 2CAF7(4), 1FFCD, 103A0
 //
-// Approximations (marked in the code below):
-//   - 33E06's 3x3 plus lands at row y-64h of the port's 320x200 backbuffer (the visible
-//     window of the 480 canvas).
-//   - The static tables F0F06/F0F1E/F0F2A/F0F36 are BSS filled by 1FEA4 and are not in the
-//     file, so nothing past frame 0x64 (after (8)) is drawn.
-//   - 5F517 draws 0 frames when var_18/var_24 == 0, not var+1.
-//   - (*) (3) is data dependent: it ends when cnt particles pass 1Ah and all 60 are dead.
-//     One target gives 32 frames (19h -> 1Bh); more targets only lengthen the spawn phase
-//     (capped at 600).
+// F0F06/F0F1E/F0F2A/F0F36 are not separate BSS tables: they are F0DAA entries 29/31/32/33
+// (0x15C/0x174/0x180/0x18C into the 12-byte table). The second 33C31 copy therefore uses
+// entry 29's sprite and offsets, while the main copy uses entries 31/32/33.
+//
+// Remaining render note: the 480-stride original exposes a wider canvas than the port's
+// 320x200 buffer; 5EE51-style blits are limited to the port's buffer bounds.
 bool CombatII::battle_fx_32bcb_anim(int unit_index) {
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return false;
     auto& A = units_[(size_t)unit_index];
@@ -1255,51 +1277,64 @@ bool CombatII::battle_fx_32bcb_anim(int unit_index) {
     std::vector<uint8_t> p_steps(kSlots, 0);                               // var_154 sub-step
     std::vector<uint16_t> p_speed(kSlots, 0);                              // var_208 angle (degrees)
     std::vector<float> p_x(kSlots), p_y(kSlots);                           // var_4D8 / var_5C8
-    int tx0 = ax, ty0 = ay;
-    if (!battle_target_list_.empty()) {
-        const int u0 = battle_target_list_[0];
-        if (u0 >= 0 && (size_t)u0 < units_.size()) {
-            tx0 = (units_[(size_t)u0].x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + UNIT_ANCHOR_X;
-            ty0 = (units_[(size_t)u0].y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + UNIT_ANCHOR_Y;
-        }
-    }
+    // 33E06 keeps a per-particle 100-byte x/y history (50 words each). var_118 is the
+    // visible trail length and grows to 0x31; the port keeps the same newest-first ring.
+    constexpr int kTrailCap = 0x31;
+    struct IceTrail {
+        std::array<int16_t, kTrailCap> x{};
+        std::array<int16_t, kTrailCap> y{};
+        int len = 0;
+    };
+    std::vector<IceTrail> p_trail(kSlots);
+    // 32E35 starts every particle at the caster anchor (screen x + 2, screen y - 31),
+    // not at the target anchor used by 33C31.
     for (int i = 0; i < kSlots; ++i) {
         p_steps[(size_t)i] = (uint8_t)(combat_rand(6) + 2);                // 499BD(6)+2
         p_speed[(size_t)i] = (uint16_t)combat_rand(0x168);                 // 499BD(168h)
-        p_x[(size_t)i] = (float)(tx0 + 2);
-        p_y[(size_t)i] = (float)(ty0 - 0x1F);
+        p_x[(size_t)i] = (float)(ax + 2);
+        p_y[(size_t)i] = (float)(ay - 0x1F);
     }
     int next_particle = 0;                                                 // si
     int frame_counter = 0;                                                 // var_5C
-    bool ice_active = true;                                                // (3) end / 64h switch
+    bool ice_active = true;                                                // (3) spawn loop only
     auto ice_draw = [&]() {                                                // 33C31
-        if (!ice_active) return;
         for (int i = 0; i < kSlots; ++i) {
             const int v = p_frame[(size_t)i];
-            if (v <= 0 || v >= 0x64) continue;
-            if (i >= cnt) continue;                                        // one particle per target
+            if (v <= 0) continue;
             int idx;
-            if (v > 0x1E && v < 0x26) idx = 0x3C - v;                      // 1Fh..25h mirror
-            else if (v < 0x26) idx = v;
-            else if (v < 0x68) idx = 31;                                   // F0F1E (frame 31)
-            else if (v < 0x6C) idx = 32;                                   // F0F2A
-            else if (v < 0x70) idx = 33;                                   // F0F36
-            else idx = v;
-            if (idx <= 0 || idx >= nframes) continue;
+            if (v < 0x64) {
+                if (v > 0x1E && v < 0x26) idx = 0x3C - v;                  // 1Fh..25h mirror
+                else idx = v;                                              // 1..1Eh / 26h..63h
+            } else {
+                // 33C85: 64h..6Fh are the three burst frames. The original advances these
+                // bytes in the same branch before drawing, once per frame, and wraps at 70h.
+                // At 70h the original falls through with a stale sprite pointer; the probe
+                // shows no draw on that frame, so the port clears the byte and skips it.
+                if (v >= 0x70) { p_frame[(size_t)i] = 0; continue; }
+                if (v < 0x68) idx = 31;                                    // F0F1E (entry 31)
+                else if (v < 0x6C) idx = 32;                               // F0F2A (entry 32)
+                else idx = 33;                                             // F0F36 (entry 33)
+                int nv = v + 1;
+                if (nv > 0x6F) nv = 0;
+                p_frame[(size_t)i] = (uint8_t)nv;
+            }
             const int ui = battle_target_list_[(size_t)i];
             if (ui < 0 || (size_t)ui >= units_.size()) continue;
             const auto& U = units_[(size_t)ui];
             const int ux = (U.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X + 0x0C;
             const int uy = (U.y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y + 2;
-            const MagicFxFrame& e = magic_frames_[(size_t)idx];
-            battle_fx_blit_tinted_unclipped(idx, ux + e.xo, uy + e.yo, 70, {0x1F}); // 5F29D (61147 1Fh,46h)
-            if (v >= 0x26 && v < 0x64 && 31 < nframes && 29 < nframes) {
-                // 33D3F: a second copy of frame 31 at the frame-29 offsets, shifted +-1 x.
+            if (idx > 0 && idx < nframes) {
+                const MagicFxFrame& e = magic_frames_[(size_t)idx];
+                battle_fx_blit_tinted_unclipped(idx, ux + e.xo, uy + e.yo, 70, {0x1F}); // 5F29D (61147 1Fh,46h)
+            }
+            if (v >= 0x26 && v < 0x64 && 29 < nframes) {
+                // 33D3F: F0F06 is F0DAA + 0x15C = entry 29, so the second copy uses
+                // entry 29's sprite and offsets, with the parity shift on y (not x).
                 const MagicFxFrame& b = magic_frames_[29];
                 const int parity = (frame_counter & 1) ? -1 : 1;
-                battle_fx_blit_tinted_unclipped(31, ux + b.xo + parity, uy + b.yo, 70, {0x1F});
+                battle_fx_blit_tinted_unclipped(29, ux + b.xo, uy + b.yo + parity, 70, {0x1F});
             }
-            if ((frame_counter % 4) == 3) {                                // +1 every 4 frames, after drawing
+            if (v < 0x64 && (frame_counter % 4) == 3) {                    // +1 every 4 frames, after drawing
                 int f = v + 1;
                 if (f < 0x26) { if (f > 0x21) f = 0x1C; }
                 else if (f > 0x29) f = 0x1C;
@@ -1308,8 +1343,9 @@ bool CombatII::battle_fx_32bcb_anim(int unit_index) {
         }
         battle_fx_flush();                                                 // 5F29D above the dim, below 12F2A
     };
-    // 33E06: a live particle advances var_154 steps along var_208 degrees. Up to step 11 it
-    // paints a 5-pixel plus, afterwards a single pixel (colour 18h, +1 every 10 steps, max 1Fh).
+    // 33E06: a live particle advances var_154 steps along var_208 degrees and stores each
+    // rounded position in its newest-first trail. The original draws the stored array, not
+    // just the current head; the colour is 18h and rises at si%10 == 4 (max 1Fh).
     auto ice_trail = [&]() {
         if (!ice_active) return;
         uint8_t* buf = video_.get_backbuffer();
@@ -1320,27 +1356,83 @@ bool CombatII::battle_fx_32bcb_anim(int unit_index) {
             const double ang = (double)p_speed[(size_t)i] * 0.017453292519943295;
             const float ca = (float)std::cos(ang);
             const float sa = (float)std::sin(ang);
+            IceTrail& tr = p_trail[(size_t)i];
+            int last_px = 0, last_py = 0;
             for (int k = 0; k < steps; ++k) {
                 p_x[(size_t)i] += ca;
                 p_y[(size_t)i] += sa;
                 const int px = (int)std::lround(p_x[(size_t)i]);
                 const int py = (int)std::lround(p_y[(size_t)i]);
-                const uint8_t col = (uint8_t)(0x18 + (k / 10 > 7 ? 7 : k / 10));
-                auto put = [&](int x, int y) {
-                    if (x >= 0 && x < SCREEN_W && y >= 0 && y < SCREEN_H)
-                        buf[(size_t)y * SCREEN_W + (size_t)x] = col;
-                };
-                if (k <= 0x10) {
-                    put(px, py); put(px + 1, py); put(px - 1, py);
-                    put(px, py - 1); put(px, py + 1);
+                last_px = px; last_py = py;
+                const int keep = std::min(tr.len, kTrailCap - 1);
+                for (int j = keep; j > 0; --j) {
+                    tr.x[(size_t)j] = tr.x[(size_t)(j - 1)];
+                    tr.y[(size_t)j] = tr.y[(size_t)(j - 1)];
+                }
+                tr.x[0] = (int16_t)px;
+                tr.y[0] = (int16_t)py;
+                if (tr.len < kTrailCap) ++tr.len;
+            }
+            auto put = [&](int x, int y, uint8_t col) {
+                if (x >= 0 && x < SCREEN_W && y >= 0 && y < SCREEN_H)
+                    buf[(size_t)y * SCREEN_W + (size_t)x] = col;
+            };
+            for (int si = 0; si < tr.len; ++si) {
+                const int band = (si >= 4) ? 1 + (si - 4) / 10 : 0;
+                const uint8_t col = (uint8_t)(0x18 + std::min(band, 7));
+                const int px = tr.x[(size_t)si];
+                const int py = tr.y[(size_t)si];
+                if (si <= 0x10) {
+                    put(px, py, col); put(px + 1, py, col); put(px - 1, py, col);
+                    put(px, py - 1, col); put(px, py + 1, col);
                 } else {
-                    put(px, py);
+                    put(px, py, col);
                 }
             }
-            // Off-screen particles die (original bounds -32h/172h/0FAh, +50 margin here).
-            if (p_x[(size_t)i] < -50.0f || p_x[(size_t)i] > SCREEN_W + 50 ||
-                p_y[(size_t)i] < -50.0f || p_y[(size_t)i] > SCREEN_H + 50)
+            // Off-screen particles die; 33E06 compares the last rounded position with
+            // x -50..370 and y -50..250 (flt_77A68/6C/70).
+            if (last_px < -50 || last_px > 370 ||
+                last_py < -50 || last_py > 250)
                 p_alive[(size_t)i] = 0;
+        }
+    };
+    // 33A2D: slots 0..4 use p_alive as their 1..11 frame number. Stage (4) clears slots
+    // 0..3, but the end of each (5) re-arms slot var_28 at frame 7, so later passes draw
+    // again. After drawing, the bolt checks every target with an active particle byte and,
+    // if it is within x +-40 / y +-20, switches that target's particle byte to 26h. The
+    // bolt then fans out and falls 7 px per frame.
+    // Bounds are the original -50/370/-50/250 rectangle.
+    auto ice_bolts = [&]() {
+        for (int b = 0; b < 5; ++b) {
+            if (p_alive[(size_t)b] == 0) continue;
+            const int f = p_alive[(size_t)b];
+            if (f < nframes) {
+                const MagicFxFrame& e = magic_frames_[(size_t)f];
+                fx_blit_nsp_5ee51(f, (int)std::lround(p_x[(size_t)b] + e.xo),
+                                  (int)std::lround(p_y[(size_t)b] + e.yo));
+            }
+            for (int ti = 0; ti < cnt && ti < (int)battle_target_list_.size(); ++ti) {
+                if (p_frame[(size_t)ti] <= 0 || p_frame[(size_t)ti] >= 0x64) continue;
+                const int ui = battle_target_list_[(size_t)ti];
+                if (ui < 0 || (size_t)ui >= units_.size()) continue;
+                const auto& U = units_[(size_t)ui];
+                const int tx = (U.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X + 0x0C;
+                const int ty = (U.y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y + 2;
+                if (p_x[(size_t)b] > tx - 40 && p_x[(size_t)b] < tx + 40 &&
+                    p_y[(size_t)b] > ty - 20 && p_y[(size_t)b] < ty + 20)
+                    p_frame[(size_t)ti] = 0x26;
+            }
+            switch (b) {
+                case 0: p_x[(size_t)b] -= 14.0f; break;
+                case 1: p_x[(size_t)b] -= 7.0f; break;
+                case 3: p_x[(size_t)b] += 7.0f; break;
+                case 4: p_x[(size_t)b] += 14.0f; break;
+                default: break;
+            }
+            p_y[(size_t)b] += 7.0f;
+            if (p_x[(size_t)b] < -50.0f || p_x[(size_t)b] > 370.0f ||
+                p_y[(size_t)b] < -50.0f || p_y[(size_t)b] > 250.0f)
+                p_alive[(size_t)b] = 0;
         }
     };
     auto present = [&]() {                                                 // 5E9E8 + 499E4
@@ -1350,7 +1442,7 @@ bool CombatII::battle_fx_32bcb_anim(int unit_index) {
     auto blit_intro = [&](int k) {                                         // 5EE51
         if (k < 0 || k >= nframes) return;
         const MagicFxFrame& e = magic_frames_[(size_t)k];
-        fx_blit_nsp(k, var54 + e.xo, si_y - 0x20 + e.yo);
+        fx_blit_nsp_5ee51(k, var54 + e.xo, si_y - 0x20 + e.yo);
     };
     auto solid = [&](const NC2Frame* fr, int y, int color) {               // 5F517
         if (fr) blit_nc2_frame_solid(var54 + fr->x_off, y, *fr, (uint8_t)color);
@@ -1420,7 +1512,18 @@ bool CombatII::battle_fx_32bcb_anim(int unit_index) {
         ++frame_counter;
         present();
     }
-    // (5)(6) var_28 0..8: 0..4 run (5) (9 frames) then (6) (6 frames); 5..8 run (6) only.
+    // (4) tail loc_33215 clears slots 0..3, leaving only slot 4 as the bolt.
+    for (int i = 0; i < 4; ++i) p_alive[(size_t)i] = 0;
+    auto advance_bolt_frames = [&]() {                                     // loc_33322 / loc_33447
+        for (int i = 0; i < 5; ++i) {
+            if (p_alive[(size_t)i] == 0) continue;
+            int v = p_alive[(size_t)i] + 1;
+            if (v > 0x0B) v = 0x09;
+            p_alive[(size_t)i] = (uint8_t)v;
+        }
+    };
+    // (5)(6) var_28 0..8: 0..4 run (5) (3 poses x 3 frames) then (6) (2 rounds x 3 frames);
+    // 5..8 run (6) only. p_alive advances after every 3-frame sub-round in the original.
     for (int var28 = 0; var28 <= 8 && !should_exit_; ++var28) {
         if (var28 < 5) {
             for (int varC = 7; varC <= 9 && !should_exit_; ++varC) {
@@ -1431,19 +1534,29 @@ bool CombatII::battle_fx_32bcb_anim(int unit_index) {
                     ice_draw();
                     span(fv, 18);                                          // 5F3FD(pose var_C, y=18)
                     sfx(0x33);                                             // 4F4CD(33h)
+                    ice_bolts();                                           // 33A2D
                     ++frame_counter;
                     present();
                 }
+                advance_bolt_frames();                                     // loc_33322
             }
+            // End of (5): re-arm slot var_28 at frame 7 on the caster anchor. The probe
+            // shows B7 at edi=0..4 for var_28 0..4, one bolt per block.
+            p_alive[(size_t)var28] = 7;
+            p_x[(size_t)var28] = (float)var54;
+            p_y[(size_t)var28] = (float)var40;
         }
-        for (int r = 0; r < 6 && !should_exit_; ++r) {
-            battle_fx_world();
-            battle_fx_overlay();
-            ice_draw();
-            span(fr9, 18);
-            if (r == 0) blit_intro(7);                                     // 5EE51(7)
-            ++frame_counter;
-            present();
+        for (int round = 0; round < 2 && !should_exit_; ++round) {
+            for (int r = 0; r < 3 && !should_exit_; ++r) {
+                battle_fx_world();
+                battle_fx_overlay();
+                ice_draw();
+                span(fr9, 18);
+                ice_bolts();                                               // 33A2D
+                ++frame_counter;
+                present();
+            }
+            advance_bolt_frames();                                         // loc_33447
         }
     }
     // (7) var_8 7..9, three frames each
@@ -1458,34 +1571,47 @@ bool CombatII::battle_fx_32bcb_anim(int unit_index) {
             present();
         }
     }
-    // (8) var_14 0Ch..12h, three frames each + 5EE51(F0DAA[var_14]) at (598,138)
+    // (8) var_14 0Ch..12h, three frames each + 5EE51(F0DAA[var_14]) at (598,138).
+    // From 0Eh onward each frame marks the next target bytes 64h; var_2C is 1/2/3 for
+    // target counts <0Fh / <1Eh / >=1Eh. 33C31 then draws entries 31/32/33 for them.
     sfx(0x34);                                                             // 4F4CD(34h, 0Ch)
+    const int marks_per_frame = (cnt < 0x0F) ? 1 : (cnt < 0x1E ? 2 : 3);
+    int mark_next = 0;
     for (int var14 = 0x0C; var14 <= 0x12 && !should_exit_; ++var14) {
-        // Particle bytes switch to 64h before the last var_14 (12h), so F2 is gone from frame 293.
-        if (var14 == 0x12) ice_active = false;
         for (int r = 0; r < 3 && !should_exit_; ++r) {
+            if (var14 > 0x0D) {
+                for (int k = 0; k < marks_per_frame; ++k) {
+                    if (mark_next < cnt && mark_next < kSlots)
+                        p_frame[(size_t)mark_next] = 0x64;
+                    ++mark_next;
+                }
+            }
+            cam_fine_y_ = (cam_fine_y_ == 3) ? -3 : 3;                   // 335FB/33610
             battle_fx_world();
             battle_fx_overlay();
             ice_draw();
             span(fr9, 18);
             if (var14 < nframes) {
                 const MagicFxFrame& e = magic_frames_[(size_t)var14];
-                fx_blit_nsp(var14, 0x0A + 0x24C + e.xo, 0x0A + 0x80 + e.yo);  // (598,138)
+                fx_blit_nsp_5ee51(var14, 0x0A + 0x24C + e.xo, 0x0A + 0x80 + e.yo);  // (598,138)
             }
             ++frame_counter;
             present();
         }
     }
-    // (9) 3 x 3 frames of 5F3FD only (the particles are already 64h after (8) and are skipped).
+    // (9) 3 x 3 frames: 33C31 still draws the burst bytes, then 5F3FD.
     for (int round = 0; round < 3 && !should_exit_; ++round) {
         for (int r = 0; r < 3 && !should_exit_; ++r) {
+            cam_fine_y_ = (cam_fine_y_ == 3) ? -3 : 3;                   // 3372F/33738
             battle_fx_world();
             battle_fx_overlay();
+            ice_draw();                                                    // 33C31
             span(fr9, 18);
             ++frame_counter;
             present();
         }
     }
+    cam_fine_y_ = 0;                                                       // dword_BA838 = 0
     // (10) 122 frames of a y +3 sweep while var_48 is below [esi+5].
     const int var48_end = fr9 ? (int)fr9->y_off : 0;
     int var24 = 0;
@@ -1515,7 +1641,7 @@ bool CombatII::battle_fx_32bcb_anim(int unit_index) {
                 caster_id, cnt, frame_counter + 2, nframes);
     // Frame 428 tail in original op order: hlclr, pal, dim, occ-, pose0, 2CAF7, nsprl, wx+
     battle_highlight_clear();                                              // 44D75
-    pal_load_range(0, 256, &battle_palette_[0][0]);                        // 5F9AE(0)
+    pal_load_range(0, 256, &battle_master_palette_[0][0]);                 // 5F9AE(0, unk_12824C)
     battle_dim_row0_ = false;                                              // 44D6E(0)
     A.anim_frame = 4;                                                      // [64h] = 4 (pose 0)
     A.facing = saved_facing;                                               // restore [63h]
@@ -1714,7 +1840,7 @@ void CombatII::battle_fx_367ee_anim(int unit_index) {
         present();
     }
     battle_dim_row0_ = false;                                              // 44D6E(0, 100h)
-    pal_load_range(0, 256, &battle_palette_[0][0]);                        // 5F9AE(0)
+    pal_load_range(0, 256, &battle_master_palette_[0][0]);                 // 5F9AE(0, unk_12824C)
     // (8) 8 frames (cx=7..0, F0DAA[cx] only when cx>=4), then 4 frames (cx=3..0)
     for (int cx = 7; cx >= 0 && !should_exit_; --cx) {
         frame(); gblit();

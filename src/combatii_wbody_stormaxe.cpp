@@ -154,7 +154,7 @@ int CombatII::battle_fx_35fc2_anim(int unit_index) {
     cam_fine_x_ = 0x0C;                                                 // dword_7001C = 0Ch
     cam_fine_y_ = 0;                                                    // dword_BA838 = 0
     game_timer_set(0x0A);                                               // sub_1033B(0Ah,100h)
-    pal_load_range(0, 0x100, &battle_palette_[0][0]);                   // sub_5F9AE(unk_12824C)
+    pal_load_range(0, 0x100, &battle_master_palette_[0][0]);            // sub_5F9AE(unk_12824C)
     battle_highlight_clear();                                           // sub_44D75
     for (int ti : battle_target_list_) {                                // 12124 for every target
         if (ti >= 0 && (size_t)ti < units_.size()) reset_unit_pose(units_[(size_t)ti]);

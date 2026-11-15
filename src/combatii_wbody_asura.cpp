@@ -704,7 +704,7 @@ int CombatII::battle_fx_31283_anim(int unit_index) {
     for (int pct = 0; pct <= 0x64 && !should_exit_; pct += 4) {   // 5FA2C fade up
         fade_palette_step(pct);
     }
-    pal_load_range(0, 0x100, &battle_palette_[0][0]);        // sub_5F9AE master palette
+    pal_load_range(0, 0x100, &battle_master_palette_[0][0]); // sub_5F9AE(unk_12824C)
     battle_dim_row0_ = false;                                // sub_44D6E(0)
     cam_fine_y_ = CAM_FINE_Y_REST;                           // dword_BA838 = 0
     C.anim_frame = 4;                                        // mov byte [ebp+64h],4

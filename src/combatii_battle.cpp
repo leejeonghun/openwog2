@@ -10766,10 +10766,11 @@ int CombatII::battle_weapon_f1474(int unit_index, int idx, int dx) {
 // The original screen sweep covers 12x12 tiles from dword_BA83C/BA838 with 1A1F8
 // (11DB2 + 1201D + dedup); the port sweeps the same 12x12 from cam_tile_. The F14D8 == 1
 // automatic and 4A483 cursor branches are both handled by automatic collection here.
-// The X start is caller-specific: sub_341C7 (edi 4) increments esi before the 1A1F8 call,
-// so its columns are camX+1..camX+12 (sub_341C7+0x6F/0x78), while sub_31283 increments after
-// the call and starts at camX. Y always starts at camY (the outer loop's first check is before
-// the first loc_3420F row). x_shift reproduces that difference without changing other callers.
+// The X start is caller-specific: sub_341C7 (edi 4), sub_32BCB (edi 3), sub_367EE (edi 8)
+// and sub_3AEE8 (edi 12) increment the column before the 1A1F8 call, so their columns are
+// camX+1..camX+12, while sub_31283 increments after the call and starts at camX. Y always
+// starts at camY (the outer loop's first check is before the first loc_3420F row). x_shift
+// reproduces that difference without changing other callers.
 int CombatII::battle_weapon_collect_screen(int unit_index, int cap, int x_shift) {
     battle_target_list_.clear();
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return 0;
@@ -10793,6 +10794,68 @@ int CombatII::battle_weapon_collect_screen(int unit_index, int cap, int x_shift)
         }
     }
     return (int)battle_target_list_.size();
+}
+
+// sub_398F3: walk the six-tile front ray with 1A452(1, 6). For every tile that passes
+// 13CBD, collect the radius-2 1AC08 diamond through 1AC59/1A1F8 into the same accumulator and
+// keep the first tile whose cumulative target count is the largest. The accumulator (F0648)
+// is reset only once, after selection, when the chosen diamond is collected again. cell_x/
+// cell_y receive that chosen tile; an empty result returns -1.
+int CombatII::battle_weapon_collect_39a49_auto(int unit_index, int* cell_x, int* cell_y) {
+    battle_target_list_.clear();
+    if (cell_x) *cell_x = -1;
+    if (cell_y) *cell_y = -1;
+    if (unit_index < 0 || (size_t)unit_index >= units_.size()) return -1;
+    const auto& A = units_[(size_t)unit_index];
+    if (!A.active || A.hp <= 0) return -1;
+    const int ax_eff = battle_effective_army(A);
+
+    // 1AC59 walks the diamond row by row, and 1A1F8 appends only a hostile not already in
+    // F0648. The same list is deliberately kept across all six candidate tiles.
+    auto add_diamond = [&](int cx, int cy) {
+        for (int dy = -2; dy <= 2; ++dy) {
+            for (int dx = -2; dx <= 2; ++dx) {
+                if (std::abs(dx) + std::abs(dy) > 2) continue;
+                const int oi = battle_unit_index_at(cx + dx, cy + dy);
+                if (oi < 0 || (size_t)oi >= units_.size() || oi == unit_index) continue;
+                const auto& o = units_[(size_t)oi];
+                if (!o.active || o.hp <= 0) continue;
+                if (!battle_armies_hostile(ax_eff, battle_effective_army(o), battle_hostility_inverted_)) continue;
+                if (std::find(battle_target_list_.begin(), battle_target_list_.end(), oi) !=
+                    battle_target_list_.end()) continue;
+                battle_target_list_.push_back(oi);
+            }
+        }
+    };
+
+    // sub_1A1DE -> sub_1A452(width 1, length 6) -> sub_1A552.
+    const g2range::Env env = battle_range_env_make();
+    g2range::Range rg(env);
+    const g2range::Unit au = battle_range_unit(unit_index);
+    const auto front = rg.front_tile(au, au.facing);
+    rg.rect_init(front.x, front.y, 1, au.facing, 6);
+    int best_count = 0, best_x = -1, best_y = -1;
+    int px = front.x, py = front.y;
+    for (int guard = 0; guard < 0x1000 && rg.rect_next(px, py); ++guard) {
+        // 39A49 first clears E8 with 13F8A and marks only the 3..6 band with 13D02, so
+        // 13CBD rejects both out-of-map cells and the three nearest ray tiles.
+        if (battle_ai_wc5_diff_read(battle_e8_grid_, px, py) < 0) continue; // sub_13CBD
+        add_diamond(px, py);
+        const int count = (int)battle_target_list_.size();
+        if (count > best_count) {
+            best_count = count;
+            best_x = px;
+            best_y = py;
+        }
+    }
+    if (best_count == 0 || best_x < 0) return -1;
+
+    // loc_399DA: reset the count and collect the winning diamond again through 1AC08/1AC59.
+    const int n = battle_weapon_collect_dia_at(unit_index, best_x, best_y, 2);
+    if (n <= 0) return -1;
+    if (cell_x) *cell_x = best_x;
+    if (cell_y) *cell_y = best_y;
+    return n;
 }
 
 // sub_1AC08/1AC59 diamond approximation: collect hostiles within the Manhattan radius of
@@ -10949,7 +11012,24 @@ bool CombatII::battle_weapon_pick_valid(int unit_index, int kind, int si) {
         return in_front_ray(7);
     }
     if (kind == 3) {
-        if (!in_front_ray(7)) return false;
+        // loc_3575B: the first 1A552 result is consumed before the candidate loop, and the
+        // loop stops at the first cell whose sub_1093D attribute is zero. Only that prefix
+        // is marked through 13D02 and can therefore be selected by the 4A483 cursor.
+        const g2range::Env env = battle_range_env_make();
+        g2range::Range rg(env);
+        const g2range::Unit au = battle_range_unit(unit_index);
+        const auto pt = rg.front_tile(au, au.facing);                     // sub_1A1DE
+        rg.rect_init(pt.x, pt.y, 1, au.facing, 7);                        // sub_1A452
+        int x = 0, y = 0, seen = 0;
+        bool candidate = false;
+        for (int guard = 0; guard < 0x1000 && rg.rect_next(x, y); ++guard) { // sub_1A552
+            if (seen++ == 0) continue;                                    // pre-consumed front tile
+            const long ai = (long)y * (long)map_w_ + (long)x;
+            if (tile_attr_.empty() || ai < 0 || (size_t)ai >= tile_attr_.size() ||
+                tile_attr_[(size_t)ai] == 0) break;                       // sub_1093D == 0
+            if (x == tx && y == ty) { candidate = true; break; }
+        }
+        if (!candidate) return false;
         return battle_weapon_pick_target(unit_index, true) >= 0;              // occupant added by 1A1F8
     }
     if (kind == 4) {
@@ -11967,22 +12047,18 @@ int CombatII::battle_weapon_32589(int unit_index) {
     const int ti = battle_target_list_[0];
     if (battle_trace_) fprintf(stderr, "COMBAT: 32589 unit=%d -> target=%d arcion 1DB1D\n",
                                 units_[(size_t)unit_index].id, units_[(size_t)ti].id);
-    auto& A = units_[(size_t)unit_index];
-    camera_center_on(A.x, A.y);
-    A.anim_frame = 5;
-    // 46914..47381 presentation: 129 arcion.nsp frames (27+15+45+6+36). The target's instant
-    // death (1DB1D) happens at the tail of the presentation.
+    // 46914..47381 presentation: 129 arcion.nsp frames (27+15+45+6+36). sub_32589 does not
+    // move the camera, change the caster pose, or add a post-animation timer; the target's
+    // instant death (1DB1D) happens at the tail of the presentation.
     battle_fx_32589_anim(unit_index, ti);
     if (should_exit_) return 1;
-    reset_unit_pose(units_[(size_t)unit_index]);
-    game_timer_set(6);
     return 1;
 }
 
 // sub_32BCB (edi 3, i-star2+slash+ice+icer.nsp): screen sweep (cap 50) + 2CAF7(4,0).
 int CombatII::battle_weapon_32bcb(int unit_index) {
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return -1;
-    const int n = battle_weapon_collect_screen(unit_index, 50);
+    const int n = battle_weapon_collect_screen(unit_index, 50, 1); // inc ecx before 1A1F8
     if (n <= 0) {
         if (battle_trace_) fprintf(stderr, "COMBAT: 32bcb unit=%d empty -> -1\n", units_[(size_t)unit_index].id);
         return -1;
@@ -12078,7 +12154,7 @@ int CombatII::battle_weapon_35fc2(int unit_index) {
 // (40-shot wave) + 2CAF7(4,6000).
 int CombatII::battle_weapon_367ee(int unit_index) {
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return -1;
-    const int n = battle_weapon_collect_screen(unit_index, 0);
+    const int n = battle_weapon_collect_screen(unit_index, 0, 1); // inc edi before 1A1F8
     if (n <= 0) {
         if (battle_trace_) fprintf(stderr, "COMBAT: 367ee unit=%d empty -> -1\n", units_[(size_t)unit_index].id);
         return -1;
@@ -12204,7 +12280,7 @@ int CombatII::battle_weapon_37fa4(int unit_index) {
     // Tail (54199..54220): 44D75, 44D6E(0), 5F9AE (master palette restore), 12124, 1FFCD.
     battle_highlight_clear();                           // 44D75
     battle_dim_row0_ = false;                           // 44D6E(0, 100h)
-    pal_load_range(0, 256, &battle_palette_[0][0]);     // 5F9AE
+    pal_load_range(0, 256, &battle_master_palette_[0][0]); // 5F9AE(unk_12824C)
     reset_unit_pose(units_[(size_t)unit_index]);        // 12124 (caster)
     if (ti >= 0 && (size_t)ti < units_.size()) reset_unit_pose(units_[(size_t)ti]); // 12124 (F0648)
     game_timer_set(6);
@@ -12214,9 +12290,9 @@ int CombatII::battle_weapon_37fa4(int unit_index) {
 
 // sub_39A49 (edi 11, fire+effect2+f-wave+rain.nsp): diamond collection + [1E] |= 1 /
 // [1F] = 5Ah + 2CAF7(2,7000).
-//   F14D8 == 1 uses the screen sweep. F14D8 == 0 collects the radius-2 1AC08 diamond around
-//   the 4A483 cursor tile with 1AC59/1A1F8; an empty collection keeps the cursor open
-//   (ASM 56113..56200).
+//   F14D8 == 1 scores the six front-ray tiles with sub_398F3's cumulative radius-2 diamonds.
+//   F14D8 == 0 collects the radius-2 1AC08 diamond around the 4A483 cursor tile with
+//   1AC59/1A1F8; an empty collection keeps the cursor open (ASM 56113..56200).
 // battle_fx_39a49_anim owns the whole gameplay and presentation of sub_39A49 (a direct
 // transcription of the routine).
 int CombatII::battle_weapon_39a49(int unit_index) {

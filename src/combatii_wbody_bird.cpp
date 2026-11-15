@@ -225,7 +225,7 @@ int CombatII::battle_fx_308ee_anim(int unit_index) {
     battle_highlight_clear();                                            // sub_44D75
     for (int ti : battle_target_list_) battle_weapon_apply_status(ti, 0x01, 0x5A); // [1Eh]|=1, [1Fh]=5Ah
     battle_weapon_2caf7_loop(unit_index, 2, 0x2710);                     // sub_2CAF7(mul=2, add=2710h)
-    pal_load_range(0, 256, &battle_palette_[0][0]);                      // sub_5F9AE (master restore)
+    pal_load_range(0, 256, &battle_master_palette_[0][0]);               // sub_5F9AE(unk_12824C)
     battle_dim_row0_ = false;                                            // sub_44D6E(0)
     battle_fx_present();                                                 // 5E9E8 (includes 454B3)
     wait_game_tick();                                                    // sub_499E4

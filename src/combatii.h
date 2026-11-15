@@ -658,8 +658,10 @@ private:
     void fx_trail_step(int unit_index, int pose);  // sub_305A2 (unit<0 consumes trail only)
     // 30824 (start=0x60) / 307A6 (start=0x00): blend a master-palette range pct% toward colour K.
     void fx_pal_mix(int start, int end, int color_index, int pct);
-    // sub_5EE51: transparent-blit one unk_F0DAA frame at (x, y).
+    // sub_5EFB9: transparent-blit one unk_F0DAA frame at (x, y), clipped to 13Fh/C7h.
+    // sub_5EE51 does not clip there; fx_blit_nsp_5ee51 keeps only the 320x200 buffer bound.
     void fx_blit_nsp(int frame, int x, int y);
+    void fx_blit_nsp_5ee51(int frame, int x, int y);
     // sub_6106C: builds a palette LUT page (341C7 uses page 3, colour 11h, brightness 46h).
     // The original selects a 256-byte row inside dword_128554 by page number; page 3 is used only
     // by this effect, so the port keeps a single row (6104A(3) selects it, the tail's 5ECC7(0)
@@ -2439,6 +2441,7 @@ private:
     int battle_weapon_2ef4a(int unit_index, int di, int type, int add); // sub_2EF4A
     int battle_weapon_f1474_ext(int unit_index, int idx, int dx);    // idx 13..24
     int battle_weapon_collect_front(int unit_index); // 49ABC + 1A1F8: single cell in front
+    int battle_weapon_collect_39a49_auto(int unit_index, int* cell_x, int* cell_y); // sub_398F3 front-6 diamond scoring
     int battle_weapon_collect_nearest(int unit_index); // 4A483/356DB single-target automatic approximation (nearest hostile)
     int battle_weapon_collect_2ea0c(int unit_index, int radius); // sub_2EA0C automatic: front ray, dist 2..R, lowest 17531/1762C score, one unit
     int battle_weapon_collect_line(int unit_index, int range); // 37FA4 single target on a 7-cell straight line (first hostile)

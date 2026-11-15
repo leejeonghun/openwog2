@@ -231,7 +231,7 @@ int CombatII::battle_fx_356db_anim(int unit_index) {
             unit_frame((int)A.anim_frame);
         }
         if (should_exit_) {
-            pal_load_range(0, 256, &battle_palette_[0][0]);
+            pal_load_range(0, 256, &battle_master_palette_[0][0]);
             battle_dim_row0_ = false;
             battle_highlight_clear();
             battle_nsp_release();
@@ -298,7 +298,7 @@ int CombatII::battle_fx_356db_anim(int unit_index) {
         // ---- 8. tail ----
         cam_fine_y_ = 0;                                         // dword_BA838 = 0
         battle_dim_row0_ = false;                                // sub_44D6E(0)
-        pal_load_range(0, 256, &battle_palette_[0][0]);          // sub_5F9AE(0,100h, master)
+        pal_load_range(0, 256, &battle_master_palette_[0][0]);   // sub_5F9AE(0,100h, unk_12824C)
         battle_highlight_clear();                                // sub_44D75
         A.facing = (int8_t)saved_facing;                         // `mov al,[var_18]; mov [63h],al`
         reset_unit_pose(A);                                      // sub_12124 (caster)

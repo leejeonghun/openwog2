@@ -5,9 +5,9 @@
 // Original flow:
 //   1. 13F8A + 13D02: mark a band of +-3..6 cells on the caster axis in the E8 grid,
 //      keyed by facing (1/3 = x column, 0/2 = y row). The 13CBD gate reads the marks.
-//   2. Targets: F14D8==1 (auto) uses sub_398F3 (pick within the 12x12 screen, -1 when
-//      none); player path is 4A483 cursor -> 13CBD gate -> 1AC08 (radius 2 diamond) ->
-//      1AC59/1A1F8 into F0648.
+//   2. Targets: F14D8==1 (auto) uses sub_398F3 (front-6 ray, cumulative radius-2 diamond
+//      scoring, -1 when none); player path is 4A483 cursor -> 13CBD gate -> 1AC08 (radius 2
+//      diamond) -> 1AC59/1A1F8 into F0648.
 //   3. 1FEA4 (rain.nsp) -> 103A8 (weather freeze) -> 50 slots (0x32) x 2 buffers
 //      (_nmalloc_ 0x64) -> 1033B(8) -> 44D6E(1) -> 2CBA1(caster, 3) -> 200DE(caster, 0).
 //   4. 4-frame intro: 30824(0, 0Ah) + 454B3 + 5E9E8 + 499E4.
@@ -48,8 +48,8 @@
 //   does), 10971/10988 -> tile anchors in screen space, 1214F -> anim_frame (0Ah, or 0
 //   for sprites >= 12Ch), 12F2A -> battle_draw_unit_now, 12124 -> reset_unit_pose,
 //   5F9AE -> pal_load_range, 1D770/2CACA/2CAF7 -> battle_weapon_2caf7_loop(2, 1B58h).
-//   6104A/6106C/103A0/11EE4/11E04 are palette-LUT and slot-occupancy details, omitted as
-//   in the other bodies.
+//   6104A/6106C/103A0/11EE4/11E04 map to the palette-LUT selection, weather freeze and
+//   units_-modelled slot occupancy; the tail keeps the original 6104A(0,1) LUT selection.
 //
 // Curtain engine: 39620 (facing 1), 38FF7 (3), 38CF8 (2), 3930E (0) are ported with the
 // original float maths. Mode 2 runs 389EA (x += cos[angle], y += sin[angle], 38780 trail,
@@ -61,11 +61,10 @@
 //
 // Port notes: F0DAA's data is unexplored, so its [4]/[6]/[8] triplets are read through the
 // parsed magic_frames_ table (entry index == frame index, the intro convention). The auto
-// 398F3 branch's picked cell is not exposed by the port collector, so its seed diamond is
-// centred on the first collected target; the player branch uses battle_pick_*. The original
-// has no frame cap, the port keeps a high safety cap (0x800). 38780/38B82 write directly to
-// dword_755CC with a 0x1E0 stride; the port writes the same (x, y) pixels to the 320x200
-// backbuffer and clips.
+// 398F3 branch exposes its picked cell, so the seed diamond is centred on the same tile as
+// the original; the player branch uses battle_pick_*. The original has no frame cap, the port
+// keeps a high safety cap (0x800). 38780/38B82 write directly to dword_755CC with a 0x1E0
+// stride; the port writes the same (x, y) pixels to the 320x200 backbuffer and clips.
 #include "combatii.h"
 #include "combatii_internal.h"
 
@@ -130,11 +129,41 @@ int CombatII::battle_fx_39a49_anim(int unit_index) {
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return -1;
     auto& A = units_[(size_t)unit_index];
     const int caster_id = A.id;
+    const int facing = (int)A.facing & 3;
 
-    // Step 2: target collection, keeping battle_weapon_39a49 gameplay.
+    // Step 1: 13F8A + 13D02. Clear E8 and mark the four tiles 3..6 cells ahead on the
+    // caster's facing axis. Both the 398F3 automatic pick and the 4A483 cursor gate with
+    // 13CBD, so tiles outside this band must not be collected.
+    battle_e8_grid_.assign((size_t)map_w_ * (size_t)map_h_, -1);           // sub_13F8A
+    if (!battle_e8_grid_.empty()) {
+        const int ux = (int)(int8_t)A.x;
+        const int uy = (int)(int8_t)A.y;
+        switch (facing) {
+            case 1:                                                        // west
+                for (int i = 3; i <= 6; ++i)
+                    battle_ai_wc5_diff_write(battle_e8_grid_, ux - i, uy, 1); // sub_13D02
+                break;
+            case 3:                                                        // east
+                for (int i = 3; i <= 6; ++i)
+                    battle_ai_wc5_diff_write(battle_e8_grid_, ux + i, uy, 1);
+                break;
+            case 0:                                                        // south
+                for (int i = 3; i <= 6; ++i)
+                    battle_ai_wc5_diff_write(battle_e8_grid_, ux, uy + i, 1);
+                break;
+            default:                                                       // north
+                for (int i = 3; i <= 6; ++i)
+                    battle_ai_wc5_diff_write(battle_e8_grid_, ux, uy - i, 1);
+                break;
+        }
+    }
+
+    // Step 2: target collection. The automatic branch uses sub_398F3's front-6 scoring;
+    // the player branch uses the selected 4A483 tile and its radius-2 1AC08 diamond.
     int n = 0;
+    int auto_cell_x = -1, auto_cell_y = -1;
     if (battle_f14d8_ == 1) {
-        n = battle_weapon_collect_screen(unit_index, 0);                       // sub_398F3
+        n = battle_weapon_collect_39a49_auto(unit_index, &auto_cell_x, &auto_cell_y); // sub_398F3
     } else if (battle_pick_tx_ >= 0 && battle_pick_ty_ >= 0) {
         n = battle_weapon_collect_dia_at(unit_index, battle_pick_tx_, battle_pick_ty_, 2); // 1AC08 r2
     }
@@ -194,7 +223,6 @@ int CombatII::battle_fx_39a49_anim(int unit_index) {
 
     // Step 6: facing branch. Intro frames, curtain entry and seed constants per the
     // table at the top of the file.
-    const int facing = (int)A.facing & 3;
     int intro_first = 0;                                                       // F0DAA start index
     int curtain_frame = -1;                                                    // fixed entry, -1 = none
     int seed_x = 0, seed_y = 0;
@@ -246,7 +274,10 @@ int CombatII::battle_fx_39a49_anim(int unit_index) {
     };
     int dia_x[13] = {}, dia_y[13] = {};
     int centre_x = battle_pick_tx_, centre_y = battle_pick_ty_;
-    if (centre_x < 0 || centre_y < 0) {                                        // auto 398F3 branch
+    if (battle_f14d8_ == 1 && auto_cell_x >= 0 && auto_cell_y >= 0) {
+        centre_x = auto_cell_x;                                                // sub_398F3 picked cell
+        centre_y = auto_cell_y;
+    } else if (centre_x < 0 || centre_y < 0) {
         if (!battle_target_list_.empty()) {
             const auto& T = units_[(size_t)battle_target_list_.front()];
             centre_x = (int)(int8_t)T.x;
@@ -514,10 +545,11 @@ int CombatII::battle_fx_39a49_anim(int unit_index) {
         if (ti >= 0 && (size_t)ti < units_.size()) reset_unit_pose(units_[(size_t)ti]);
     }
     weather_tick_enabled_ = true;                                              // sub_103A0
-    pal_load_range(0, 0x100, &battle_palette_[0][0]);                          // sub_5F9AE (master)
+    pal_load_range(0, 0x100, &battle_master_palette_[0][0]);                   // sub_5F9AE(unk_12824C)
     battle_dim_row0_ = false;                                                  // sub_44D6E(0)
     battle_nsp_release();                                                      // sub_1FFCD
     const int r = battle_weapon_2caf7_loop(unit_index, 2, 0x1B58);             // sub_2CAF7(2, 1B58h)
+    dialog_shade_lut();                                                        // 6104A(0,1): leave LUT row 0 selected
     if (battle_trace_) fprintf(stderr, "COMBAT: 39a49 unit=%d 2caf7(2,1B58h) -> %d\n", caster_id, r);
     return 1;                                                                  // loc_3A943: eax = edx = 1 (2CAF7 result ignored)
 }
