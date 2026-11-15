@@ -611,29 +611,37 @@ void CombatII::render_attack_range() {
     // The caller (render_player_move_range) separates attack targets from the ring; looking at
     // atk_phase here would make the ring phase (atk 0) dead code (4D674 runs
     // 1CC09->44D67(1)->4B767).
-    if (battle_range_e8_.empty()) return;
     if (map_w_ == 0 || map_h_ == 0) return;
-    if (battle_range_e8_.size() != (size_t)map_w_ * (size_t)map_h_) return;
     uint8_t* bb = video_.get_backbuffer();
     if (!bb) return;
     const uint8_t* lut = battle_move_shade_lut();         // sub_6104A(1)
-    for (int r = 0; r < 13; ++r) {
-        for (int c = 0; c < 13; ++c) {
-            const int tx = cam_tile_x_ + c, ty = cam_tile_y_ + r;
-            if (tx < 0 || ty < 0 || tx >= (int)map_w_ || ty >= (int)map_h_) continue;
-            if (battle_range_e8_[(size_t)ty * map_w_ + (size_t)tx] < 0) continue;   // cmp word,0 ; jl
-            const int sx = c * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X;
-            const int sy = r * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y;
-            for (int y = 0; y < TOWN_TILE_H; ++y) {
-                const int py = sy + y;
-                if (py < 0 || py >= SCREEN_H) continue;
-                uint8_t* line = bb + (size_t)py * SCREEN_W;
-                for (int x = 0; x < TOWN_TILE_W; ++x) {
-                    const int px = sx + x;
-                    if (px < 0 || px >= SCREEN_W) continue;
-                    line[px] = lut[line[px]];
+    // sub_2E25B keeps the 44D67(1) gate on while its landing cursor waits; the first forward
+    // ray painted by 13D02 is held in battle_e8_grid_. The pick clears the pending state
+    // before the second-pass collection, so only the cursor frame shades that grid.
+    const bool landing_cursor =
+        battle_weapon_pending_si_ >= 0 && battle_weapon_pending_kind_ == 5;
+    auto shade_grid = [&](const auto& e8) {
+        if (e8.size() != (size_t)map_w_ * (size_t)map_h_) return;
+        for (int r = 0; r < 13; ++r) {
+            for (int c = 0; c < 13; ++c) {
+                const int tx = cam_tile_x_ + c, ty = cam_tile_y_ + r;
+                if (tx < 0 || ty < 0 || tx >= (int)map_w_ || ty >= (int)map_h_) continue;
+                if (e8[(size_t)ty * map_w_ + (size_t)tx] < 0) continue;   // cmp word,0 ; jl
+                const int sx = c * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X;
+                const int sy = r * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y;
+                for (int y = 0; y < TOWN_TILE_H; ++y) {
+                    const int py = sy + y;
+                    if (py < 0 || py >= SCREEN_H) continue;
+                    uint8_t* line = bb + (size_t)py * SCREEN_W;
+                    for (int x = 0; x < TOWN_TILE_W; ++x) {
+                        const int px = sx + x;
+                        if (px < 0 || px >= SCREEN_W) continue;
+                        line[px] = lut[line[px]];
+                    }
                 }
             }
         }
-    }
+    };
+    if (landing_cursor) shade_grid(battle_e8_grid_);
+    else shade_grid(battle_range_e8_);
 }
