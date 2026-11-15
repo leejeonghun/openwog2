@@ -55,14 +55,22 @@ void Range::step(int16_t& x, int16_t& y, int dir) {  // sub_49ABC (dir > 3 does 
 
 // ---- sub_1A146 ----
 // Unit position -> front starting tile for a facing. The footprint w/h comes from the
-// descriptor's [0]/[1].
+// descriptor's [0]/[1] of the facing argument, matching the original's unk_D66A8 index
+// (the unit's own [+63h] is not used here).
 Range::Pt Range::front_tile(const Unit& u, int facing) const {
+    int fw = u.foot_w, fh = u.foot_h;
+    if (u.sprite_type >= 0 && env_.footprint) {
+        int w = 1, h = 1;
+        env_.footprint(u.sprite_type, facing & 3, &w, &h);
+        fw = w > 0 ? w : 1;
+        fh = h > 0 ? h : 1;
+    }
     int16_t x = w16(u.x), y = w16(u.y);
     switch (facing & 0xFFFF) {
         case 0: y = w16(y + 1); break;
-        case 1: x = w16(x - 1); y = w16(y - (u.foot_h - 1)); break;
-        case 2: x = w16(x + (u.foot_w - 1)); y = w16(y - u.foot_h); break;
-        case 3: x = w16(x + u.foot_w); break;
+        case 1: x = w16(x - 1); y = w16(y - (fh - 1)); break;
+        case 2: x = w16(x + (fw - 1)); y = w16(y - fh); break;
+        case 3: x = w16(x + fw); break;
         default: break;
     }
     return {x, y};

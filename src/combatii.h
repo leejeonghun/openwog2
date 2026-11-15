@@ -1741,15 +1741,23 @@ private:
     // battle_weapon_pending_si_ >= 0 means a click is pending.
     int  battle_weapon_pending_si_ = -1;
     int  battle_weapon_pending_kind_ = 0;   // pending 4A483 cursor kind (0 = none)
+    // 2CA40 result from the call that opened the 4A483 cursor. The original sub_4C98A calls
+    // 2CA40 once and runs the cursor inside F1474; the port splits that across two entries, so
+    // the value is kept here and reused when the picked tile resolves the attack.
+    int  battle_weapon_pending_2ca40_ = -1;
     int  battle_pick_tx_ = -1;      // tile chosen by the player (-1 = none)
     int  battle_pick_ty_ = -1;
+    // E8F46 (13CBD/13D02) rebuilt by 169D7 and painted with the first 2E25B ray when the
+    // landing cursor opens; the pick loop reads it back through 13CBD.
+    std::vector<int> battle_e8_grid_;
     bool battle_weapon_needs_cursor(int idx) const;              // F1474 handler that opens the 4A483 cursor
     // Cursor kind for the si==0 (302E6 body) path and for the F1474 slots.
     //   0 = no cursor (automatic), 1 = F1474 target unit, 2 = 308EE landing cell (empty, distance >= 2),
     //   3 = occupied cell within 7 cells in front (356DB), 4 = centre cell of the radius-2 diamond (39A49),
-    //   5 = 2E25B landing cell (empty, distance >= 2, on the first base+5/6 ray).
+    //   5 = 2E25B landing cell (empty, distance >= 2, E8F46-marked first base+5/6 ray).
     int  battle_weapon_cursor_kind(int unit_index, int si) const;
     bool battle_weapon_pick_valid(int unit_index, int kind, int si);   // validates battle_pick_tx_/ty_
+    void battle_weapon_cursor_grid_init(int unit_index, int si); // 169D7 + first 1A452 ray -> E8F46
     int  battle_weapon_pick_target(int unit_index, bool hostile_only) const;
     bool battle_weapon_apply_pick(int unit_index);               // moves the picked unit to the head of F0648
     // ---- CC990 roster list (sub_500ED/sub_50105/sub_50D9F loc_50EFF) ----

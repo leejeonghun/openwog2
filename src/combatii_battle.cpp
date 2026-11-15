@@ -4819,6 +4819,7 @@ bool CombatII::battle_player_input() {
         if (battle_trace_) fprintf(stderr, "COMBAT: weapon cursor cancelled unit=%d\n", u.id);
         battle_weapon_pending_si_ = -1;
         battle_weapon_pending_kind_ = 0;
+        battle_weapon_pending_2ca40_ = -1;
         battle_pick_tx_ = battle_pick_ty_ = -1;
         back_to_ring();
         return true;
@@ -10868,6 +10869,30 @@ int CombatII::battle_weapon_cursor_kind(int unit_index, int si) const {
     return 0;
 }
 
+// sub_2E25B loc_2E2C7 first pass: sub_169D7 rebuilds E8F46 (-1 walkable empty / -2 blocked
+// or occupied), then the 1A452(front, count 1, facing, base+5/6) ray is walked and every
+// cell still at -1 is painted with 1 through 13D02 (loc_2E311). loc_2E37D then accepts only
+// cells whose 13CBD value is >= 0.
+void CombatII::battle_weapon_cursor_grid_init(int unit_index, int si) {
+    battle_e8_grid_.clear();
+    if (unit_index < 0 || (size_t)unit_index >= units_.size() || si < 1) return;
+    battle_ai_169d7_reset(unit_index, battle_e8_grid_);                  // sub_169D7
+    if (battle_e8_grid_.size() != (size_t)map_w_ * (size_t)map_h_) return;
+    const int idx = si - 1;
+    const int base_r = (int)(int8_t)battle_lookup_184a4(units_[(size_t)unit_index].combat_type_5b, 0x38);
+    const int range = base_r + (idx == 5 ? 5 : 6);                       // sub_2CBFB
+    const g2range::Env env = battle_range_env_make();
+    g2range::Range rg(env);
+    const g2range::Unit au = battle_range_unit(unit_index);
+    const auto pt = rg.front_tile(au, au.facing);                        // sub_1A1DE
+    rg.rect_init(pt.x, pt.y, 1, au.facing, range);                       // sub_1A452
+    int x = 0, y = 0;
+    for (int guard = 0; guard < 0x1000 && rg.rect_next(x, y); ++guard) { // sub_1A552
+        if (battle_ai_wc5_diff_read(battle_e8_grid_, x, y) == -1)        // loc_2E311
+            battle_ai_wc5_diff_write(battle_e8_grid_, x, y, 1);          // sub_13D02
+    }
+}
+
 // Whether the tile chosen in battle_pick_tx_/ty_ fits that cursor rule (si is the 1-based
 // F1474 slot, needed for the 2E25B ray length).
 //   1 = target unit (regular F1474 path), 2 = 308EE landing (empty tile, front 7, distance >= 2),
@@ -10899,25 +10924,19 @@ bool CombatII::battle_weapon_pick_valid(int unit_index, int kind, int si) {
         return false;
     };
     if (kind == 5) {
-        // 2E25B: loc_2E2C7 paints the first 1A452(front, count 1, facing, base+5/6) ray into
-        // the E8F46 grid with 13D02, and loc_2E37D only accepts a cell whose grid value is
-        // >= 0 (13CBD). 13D02 runs only when the cell is -1 (loc_2E311), and 169D7 left -1
-        // for walkable empty cells / -2 for blocked or occupied ones, so the cursor is the
-        // ray minus blocked cells; the pick distance then becomes the range of the second
-        // 1A452 collection (loc_2E405).
-        if (si < 1) return false;
+        // loc_2E37D order: 13CBD -> 49ADF >= 2 -> 11DB2 == 0. The E8F46 grid was rebuilt by
+        // 169D7 and painted with the first 1A452(front, count 1, facing, base+5/6) ray when
+        // the cursor opened (battle_weapon_cursor_grid_init), so 13CBD already excludes
+        // off-ray, blocked and occupied cells. The pick distance then becomes the range of
+        // the second 1A452 collection (loc_2E405).
+        if (battle_e8_grid_.size() != (size_t)map_w_ * (size_t)map_h_)
+            battle_weapon_cursor_grid_init(unit_index, si);                   // fallback rebuild
+        if (battle_e8_grid_.size() != (size_t)map_w_ * (size_t)map_h_) return false;
+        if (battle_ai_wc5_diff_read(battle_e8_grid_, tx, ty) < 0) return false; // sub_13CBD
         if (std::abs(ax - tx) + std::abs(ay - ty) < 2) return false;          // sub_49ADF < 2 -> repick
         const int oi = battle_unit_index_at(tx, ty);                          // sub_11DB2
-        if (oi >= 0 && (size_t)oi < units_.size() && units_[(size_t)oi].active &&
-            units_[(size_t)oi].hp > 0) return false;                          // must be empty
-        std::vector<int> grid;
-        battle_ai_169d7_reset(unit_index, grid);                              // sub_169D7
-        if (grid.size() == (size_t)map_w_ * (size_t)map_h_ &&
-            battle_ai_wc5_diff_read(grid, tx, ty) != -1) return false;        // 13D02 skipped -2
-        const int idx = si - 1;
-        const int base_r = (int)(int8_t)battle_lookup_184a4(A.combat_type_5b, 0x38); // sub_2CBFB
-        const int range = base_r + (idx == 5 ? 5 : 6);
-        return in_front_ray(range);                                           // 13CBD / E8F46 ray
+        return !(oi >= 0 && (size_t)oi < units_.size() && units_[(size_t)oi].active &&
+                 units_[(size_t)oi].hp > 0);                                  // must be empty
     }
     if (kind == 2) {
         if (std::abs(ax - tx) + std::abs(ay - ty) < 2) return false;          // sub_49ADF < 2 -> repick
@@ -11099,39 +11118,35 @@ int CombatII::battle_weapon_collect_2e0f0(int unit_index, int radius,
         default: dx = 1; break; // east x+1 (bx=3)
     }
 
-    // sub_169D7 precondition for the automatic path. sub_2E25B's player branch never calls
-    // 2E0F0 (it uses the first 1A452 ray for the cursor and a second one for the landing),
-    // so only F14D8 == 1 callers (2E25B AI, 308EE) reach the E8 gate here.
-    const bool require_e8 = (battle_f14d8_ == 1);
+    // sub_169D7: E8F46 becomes -1 (walkable empty) / -2 (blocked or occupied) before the
+    // scan. sub_2E0F0 always uses this gate, independent of F14D8.
     std::vector<int> grid;
+    battle_ai_169d7_reset(unit_index, grid);                         // sub_169D7
     int end_x = (int)(int8_t)A.x, end_y = (int)(int8_t)A.y;
-    int collect_from = radius - 1; // player path keeps the full front-ray approximation
-    if (require_e8) {
-        battle_ai_169d7_reset(unit_index, grid);
-        bool empty_seen = false;
-        bool success = false;
-        for (int s = radius; s >= 1; --s) { // far to near, including the far endpoint
-            const int tx = (int)(int8_t)A.x + dx * s;
-            const int ty = (int)(int8_t)A.y + dy * s;
-            const int oi = battle_unit_index_at(tx, ty);
-            bool hostile = false;
-            if (oi >= 0 && (size_t)oi < units_.size()) {
-                const auto& o = units_[(size_t)oi];
-                hostile = o.active && o.hp > 0 &&
-                    battle_armies_hostile(ax_eff, battle_effective_army(o), battle_hostility_inverted_);
-            }
-            if (hostile) {
-                if (empty_seen) { success = true; collect_from = s; break; }
-            } else if (oi < 0 && battle_ai_wc5_diff_read(grid, tx, ty) == -1) {
-                empty_seen = true;
-                end_x = tx;
-                end_y = ty;
-            }
+    int collect_from = radius - 1;
+    bool empty_seen = false;
+    bool success = false;
+    for (int s = radius; s >= 1; --s) { // far to near, including the far endpoint
+        const int tx = (int)(int8_t)A.x + dx * s;
+        const int ty = (int)(int8_t)A.y + dy * s;
+        const int oi = battle_unit_index_at(tx, ty);
+        bool hostile = false;
+        if (oi >= 0 && (size_t)oi < units_.size()) {
+            const auto& o = units_[(size_t)oi];
+            hostile = o.active && o.hp > 0 &&
+                battle_armies_hostile(ax_eff, battle_effective_army(o), battle_hostility_inverted_);
         }
-        if (!success) return 0;
-        if (out_x) *out_x = end_x;
-        if (out_y) *out_y = end_y;
+        if (hostile) {
+            if (empty_seen) { success = true; collect_from = s; break; }
+        } else if (oi < 0 && battle_ai_wc5_diff_read(grid, tx, ty) == -1) {
+            empty_seen = true;
+            end_x = tx;
+            end_y = ty;
+        }
     }
+    if (!success) return 0;
+    if (out_x) *out_x = end_x;
+    if (out_y) *out_y = end_y;
 
     for (int s = collect_from; s >= 1; --s) { // 1A25F: from the scan stop inward
         const int tx = (int)(int8_t)A.x + dx * s;
@@ -11191,8 +11206,12 @@ int CombatII::battle_weapon_collect_rect_actor(int unit_index, int x, int y, int
     const g2range::Unit au = battle_range_unit(unit_index);
     rg.rect_init(x, y, count, au.facing, range);                   // sub_1A452
     int px = x, py = y;
-    for (int guard = 0; guard < 0x10000 && rg.rect_next(px, py); ++guard) // sub_1A552
+    for (int guard = 0; guard < 0x10000 && rg.rect_next(px, py); ++guard) { // sub_1A552
         rg.add_by_actor(px, py, au);                               // sub_1A25F
+        if (battle_e8_grid_.size() == (size_t)map_w_ * (size_t)map_h_ &&
+            battle_ai_wc5_diff_read(battle_e8_grid_, px, py) == -1) // loc_2E311
+            battle_ai_wc5_diff_write(battle_e8_grid_, px, py, 1);   // sub_13D02
+    }
     battle_target_list_ = rg.list;
     return (int)battle_target_list_.size();
 }
@@ -12372,7 +12391,18 @@ int CombatII::battle_use_weapon(int unit_index, int si) {
         if (battle_trace_) fprintf(stderr, "COMBAT: weapon No TP! unit=%d si=%d gate=%d\n", u.id, si, gate);
         return 0;
     }
-    const int w2340 = battle_weapon_2ca40(unit_index);
+    // sub_4C98A calls 2CA40 once and passes the result to F1474. With F14D8 == 0 the cursor is
+    // split over two entries, so a use resumed from a picked tile reuses the opening call's
+    // value instead of advancing the pattern a second time.
+    int w2340;
+    if (battle_pick_tx_ >= 0 && battle_weapon_pending_2ca40_ >= 0) {
+        w2340 = battle_weapon_pending_2ca40_;
+        battle_weapon_pending_2ca40_ = -1;                 // consumed by this resolution
+        if (battle_trace_) fprintf(stderr, "COMBAT: weapon unit=%d si=%d cursor resume 2ca40=%d (cached)\n",
+                                    u.id, si, w2340);
+    } else {
+        w2340 = battle_weapon_2ca40(unit_index);
+    }
     battle_f14d8_ = 0;                                     // player ring path (sub_4C98A)
     // With F14D8 == 0 the original picks a target with the 4A483 cursor. While no tile is
     // picked it spends no TP and waits on the cursor (battle_player_input takes the click and
@@ -12380,6 +12410,9 @@ int CombatII::battle_use_weapon(int unit_index, int si) {
     if (battle_weapon_needs_cursor(i) && battle_pick_tx_ < 0) {
         battle_weapon_pending_si_ = si;
         battle_weapon_pending_kind_ = battle_weapon_cursor_kind(unit_index, si);
+        battle_weapon_pending_2ca40_ = w2340;
+        if (battle_weapon_pending_kind_ == 5)
+            battle_weapon_cursor_grid_init(unit_index, si);    // 169D7 + first 1A452 ray
         if (battle_trace_)
             fprintf(stderr, "COMBAT: weapon unit=%d si=%d -> 4A483 target cursor (no consume)\n", u.id, si);
         return 0;

@@ -31,13 +31,17 @@ struct Unit {
     int flags14 = 0;         // [+14h]
     int facing = 0;          // [+63h] 0 = south, 1 = west, 2 = north, 3 = east
     int weapon_class = 0;    // result of sub_174CF (0..0x13)
-    int foot_w = 1, foot_h = 1;  // unk_D66A8 descriptor [0]/[1]
+    int sprite_type = -1;    // [+61h] type code for the unk_D66A8 lookup; -1 disables it
+    int foot_w = 1, foot_h = 1;  // unk_D66A8 [0]/[1] for facing; fallback when Env::footprint is unset
 };
 
 struct Env {
     int width = 0, height = 0;               // high word of dword_BA842 / word_BA840
     int map_kind = 0;                        // byte_BA84E (6 adds 1 to facings 0 and 2)
     const uint8_t* attr = nullptr;           // unk_88BD4 (width*height)
+    // sub_1A146: unk_D66A8 [0]/[1] for the facing argument (not the unit's own [+63h]).
+    // When unset or Unit::sprite_type < 0, front_tile falls back to Unit::foot_w/foot_h.
+    std::function<bool(int, int, int*, int*)> footprint;
     // sub_11DB2: occupying unit id, -1 when empty. The caller applies the (x-2, y-4) guard.
     std::function<int(int, int)> occupant_raw;
     std::function<int(int)> unit_army;       // occupant's [+0Eh]

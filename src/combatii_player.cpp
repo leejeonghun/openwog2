@@ -28,6 +28,11 @@ g2range::Env CombatII::battle_range_env_make() {
     e.height = (int)map_h_;
     e.map_kind = (int)sce_map_kind_;
     e.attr = tile_attr_.empty() ? nullptr : tile_attr_.data();
+    // sub_1A146 indexes unk_D66A8 by the facing argument, so paths that call front_tile with
+    // a substituted facing (sub_3EE2B loop, map kind 6) get that facing's footprint too.
+    e.footprint = [this](int type, int facing, int* w, int* h) {
+        return battle_d66a8_footprint(type, facing & 3, w, h);
+    };
     // Range::occupant applies the sub_11DB2 guard; occupancy lookup uses the port's 1x1
     // approximation.
     e.occupant_raw = [this](int x, int y) { return battle_unit_index_at(x, y); };
@@ -47,6 +52,11 @@ g2range::Unit CombatII::battle_range_unit(int unit_index) const {
     r.flags14 = u.combat_flags_14;
     r.facing = u.facing & 3;
     r.weapon_class = weapon_class(u);
+    r.sprite_type = u.sprite_type;
+    int fw = 1, fh = 1;
+    battle_d66a8_footprint(u.sprite_type, r.facing, &fw, &fh); // sub_1A146 entry[0]/[1]
+    r.foot_w = fw > 0 ? fw : 1;
+    r.foot_h = fh > 0 ? fh : 1;
     return r;
 }
 
