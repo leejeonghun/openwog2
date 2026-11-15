@@ -1034,6 +1034,9 @@ private:
     // unk_FDC68 (base palette before dimming) / unk_F9188 (current DAC palette)
     uint8_t weather_base_palette_[256][3] = {};
     uint8_t weather_cur_palette_[256][3] = {};
+    // unk_12824C: the master palette after weather and time-of-day dimming. g_palette is also
+    // the live DAC and is overwritten by effects, so this separate buffer is the restore source.
+    uint8_t battle_master_palette_[256][3] = {};
     // Word ptr dword_FA8B0: overlay phase 0..8, advanced twice per 15 ticks by the ISR.
     uint16_t weather_phase_ = 0;
     // byte_70006 (default 1): when 0 the phase stops advancing (sub_103A0/sub_103A8).

@@ -834,6 +834,8 @@ bool CombatII::load_battle_map(const std::string& map_filename, bool use_sce_uni
         FILE* pf=fopen(gen.c_str(),"rb");
         if(pf){ uint8_t sys[312]; if(fread(sys,1,312,pf)==312){ for(int i=0;i<104;i++){ battle_palette_[i][0]=sys[i*3]; battle_palette_[i][1]=sys[i*3+1]; battle_palette_[i][2]=sys[i*3+2]; palette_set_entry(i, sys[i*3], sys[i*3+1], sys[i*3+2]); } } fclose(pf); }
     }
+    // sub_105AD loads the map palette into unk_12824C; keep it separate from the mutable DAC.
+    memcpy(battle_master_palette_, g_palette, sizeof(battle_master_palette_));
     loaded_map_filename_ = map_filename;
     cam_tile_x_ = (int)map_w_/2 - 6;
     cam_tile_y_ = (int)map_h_/2 - 7;
@@ -2606,6 +2608,8 @@ void CombatII::apply_weather_palette(bool animate) {
                 weather_base_palette_[1][0], weather_base_palette_[1][1], weather_base_palette_[1][2],
                 target[1][0], target[1][1], target[1][2]);
     }
+    // sub_44F30 leaves the transformed palette in unk_12824C for later 5F9AE restores.
+    memcpy(battle_master_palette_, target, sizeof(battle_master_palette_));
     int delta[256][3];
     for (int i = 0; i < 256; ++i)
         for (int ch = 0; ch < 3; ++ch)

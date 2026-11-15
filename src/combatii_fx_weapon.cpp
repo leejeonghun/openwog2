@@ -1954,7 +1954,20 @@ void CombatII::battle_fx_3aee8_anim(int unit_index) {
         battle_remove_from_ready_queue(ti);                                 // sub_197AD
     }
     battle_nsp_release();                                                  // 1FFCD
-    pal_load_range(0, 256, &battle_palette_[0][0]);                        // 5F9AE(0)
+    // 5F9AE(0) reloads unk_12824C, the master after weather and time-of-day dimming.
+    // Do not refresh dlg_shade_pal_ here: that is the one-time dialogue/move LUT base.
+    auto palette_has_color = [](const uint8_t (*pal)[3]) {
+        for (int i = 0; i < 256; ++i)
+            for (int ch = 0; ch < 3; ++ch)
+                if (pal[i][ch]) return true;
+        return false;
+    };
+    const uint8_t (*master)[3] = palette_has_color(battle_master_palette_)
+                                     ? battle_master_palette_
+                                     : (palette_has_color(weather_cur_palette_)
+                                            ? weather_cur_palette_
+                                            : battle_palette_);
+    pal_load_range(0, 256, &master[0][0]);                                 // 5F9AE(0)
     battle_dim_row0_ = false;                                              // 44D6E(0)
     battle_highlight_clear();                                              // 44D75
     A.fx_sprite_hidden = false;                                            // 11E04 (re-occupy the caster tile)

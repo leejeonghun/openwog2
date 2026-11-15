@@ -4102,6 +4102,9 @@ void CombatII::battle_time_of_day_step() {
     for (int i = 0; i < 256; i++)
         for (int ch = 0; ch < 3; ch++)
             g_palette[i][ch] = (uint8_t)((int)weather_cur_palette_[i][ch] * (int)tod_factor_ / 100);
+    // sub_197CA then reads the dimmed DAC back into unk_12824C. Keep the same palette in the
+    // separate master buffer so effect restores do not depend on the live DAC contents.
+    memcpy(battle_master_palette_, g_palette, sizeof(battle_master_palette_));
     if (battle_trace_)
         fprintf(stderr, "COMBAT: sub_197CA phase=%u day=%u brightness=%u%%\n", tod_phase_, tod_day_, tod_factor_);
 }
@@ -12224,7 +12227,8 @@ int CombatII::battle_weapon_39a49(int unit_index) {
 // 2CAF7(3,7000).
 int CombatII::battle_weapon_3aee8(int unit_index) {
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return -1;
-    const int n = battle_weapon_collect_screen(unit_index, 0);
+    // sub_3AEE8's inner loop increments ecx before sub_1A1F8, so it tests camX+1..camX+12.
+    const int n = battle_weapon_collect_screen(unit_index, 0, 1);
     if (n <= 0) {
         if (battle_trace_) fprintf(stderr, "COMBAT: 3aee8 unit=%d empty -> -1\n", units_[(size_t)unit_index].id);
         return -1;
