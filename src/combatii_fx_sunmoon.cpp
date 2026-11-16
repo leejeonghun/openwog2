@@ -70,9 +70,14 @@ inline void sunmoon_anchor(const CombatUnitPlacement& u, int cam_x, int cam_y, i
 //       The original does not redraw the map in this loop. Each particle first dims its
 //       vertical trail through that LUT: x = px-5..px+5 while
 //       life > 0x0A, x = px-life/2..px+life/2 while 0 < life <= 0x0A, both y = 0..py.
-//       life > 0x0F then draws frame 2 at x-5+{1,4,7}, y+2 (3 sprites); 0x0A < life <= 0x0F
-//       draws frame 3 in the same layout; life <= 0x0A draws frame 4 at x-5+life/2. At life 0
-//       the done counter (var_4) advances. The loop ends after frame 100 when all 10 are done.
+//       The particle then decrements its life and selects the sprite from that decremented
+//       value: > 0x0F draws frame 2 at x-5+{1,4,7}, y+2 (3 sprites); 0x0A < life <= 0x0F
+//       draws frame 3 in the same layout; <= 0x0A draws no sprite. The 0 < life <= 0x0A path
+//       instead tests the pre-decrement life and, while it is > 6, draws frame 4 three times
+//       at x-5+{1,4,7}, y+2 before decrementing. At life 0 the done counter (var_4) advances.
+//       var_4 is cleared on every pass, so the loop ends after frame 100 once a single pass
+//       sees all 10 slots dead. var_18 is only the frame-1 y offset; particle sprites use
+//       py+2, never a jittered py.
 //   (6) dword_BA838 = 0 -> repeat the (2) fade (darken) -> 454B3+5E9E8 -> brighten -> 61115 ->
 //       12124 restores each pose -> 103A0 -> 1FFCD.
 int CombatII::battle_fx_58619(int unit_index, int tx, int ty, int k) {
@@ -147,7 +152,7 @@ int CombatII::battle_fx_58619(int unit_index, int tx, int ty, int k) {
     struct MoonP { int x = 0, y = 0, life = 0; };
     constexpr int kSlots = 10;
     MoonP part[kSlots];
-    int spawn_slot = 0;                                        // var_C (cycles 0..8)
+    int spawn_slot = 0;                                        // var_C (cycles 0..9, 10 slots)
 
     game_timer_set(5);                                         // sub_1033B(5), reset before the loop
     const int shake_base_fine_y = cam_fine_y_;                 // original dword_BA838 value
@@ -159,7 +164,8 @@ int CombatII::battle_fx_58619(int unit_index, int tx, int ty, int k) {
         // Per-frame screen shake: var_14 starts 0, so the first frame is -1, then +1.
         cam_shake = (cam_shake < 0) ? 1 : -1;
         cam_fine_y_ = shake_base_fine_y + cam_shake;           // dword_BA838
-        // var_18 starts 0, so the first loop is -2, then +2 (particle y jitter).
+        // var_18 starts 0, so the first loop is -2, then +2 (frame 1's y offset, not a
+        // particle jitter: 58990/589E6/58A83 read py[] directly).
         shake_amp = (shake_amp == -2) ? 2 : -2;
 
         // var_10 is incremented at the top of the original loop; the first loop is 1.
@@ -172,39 +178,46 @@ int CombatII::battle_fx_58619(int unit_index, int tx, int ty, int k) {
                 p.y = combat_rand(0x8C) + 0x32;                // rand()%0x8C + 0x32
                 sfx(0x33);                                     // sub_4F4CD(33h)
             }
-            spawn_slot = (spawn_slot + 1) % 9;                 // `cmp di,9; jle` -> 0..8
+            spawn_slot = (spawn_slot + 1) % kSlots;            // `cmp di,9; jle` -> 0..9, wraps at 10
         }
 
+        // var_4 counts the dead slots of this pass only: the original clears it right before
+        // the slot loop (58AC3's `inc [var_4]` also only sees this pass), and the frame-100
+        // gate reads the value left by the previous pass.
+        done = 0;                                              // var_4 = 0
         for (int i = 0; i < kSlots; ++i) {
             MoonP& p = part[i];
-            const int jitter_y = p.y + shake_amp;
             // 5EDDE: dim the column the particle has already fallen through. The original
-            // reads py[] (not the jittered y) and applies the page-3 LUT to the frame 0/units
-            // already drawn, before the particle sprites.
+            // reads py[] and applies the page-3 LUT to the frame 0/units already drawn,
+            // before the particle sprites.
             if (p.life > 0x0A) {
                 battle_fx_shade_rect(p.x - 5, 0, p.x + 5, p.y); // 5EDDE (life > 0Ah)
-            } else if (p.life > 0) {
+                // `dec al` comes before both compares, so the sprite choice uses life-1.
+                const int l2 = p.life - 1;
+                if (l2 > 0x0F) {                               // frame 2 x 3
+                    for (int off = 1; off < 0x0A; off += 3) {
+                        if (2 < nframes)
+                            battle_fx_blit_clipped(2, p.x - 5 + off + magic_frames_[2].xo,
+                                                   p.y + 2 + magic_frames_[2].yo);
+                    }
+                } else if (l2 > 0x0A) {                        // frame 3 x 3
+                    for (int off = 1; off < 0x0A; off += 3) {
+                        if (3 < nframes)
+                            battle_fx_blit_clipped(3, p.x - 5 + off + magic_frames_[3].xo,
+                                                   p.y + 2 + magic_frames_[3].yo);
+                    }
+                }
+                --p.life;
+            } else if (p.life > 0) {                           // 1..0x0A: shade, maybe frame 4 x 3
                 const int half = p.life / 2;
                 battle_fx_shade_rect(p.x - half, 0, p.x + half, p.y); // 5EDDE (life <= 0Ah)
-            }
-            if (p.life > 0x0F) {                               // frame 2 x 3
-                for (int off = 1; off < 0x0A; off += 3) {
-                    if (2 < nframes)
-                        battle_fx_blit_clipped(2, p.x - 5 + off + magic_frames_[2].xo,
-                                               jitter_y + 2 + magic_frames_[2].yo);
+                if (p.life > 6) {                              // pre-decrement life (`cmp,6; jbe`)
+                    for (int off = 1; off < 0x0A; off += 3) {
+                        if (4 < nframes)
+                            battle_fx_blit_clipped(4, p.x - 5 + off + magic_frames_[4].xo,
+                                                   p.y + 2 + magic_frames_[4].yo);
+                    }
                 }
-                --p.life;
-            } else if (p.life > 0x0A) {                        // frame 3 x 3
-                for (int off = 1; off < 0x0A; off += 3) {
-                    if (3 < nframes)
-                        battle_fx_blit_clipped(3, p.x - 5 + off + magic_frames_[3].xo,
-                                               jitter_y + 2 + magic_frames_[3].yo);
-                }
-                --p.life;
-            } else if (p.life > 0) {                           // frame 4 x 1
-                if (4 < nframes)
-                    battle_fx_blit_clipped(4, p.x - 5 + p.life / 2 + magic_frames_[4].xo,
-                                           jitter_y + 2 + magic_frames_[4].yo);
                 --p.life;
             } else {
                 ++done;
