@@ -3,11 +3,14 @@
 //   sub_5A267 (dasm 100199..100407, called from sub_2A75A+446) Sun Light - sunl.nsp
 //   sub_5A566 (dasm 100408..100639, called from sub_2A75A+44F) Sun Light variant - sunl2.nsp
 //
-// All three share one original skeleton:
+// The three drivers share the file/load/palette setup but not one frame loop:
 //   1FEA4(<file>.nsp) -> 103A8 (clear effect state) -> 1033B (tick period) -> 11EE4 (release
 //   occupancy, sub_58619 only) -> caster screen position via 10971+0Ch / 10988 -> palette fade
-//   (5FA2C, or 5F945+5FC21+5FD1C) -> per frame { 10AEB (map) + 12BEE (units) + frame blit +
-//   454D5 overlay + 5E9E8 + 499E4 } -> 61115/103A0 restore -> 1FFCD release.
+//   (5FA2C, or 5F945+5FC21+5FD1C) -> driver-specific frames -> 61115/103A0 restore -> 1FFCD.
+//   58619's main loop clears the work buffer and composes moon frame 0 -> 12F2A units ->
+//   particles -> moon frame 1 -> 5E9E8; it does not call 10AEB/12BEE/454D5. Its intro draws
+//   the same layers over the previous buffer without a clear. 5A267/5A566 keep their own
+//   frame chains.
 //
 // Port mapping, same conventions as combatii_fx_support.cpp:
 //   454B3+12BEE+454D5+5E9E8 = battle_fx_present(), 499E4 = wait_game_tick(),
@@ -56,13 +59,16 @@ inline void sunmoon_anchor(const CombatUnitPlacement& u, int cam_x, int cam_y, i
 //   (1) 585B1 collects hostile units in the 13x13 screen area (word_F13AA/dword_F0BA8) and
 //       sets each pose via 1214F: 0x0A (collapsed) for normal units, 0 for large ones.
 //   (2) sfx(0x32) -> 1033B(1) -> 5FA2C fades the palette 100% -> 0% (screen darkens).
-//   (3) moon frame 0 (dword_F0DB2) -> the units (12BEE) -> moon frame 1 (dword_F0DBE), then
-//       5FA2C brings the palette back 0% -> 100% -> 1033B(5) -> 5E9E8 -> 5 ticks.
+//   (3) moon frame 0 at (0,0) -> the hostile units (12F2A) -> moon frame 1 at (1,1), then
+//       5FA2C brings the palette back 0% -> 100% -> 1033B(5) -> 5E9E8 -> 5 ticks. The intro
+//       has no memset; its frame 0 is drawn over the buffer 454B3 left behind.
 //   (4) 10 falling particle slots (var_34[]), one every 3rd frame up to frame 100, life 0x12,
 //       spawned at x = rand()%0x12C+0x0A, y = rand()%0x8C+0x32 with sfx(0x33).
 //       Before the loop: 6106C(3,11h,46h) builds page 3 (6104A(3) selects it).
-//   (5) Main loop: shakes camera fine Y by +-1 (var_14) and particle y by +-2 (var_18).
-//       Each particle first dims its vertical trail through that LUT: x = px-5..px+5 while
+//   (5) Main loop: frame 0 is drawn at (0, var_14) before the units, and frame 1 at
+//       (0, var_18) after the particles; var_14 starts 0 and flips -1/+1, var_18 flips -2/+2.
+//       The original does not redraw the map in this loop. Each particle first dims its
+//       vertical trail through that LUT: x = px-5..px+5 while
 //       life > 0x0A, x = px-life/2..px+life/2 while 0 < life <= 0x0A, both y = 0..py.
 //       life > 0x0F then draws frame 2 at x-5+{1,4,7}, y+2 (3 sprites); 0x0A < life <= 0x0F
 //       draws frame 3 in the same layout; life <= 0x0A draws frame 4 at x-5+life/2. At life 0
@@ -76,8 +82,6 @@ int CombatII::battle_fx_58619(int unit_index, int tx, int ty, int k) {
     const int nframes = (int)magic_frames_.size();
     auto& caster = units_[(size_t)unit_index];
     camera_center_on(tx, ty);                                  // sub_1124A
-    int ax = 0, ay = 0;
-    sunmoon_anchor(caster, cam_tile_x_, cam_tile_y_, cam_fine_x_, cam_fine_y_, ax, ay);
 
     // (1) sub_585B1: hostile units in the 13x13 screen area (11DB2 + 1201D hostility + dedup)
     std::vector<int> list;
@@ -109,18 +113,32 @@ int CombatII::battle_fx_58619(int unit_index, int tx, int ty, int k) {
     }
     if (should_exit_) { battle_nsp_release(); return 1; }
 
-    // (3) moon frames 0/1 + units -> palette restore
-    if (0 < nframes) battle_fx_blit(0, ax + magic_frames_[0].xo, ay + magic_frames_[0].yo);
-    battle_fx_present();
-    // ASM 98050..98054: the first frame-1 blit passes (1,1) exactly; 5EFB9 adds no frame offset.
-    if (1 < nframes) battle_fx_blit(1, 1, 1);
-    battle_fx_present();
+    // 5EFB9 draws the moon frame directly on the work buffer; 12F2A draws only the hostile
+    // units. The map/weather pass (10AEB/12BEE/4512E) and 454D5 are not part of this driver.
+    // The intro has no memset; only the main loop clears first.
+    auto present_58619 = [&](bool clear_buffer, int f0x, int f0y, int f1x, int f1y) {
+        if (clear_buffer) video_.clear();                      // memset_ (main loop only)
+        if (0 < nframes) fx_blit_nsp(0, f0x, f0y);              // 5EFB9 frame 0
+        for (int oi : list) battle_draw_unit_now(oi);           // 12F2A
+        battle_fx_flush();                                      // queued particles
+        if (1 < nframes) fx_blit_nsp(1, f1x, f1y);              // 5EFB9 frame 1
+        battle_fx_commit();                                     // 5E9E8
+    };
+    // The second 5E9E8 only presents the buffer; it does not redraw the scene or the overlay.
+    auto present_existing = [&]() {
+        video_.present();
+        dump_frame_if_requested();
+    };
+
+    // (3) frame 0 at (0,0), units, frame 1 at (1,1) -> palette restore
+    present_58619(false, 0, 0, 1, 1);
+    wait_game_tick();                                          // 499E4 after the first 5E9E8
     for (int pct = 0; pct <= 0x64 && !should_exit_; pct += 2) {
         pal_scale_range(0, 0x100, &battle_master_palette_[0][0], pct);
         wait_game_tick();
     }
     game_timer_set(5);                                         // sub_1033B(5)
-    battle_fx_present();                                       // sub_5E9E8
+    present_existing();                                        // sub_5E9E8 (same buffer)
     for (int i = 0; i < 5 && !should_exit_; ++i) wait_game_tick();
 
     fx_shade_lut_build(0x11, 0x46);                            // sub_6106C(3,11h,46h)
@@ -133,18 +151,20 @@ int CombatII::battle_fx_58619(int unit_index, int tx, int ty, int k) {
 
     game_timer_set(5);                                         // sub_1033B(5), reset before the loop
     const int shake_base_fine_y = cam_fine_y_;                 // original dword_BA838 value
-    int shake_amp = 0;                                         // var_18 (+2 / -2)
+    int cam_shake = 0;                                         // var_14 (-1/+1, starts 0)
+    int shake_amp = 0;                                         // var_18 (-2 / +2, starts 0)
     int done = 0;                                              // var_4
     for (int frame = 0; frame < 0x400 && !should_exit_; ++frame) {
         if (frame >= 0x64 && done >= kSlots) break;            // `var_10 >= 64h && var_4 >= 0Ah`
-        // Per-frame screen shake: flip var_14 -> dword_BA838 = +-1
-        const int shake = (frame & 1) ? -1 : 1;
-        cam_fine_y_ = shake_base_fine_y + shake;               // camera fine Y read by sub_454B3
-        // var_18 alternates +2 / -2 (particle y jitter)
-        shake_amp = (shake_amp == 2) ? -2 : 2;
+        // Per-frame screen shake: var_14 starts 0, so the first frame is -1, then +1.
+        cam_shake = (cam_shake < 0) ? 1 : -1;
+        cam_fine_y_ = shake_base_fine_y + cam_shake;           // dword_BA838
+        // var_18 starts 0, so the first loop is -2, then +2 (particle y jitter).
+        shake_amp = (shake_amp == -2) ? 2 : -2;
 
-        // Spawn one slot every 3rd frame (first 100 frames only)
-        if ((frame % 3) == 0 && frame < 0x64) {
+        // var_10 is incremented at the top of the original loop; the first loop is 1.
+        const int loop_frame = frame + 1;
+        if ((loop_frame % 3) == 0 && loop_frame < 0x64) {
             MoonP& p = part[spawn_slot];
             if (p.life == 0) {
                 p.life = 0x12;
@@ -155,15 +175,12 @@ int CombatII::battle_fx_58619(int unit_index, int tx, int ty, int k) {
             spawn_slot = (spawn_slot + 1) % 9;                 // `cmp di,9; jle` -> 0..8
         }
 
-        // Background including the collapsed units + moon frame 1
-        if (1 < nframes) battle_fx_blit(1, ax + magic_frames_[1].xo, ay + magic_frames_[1].yo);
-
         for (int i = 0; i < kSlots; ++i) {
             MoonP& p = part[i];
             const int jitter_y = p.y + shake_amp;
             // 5EDDE: dim the column the particle has already fallen through. The original
-            // reads py[] (not the jittered y) and applies the page-3 LUT to the frame 454B3
-            // drew, before the particle sprites.
+            // reads py[] (not the jittered y) and applies the page-3 LUT to the frame 0/units
+            // already drawn, before the particle sprites.
             if (p.life > 0x0A) {
                 battle_fx_shade_rect(p.x - 5, 0, p.x + 5, p.y); // 5EDDE (life > 0Ah)
             } else if (p.life > 0) {
@@ -173,38 +190,39 @@ int CombatII::battle_fx_58619(int unit_index, int tx, int ty, int k) {
             if (p.life > 0x0F) {                               // frame 2 x 3
                 for (int off = 1; off < 0x0A; off += 3) {
                     if (2 < nframes)
-                        battle_fx_blit(2, p.x - 5 + off + magic_frames_[2].xo,
-                                       jitter_y + 2 + magic_frames_[2].yo);
+                        battle_fx_blit_clipped(2, p.x - 5 + off + magic_frames_[2].xo,
+                                               jitter_y + 2 + magic_frames_[2].yo);
                 }
                 --p.life;
             } else if (p.life > 0x0A) {                        // frame 3 x 3
                 for (int off = 1; off < 0x0A; off += 3) {
                     if (3 < nframes)
-                        battle_fx_blit(3, p.x - 5 + off + magic_frames_[3].xo,
-                                       jitter_y + 2 + magic_frames_[3].yo);
+                        battle_fx_blit_clipped(3, p.x - 5 + off + magic_frames_[3].xo,
+                                               jitter_y + 2 + magic_frames_[3].yo);
                 }
                 --p.life;
             } else if (p.life > 0) {                           // frame 4 x 1
                 if (4 < nframes)
-                    battle_fx_blit(4, p.x - 5 + p.life / 2 + magic_frames_[4].xo,
-                                   jitter_y + 2 + magic_frames_[4].yo);
+                    battle_fx_blit_clipped(4, p.x - 5 + p.life / 2 + magic_frames_[4].xo,
+                                           jitter_y + 2 + magic_frames_[4].yo);
                 --p.life;
             } else {
                 ++done;
             }
         }
 
-        battle_fx_present();
+        present_58619(true, 0, cam_shake, 0, shake_amp);        // frame 0 below units, frame 1 on top
         wait_game_tick();
     }
-    cam_fine_y_ = shake_base_fine_y;                           // dword_BA838 = 0
+    cam_fine_y_ = CAM_FINE_Y_REST;                             // dword_BA838 = 0
 
     // (6) Finish: darken -> one frame -> brighten -> LUT and pose restore
     for (int pct = 0x64; pct >= 0 && !should_exit_; pct -= 2) {
         pal_scale_range(0, 0x100, &battle_master_palette_[0][0], pct);
         wait_game_tick();
     }
-    battle_fx_present();
+    battle_fx_world();                                         // sub_454B3
+    battle_fx_commit();                                        // sub_5E9E8
     for (int pct = 0; pct <= 0x64 && !should_exit_; pct += 2) {
         pal_scale_range(0, 0x100, &battle_master_palette_[0][0], pct);
         wait_game_tick();
