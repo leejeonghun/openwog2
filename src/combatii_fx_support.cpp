@@ -484,7 +484,8 @@ int CombatII::battle_fx_26810(int unit_index, int tx, int ty, int k) {
 //       with 5F305 (tinted) plus its xo/yo,
 //     - for t>19, while (9 - (t-20)/2) is at least 6, draw one extra shaking frame using
 //       499BD(1)+6 with 1FFFE plus its xo/yo.
-//   602E3 advances the fade (the port does this in the render step); 602BF clears it.
+//   601E5(0F0h) / 602E3 / 602BF (the 0F0h..0FFh DAC scroll) are not implemented by this
+//   driver; only the frame layers and their order are ported.
 int CombatII::battle_fx_26b1f(int unit_index, int tx, int ty, int k) {
     (void)k;
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return 0;
@@ -502,9 +503,13 @@ int CombatII::battle_fx_26b1f(int unit_index, int tx, int ty, int k) {
     sfx(0x32);                                                           // sub_4F4CD(0x32)
     const int shade = 0x28;                                              // 611AA(ebx=28h)
     for (int t = 0; t < 0x30 && !should_exit_; ++t) {                    // `cmp cx,30h`
+        // Per-frame order (315B2..31693): 10AEB (map) -> 1FFFE frame 0 -> 12BEE (units)
+        // -> 5F305 frame f2 -> [t>13h] 1FFFE shaking frame -> 454D5 -> 5E9E8. Frame 0 sits
+        // below the unit sprites, so it goes through the under-units path instead of the
+        // sprite queue; f2/f3 stay in the queue and are flushed between units and 454D5.
         if (0 < nframes) {
             const MagicFxFrame& fr = magic_frames_[0];
-            battle_fx_blit(0, cx + fr.xo, cy + fr.yo);                   // sub_1FFFE
+            battle_fx_blit_under_units(0, cx + fr.xo, cy + fr.yo);       // sub_1FFFE
         }
         const int f2 = (t < 9) ? (t / 2) : 5;                            // loc_26BF6: unk_F0DE6
         if (f2 < nframes) {
@@ -520,8 +525,12 @@ int CombatII::battle_fx_26b1f(int unit_index, int tx, int ty, int k) {
                 battle_fx_blit(f3, cx + fr.xo, cy + fr.yo);              // sub_1FFFE
             }
         }
-        battle_fx_present();
-        wait_game_tick();
+        battle_hud_time_ = battle_time_;                                 // 454D5 frame time
+        render_battle_map(false, false);                                 // sub_10AEB + frame 0 + sub_12BEE
+        battle_fx_flush();                                               // sub_5F305 + sub_1FFFE
+        battle_fx_overlay();                                             // sub_454D5
+        battle_fx_commit();                                              // sub_5E9E8
+        wait_game_tick();                                                // sub_499E4
     }
     battle_nsp_release();                                                // sub_1FFCD
     return 1;

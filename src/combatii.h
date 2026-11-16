@@ -2256,6 +2256,11 @@ private:
     //   right/bottom) so it dims the frame 454B3 already drew before later sprites.
     struct MagicFxDraw { int frame; int x, y; int tint_pct; int dst_w, dst_h; bool expand_only = false; bool unclipped = false; bool clip319 = false; bool shrink_only = false; int silhouette = -1; std::array<uint64_t, 4> tint_mask{}; bool tint_limited = false; int redraw_unit = -1; bool tint_mode1 = true; std::array<uint8_t, 32> tint_order{}; uint8_t tint_count = 0; bool shade_rect = false; };
     std::vector<MagicFxDraw> magic_fx_draws_;
+    // Pending sub_1FFFE draw for the sub_10AEB -> sub_12BEE gap (battle_fx_blit_under_units).
+    bool battle_fx_under_units_pending_ = false;
+    int battle_fx_under_units_frame_ = -1;
+    int battle_fx_under_units_x_ = 0;
+    int battle_fx_under_units_y_ = 0;
     // dword_F9F08 + word ptr dword_FA8B6+2: units that sub_44DCC redraws inside 454D5.
     // The original stores raw unit pointers and does not deduplicate (at most 59h entries).
     std::vector<int> battle_highlight_units_;
@@ -2279,6 +2284,9 @@ private:
     // battle_fx_blit_tinted_unclipped: sub_5F29D (same LUT, but walks the framebuffer stride
     // without the 13Fh/C7h clip, like the original).
     void battle_fx_blit(int frame, int x, int y);
+    // sub_1FFFE between sub_10AEB (map) and sub_12BEE (tops + units): the next
+    // render_battle_map() draws this frame over the base tiles and below the units (26B1F).
+    void battle_fx_blit_under_units(int frame, int x, int y);
     // sub_5EDDE: queue a page-3 LUT rectangle so it dims the frame 454B3 already drew before
     // sprites queued later. fx_shade_lut_build must have built the page first.
     void battle_fx_shade_rect(int x0, int y0, int x1, int y1);

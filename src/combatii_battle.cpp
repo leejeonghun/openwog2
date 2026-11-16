@@ -9670,6 +9670,17 @@ void CombatII::battle_fx_blit(int frame, int x, int y) {
     magic_fx_draws_.push_back(MagicFxDraw{frame, x, y, -1, 0, 0});       // sub_5EE51
 }
 
+// sub_1FFFE drawn between sub_10AEB (map) and sub_12BEE (tops + units). The original
+// 26B1F blits confuse.nsp frame 0 there, so the unit sprites cover it; queueing it through
+// battle_fx_blit would draw it on top. render_battle_map() consumes this once, in place.
+void CombatII::battle_fx_blit_under_units(int frame, int x, int y) {
+    if (frame < 0 || (size_t)frame >= magic_frames_.size()) return;
+    battle_fx_under_units_pending_ = true;
+    battle_fx_under_units_frame_ = frame;
+    battle_fx_under_units_x_ = x;
+    battle_fx_under_units_y_ = y;
+}
+
 // sub_5EDDE: dim pixels already in the backbuffer through the page fx_shade_lut_build built.
 // Queued like a sprite so 454B3's scene is dimmed before later 5EE51/5F29D draws, matching the
 // original call order (58619's particle columns, 59A70's full-screen pass).

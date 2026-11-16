@@ -1893,6 +1893,15 @@ const uint8_t* CombatII::battle_move_shade_lut() {
 // queue; overlay_only skips the sub_10AEB FPM/base-tile part and redraws only the sub_12D65
 // top tiles/effects over an existing 454B3 frame.
 void CombatII::render_battle_map(bool magic_pass, bool overlay_only){
+    // sub_1FFFE queued for the gap between sub_10AEB (base tiles) and sub_12BEE (tops + units).
+    // 26B1F's confuse frame 0 belongs under the units, so it is drawn here rather than through
+    // the battle_fx_blit queue (which the caller flushes after this pass).
+    auto under_units_blit = [&]() {
+        if (!battle_fx_under_units_pending_) return;
+        battle_fx_under_units_pending_ = false;
+        fx_blit_nsp_5ee51(battle_fx_under_units_frame_,
+                          battle_fx_under_units_x_, battle_fx_under_units_y_);
+    };
     if (!overlay_only) {
         highlight_draws_.clear();           // the sub_44DCC replay list is rebuilt on every sub_454B3 pass
         // Always draw FPM behind tiles when available (sub_10AEB order: sub_5EAE3 FPM first, then tiles
@@ -1900,8 +1909,10 @@ void CombatII::render_battle_map(bool magic_pass, bool overlay_only){
         // The FPM layer is drawn first so gaps between tiles show the background, as in sub_10AEB.
         bool has_fpm = !fpm_decoded_.empty() || !fpm_data_.empty();
         if(!layer_base_tiles_ || base_tiles_data_.empty()){
-            if(has_fpm){ render_fpm(); return; }
-            video_.clear(); return;
+            if(has_fpm) render_fpm();
+            else video_.clear();
+            under_units_blit();
+            return;
         }
         // Fill background first
         if (has_fpm) render_fpm_as_background();
@@ -1936,6 +1947,7 @@ void CombatII::render_battle_map(bool magic_pass, bool overlay_only){
     // The move-range shading must sit between the base tiles and the tops/units so unit sprites
     // are never dimmed. sub_12D65 has neither, so magic_pass skips it.
     if (!magic_pass) render_player_move_range();
+    if (!overlay_only) under_units_blit();
     // Build one merged Y-sorted draw list (top tiles + units); the original uses a stable foot_y
     // sort so units and roofs occlude each other correctly.
     std::vector<DrawEntry> draw_list;

@@ -1378,6 +1378,11 @@ bool CombatII::battle_fx_32bcb_anim(int unit_index) {
             if (x >= 0 && x < SCREEN_W && y >= 0 && y < SCREEN_H)
                 buf[(size_t)y * SCREEN_W + (size_t)x] = col;
         };
+        // 33E06 only writes var_10/var_C inside the step loop, so a particle with steps==0 is
+        // tested with the value the previous particle left in those stack slots. Keep the two
+        // slots outside the particle loop for the same carry-over (the first value is
+        // undefined in the original; the port starts at 0).
+        int last_px = 0, last_py = 0;
         for (int i = 0; i < kSlots; ++i) {
             if (p_alive[(size_t)i] != 1) continue;
             const int steps = p_steps[(size_t)i];
@@ -1385,8 +1390,6 @@ bool CombatII::battle_fx_32bcb_anim(int unit_index) {
             const float ca = (float)std::cos(ang);
             const float sa = (float)std::sin(ang);
             IceTrail& tr = p_trail[(size_t)i];
-            int last_px = (int)p_x[(size_t)i];
-            int last_py = (int)p_y[(size_t)i];
             for (int k = 0; k < steps; ++k) {
                 p_x[(size_t)i] += ca;
                 p_y[(size_t)i] += sa;
@@ -1440,9 +1443,11 @@ bool CombatII::battle_fx_32bcb_anim(int unit_index) {
             const int f = p_alive[(size_t)b];
             if (f < nframes) {
                 const MagicFxFrame& e = magic_frames_[(size_t)f];
-                // 33A2D: fild [entry+4] / fadd x / __CHP / fistp truncates toward zero.
-                fx_blit_nsp_5ee51(f, (int)(p_x[(size_t)b] + e.xo),
-                                  (int)(p_y[(size_t)b] + e.yo));
+                // 33A2D: fild [entry+4] / fadd x / __CHP / fistp truncates toward zero. The
+                // sum is done in 80-bit x87 precision, so widen the float before adding to
+                // avoid the float32 rounding of `p_x + e.xo`.
+                fx_blit_nsp_5ee51(f, (int)((double)p_x[(size_t)b] + e.xo),
+                                  (int)((double)p_y[(size_t)b] + e.yo));
             }
             for (int ti = 0; ti < cnt && ti < (int)battle_target_list_.size(); ++ti) {
                 if (p_frame[(size_t)ti] <= 0 || p_frame[(size_t)ti] >= 0x64) continue;
