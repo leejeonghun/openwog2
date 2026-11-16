@@ -10859,7 +10859,7 @@ int CombatII::battle_weapon_collect_screen(int unit_index, int cap, int x_shift)
     return (int)battle_target_list_.size();
 }
 
-// sub_398F3: walk the six-tile front ray with 1A452(1, 6). Each candidate starts by clearing
+// sub_398F3: walk the six-tile caster-anchored ray with 1A452(1, 6). Each candidate starts by clearing
 // the F0648 count (`mov word ptr dword_F0B9C+2, cx`, cx == 0), then collects that candidate's
 // radius-2 1AC08 diamond. The tile with the largest per-tile count is kept; ties retain the
 // earlier tile. The original returns -1 when the last processed tile's count is zero, even if
@@ -10892,15 +10892,18 @@ int CombatII::battle_weapon_collect_39a49_auto(int unit_index, int* cell_x, int*
         }
     };
 
-    // sub_1A1DE -> sub_1A452(width 1, length 6) -> sub_1A552.
+    // sub_1A452(width 1, length 6) -> sub_1A552, started at the caster's own [unit+0]/
+    // [unit+1]. sub_398F3 never calls 1A1DE/1A146, so the ray covers distances 0..5 and the
+    // 13CBD band test (3..6 marked by 39A49) keeps 3, 4 and 5. Starting from front_tile()
+    // would shift every candidate one tile forward.
     const g2range::Env env = battle_range_env_make();
     g2range::Range rg(env);
     const g2range::Unit au = battle_range_unit(unit_index);
-    const auto front = rg.front_tile(au, au.facing);
-    rg.rect_init(front.x, front.y, 1, au.facing, 6);
+    const int ax0 = (int)(int8_t)A.x, ay0 = (int)(int8_t)A.y;
+    rg.rect_init(ax0, ay0, 1, au.facing, 6);
     int best_count = 0, best_x = -1, best_y = -1;
     int last_count = 0;
-    int px = front.x, py = front.y;
+    int px = ax0, py = ay0;
     for (int guard = 0; guard < 0x1000 && rg.rect_next(px, py); ++guard) {
         // ASM 55903: the count is cleared before 13CBD, so a rejected tile also leaves the
         // final count at zero. The accumulator is never shared across candidate tiles.
@@ -11083,18 +11086,19 @@ bool CombatII::battle_weapon_pick_valid(int unit_index, int kind, int si) {
         return in_front_ray(7);
     }
     if (kind == 3) {
-        // loc_3575B: the first 1A552 result is consumed before the candidate loop, and the
-        // loop stops at the first cell whose sub_1093D attribute is zero. Only that prefix
-        // is marked through 13D02 and can therefore be selected by the 4A483 cursor.
+        // loc_3575B: 1A452 is started at the caster's own [unit+0]/[unit+1] (no 1A1DE), so
+        // the first 1A552 result is the caster tile itself. It is consumed before the
+        // candidate loop, and the loop stops at the first cell whose sub_1093D attribute is
+        // zero. Only that prefix is marked through 13D02 and can therefore be selected by
+        // the 4A483 cursor (candidates are distances 1..6).
         const g2range::Env env = battle_range_env_make();
         g2range::Range rg(env);
         const g2range::Unit au = battle_range_unit(unit_index);
-        const auto pt = rg.front_tile(au, au.facing);                     // sub_1A1DE
-        rg.rect_init(pt.x, pt.y, 1, au.facing, 7);                        // sub_1A452
+        rg.rect_init(ax, ay, 1, au.facing, 7);                            // sub_1A452
         int x = 0, y = 0, seen = 0;
         bool candidate = false;
         for (int guard = 0; guard < 0x1000 && rg.rect_next(x, y); ++guard) { // sub_1A552
-            if (seen++ == 0) continue;                                    // pre-consumed front tile
+            if (seen++ == 0) continue;                                    // pre-consumed caster tile
             const long ai = (long)y * (long)map_w_ + (long)x;
             if (tile_attr_.empty() || ai < 0 || (size_t)ai >= tile_attr_.size() ||
                 tile_attr_[(size_t)ai] == 0) break;                       // sub_1093D == 0

@@ -33,10 +33,12 @@ constexpr int    kAngleMax = 0x280;      // 640 = 2*pi
 constexpr int    kAngleStep = 0x40;      // 64 = 36 deg
 
 // Unit-circle coordinates for angle i*0x40 (original: fild angle; fdiv flt_77269; fcos/fsin).
-inline void ring_point(int angle, int radius, int& dx, int& dy) {
+inline void ring_point(int angle, int radius, int cx, int cy, int& px, int& py) {
     const double a = (double)angle / kAngleDiv;
-    dx = (int)std::lround(std::cos(a) * (double)radius);   // __CHP + fistp (rounded)
-    dy = (int)std::lround(std::sin(a) * (double)radius);
+    // The original loads the centre, faddp, then __CHP + fistp, so the truncation applies
+    // to (centre + cos/sin * radius), not to the offset alone.
+    px = (int)((double)cx + std::cos(a) * (double)radius);
+    py = (int)((double)cy + std::sin(a) * (double)radius);
 }
 
 } // namespace
@@ -73,7 +75,9 @@ int CombatII::battle_fx_2476e(int unit_index, int tx, int ty, int k) {
     struct P { int x, y; };
     P parts[kParticles];
     const int dx = ex - sx, dy = ey - sy;
-    const int dist = (int)std::lround(std::sqrt((double)dx * dx + (double)dy * dy));
+    // sub_2476E: fsqrt -> fdiv dbl_77259 (3.0) -> __CHP -> fistp. The step divisors use that
+    // truncated value, so /3.0 must be applied before the cast.
+    const int dist = (int)(std::sqrt((double)dx * dx + (double)dy * dy) / 3.0);
     const int step_x = dist > 0 ? dx * 10 / dist : 0;                    // (delta*10)/dist
     const int step_y = dist > 0 ? dy * 10 / dist : 0;
     for (int i = 0; i < kParticles; ++i) {
@@ -143,8 +147,8 @@ int CombatII::battle_fx_25047(int unit_index, int tx, int ty, int k) {
         ++frame_no;
         for (int i = 0; i < 10; ++i) {
             int px, py;
-            ring_point(angles[i], radius, px, py);
-            if (f < nframes) battle_fx_blit(f, cx + px, cy + py);
+            ring_point(angles[i], radius, cx, cy, px, py);
+            if (f < nframes) battle_fx_blit(f, px, py);
             if (variant1) {
                 angles[i] += 0x0A;                                       // loc_25192 rotate
                 if (angles[i] >= kAngleMax) angles[i] = 0;
@@ -189,8 +193,8 @@ int CombatII::battle_fx_25254(int unit_index, int tx, int ty, int k) {
         const int f = ((cy / 2) % 5);                                     // sar 11h -> /2, idiv 5
         for (int i = 0; i < 10; ++i) {
             int px, py;
-            ring_point(angles[i], radius, px, py);
-            if (f < nframes) battle_fx_blit(f, cx + px, cy + py);
+            ring_point(angles[i], radius, cx, cy, px, py);
+            if (f < nframes) battle_fx_blit(f, px, py);
             angles[i] += 0x0A;
             if (angles[i] >= kAngleMax) angles[i] = 0;
         }
@@ -278,8 +282,8 @@ int CombatII::battle_fx_25591(int unit_index, int tx, int ty, int k) {
             if (t < r * 10) continue;                                    // `cmp var_10, r*10; jle`
             for (int i = 0; i < kPerRing; ++i) {
                 int px, py;
-                ring_point(angles[r * kPerRing + i], radius[r], px, py);
-                if (f < nframes) battle_fx_blit(f, cx + px, cy + py);
+                ring_point(angles[r * kPerRing + i], radius[r], cx, cy, px, py);
+                if (f < nframes) battle_fx_blit(f, px, py);
                 angles[r * kPerRing + i] += 4;                           // angle +4
                 if (angles[r * kPerRing + i] >= kAngleMax) angles[r * kPerRing + i] = 0;
             }

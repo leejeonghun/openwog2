@@ -39,8 +39,8 @@
 //   12124 -> reset_unit_pose, 2CAF7 -> battle_weapon_2caf7_loop(5, 0BB8h).
 //
 // Deviations:
-//   - 11EE4/11E04 are omitted; occupancy is modelled by units_ and the caster never
-//     moves tiles here.
+//   - 11EE4/11E04 are modelled with fx_sprite_hidden (the port's CC998 occupancy reads it);
+//     the caster never moves tiles here.
 //   - 5EFB9 maps to fx_blit_nsp, which drops off-screen pixels.
 //   - The 44D6E strength/ramp becomes the battle_dim_row0_ scalar.
 //   - A missing NSP asset skips the effect but still applies damage (2CAF7).
@@ -67,8 +67,7 @@ int CombatII::battle_fx_35fc2_anim(int unit_index) {
     const int8_t saved_facing = A.facing;
     for (int ti : battle_target_list_) battle_highlight_add(ti);
 
-    // (3) load the NSP table and stop the weather tick (original step 2; 11EE4 is
-    // omitted because occupancy is modelled by units_)
+    // (3) load the NSP table and stop the weather tick (original step 2)
     if (!battle_nsp_load("stormaxe.nsp") || magic_frames_.empty()) {
         if (battle_trace_) fprintf(stderr, "COMBAT: warning: 35FC2 unit=%d stormaxe.nsp missing (damage only)\n", A.id);
         battle_highlight_clear();
@@ -76,6 +75,7 @@ int CombatII::battle_fx_35fc2_anim(int unit_index) {
         return 1;
     }
     weather_tick_enabled_ = false;                                      // sub_103A8
+    A.fx_sprite_hidden = true;                                          // sub_11EE4
     const int nframes = (int)magic_frames_.size();
     auto blit = [&](int frame, int x, int y) {                          // sub_5EE51 / sub_5EFB9
         if (frame < 0 || frame >= nframes) return;
@@ -159,6 +159,7 @@ int CombatII::battle_fx_35fc2_anim(int unit_index) {
     for (int ti : battle_target_list_) {                                // 12124 for every target
         if (ti >= 0 && (size_t)ti < units_.size()) reset_unit_pose(units_[(size_t)ti]);
     }
+    A.fx_sprite_hidden = false;                                         // sub_11E04
     if ((size_t)unit_index < units_.size()) {
         A.anim_frame = 3;                                               // [64h] = 3
         A.facing = saved_facing;                                        // [63h] = var_40

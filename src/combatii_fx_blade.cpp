@@ -266,8 +266,9 @@ int CombatII::battle_fx_22767(int unit_index, int tx, int ty, int k) {
         angle = (angle + kStep) % kWrap;
         const double rad = (double)angle / 100.0;           // flt_771CC = 100.0
         FxPoint p;
-        p.x = cx + (int)std::lround(std::cos(rad) * kRadius);
-        p.y = cy + (int)std::lround(std::sin(rad) * kRadius);
+        // 22767: fild anchor -> faddp -> __CHP -> fistp truncates the anchored value.
+        p.x = (int)((double)cx + std::cos(rad) * kRadius);
+        p.y = (int)((double)cy + std::sin(rad) * kRadius);
         // Shift the 6-slot trail (copy loop cx=4..0 at 22878)
         for (int s = (int)trail.size() - 1; s > 0; --s) trail[(size_t)s] = trail[(size_t)s - 1];
         trail[0] = p;
@@ -482,8 +483,9 @@ int CombatII::battle_fx_272ad(int unit_index, int tx, int ty, int k) {
             angle += 0x14;
             if (angle >= 0x280) angle = 0;                  // `cmp ax,280h`
             const double rad = (double)angle / 100.0;       // flt_77325 = 100.0
-            last_x = ax + (int)std::lround(std::cos(rad) * (double)radius);
-            last_y = ay + (int)std::lround(std::sin(rad) * (double)radius);
+            // 272AD: fild anchor -> faddp -> __CHP -> fistp truncates the anchored value.
+            last_x = (int)((double)ax + std::cos(rad) * (double)radius);
+            last_y = (int)((double)ay + std::sin(rad) * (double)radius);
             trail[0].x = last_x;
             trail[0].y = last_y;
             trail[0].frame = std::min(nframes - 1, (radius / 2) % 8);  // (var_C/2) % 8

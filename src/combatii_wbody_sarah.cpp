@@ -70,8 +70,8 @@
 //     step 2, matching the observed per-frame flow along the facing.
 //   - sub_3555A always takes the target [65h]=0 path because var_4 is never incremented;
 //     carried over as is.
-//   - 11EE4/11E04 (release and re-register occupancy) are omitted because the port
-//     models occupancy with units_.
+//   - 11EE4/11E04 (release and re-register occupancy) become A.fx_sprite_hidden, which the
+//     port's CC998 occupancy reads.
 //   - 287AF is a 24-frame hit pace; replaced by game_timer_set(6) as in the other bodies
 //     (damage and triggers are unchanged).
 //   - Damage is applied after the presentation, as in the original.
@@ -158,6 +158,7 @@ int CombatII::battle_fx_356db_anim(int unit_index) {
     if (loaded && nframes > 0) {
         weather_tick_enabled_ = false;                       // sub_103A8
         const int saved_facing = (int)A.facing;              // var_18
+        A.fx_sprite_hidden = true;                           // sub_11EE4
         battle_highlight_add_depth(unit_index);              // sub_2CBA1
         game_timer_set(5);                                   // sub_1033B(5)
         battle_dim_row0_ = true;                             // sub_44D6E(1)
@@ -234,6 +235,7 @@ int CombatII::battle_fx_356db_anim(int unit_index) {
             pal_load_range(0, 256, &battle_master_palette_[0][0]);
             battle_dim_row0_ = false;
             battle_highlight_clear();
+            A.fx_sprite_hidden = false;
             battle_nsp_release();
             weather_tick_enabled_ = true;
             return 1;
@@ -300,6 +302,7 @@ int CombatII::battle_fx_356db_anim(int unit_index) {
         battle_dim_row0_ = false;                                // sub_44D6E(0)
         pal_load_range(0, 256, &battle_master_palette_[0][0]);   // sub_5F9AE(0,100h, unk_12824C)
         battle_highlight_clear();                                // sub_44D75
+        A.fx_sprite_hidden = false;                              // sub_11E04
         A.facing = (int8_t)saved_facing;                         // `mov al,[var_18]; mov [63h],al`
         reset_unit_pose(A);                                      // sub_12124 (caster)
         if (ti >= 0 && (size_t)ti < units_.size()) reset_unit_pose(units_[(size_t)ti]);

@@ -117,10 +117,10 @@ const RainTrigTable& rain_trig() {
     return table;
 }
 
-// __CHP + fistp: round to nearest, then keep the low word (fistp indefinite -> 0).
+// __CHP + fistp: truncate toward zero (__CHP sets RC=11, fistp then stores the integer).
 int rain_round(float v) {
     if (!std::isfinite(v) || std::fabs(v) > 1.0e9f) return 0;
-    return (int)std::nearbyint(v);
+    return (int)v;
 }
 
 }  // namespace
@@ -209,14 +209,16 @@ int CombatII::battle_fx_39a49_anim(int unit_index) {
         weather_tick_enabled_ = true;
         battle_dim_row0_ = false;
         battle_highlight_clear();
+        A.fx_sprite_hidden = false;
         battle_nsp_release();
         return 1;
     }
 
-    // Step 5: clear the list, re-add only the targets (44D75 -> 44D89); the caster slot
-    // release (11EE4) is omitted.
+    // Step 5: clear the list, re-add only the targets (44D75 -> 44D89), then release the
+    // caster tile with 11EE4 (fx_sprite_hidden keeps it out of the CC998 map pass).
     battle_highlight_clear();                                                  // sub_44D75
     for (int ti : battle_target_list_) battle_highlight_add(ti);               // 44D89
+    A.fx_sprite_hidden = true;                                                 // sub_11EE4
     game_timer_set(5);                                                         // sub_1033B(5)
     const int anchor_x = (A.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X; // sub_10971
     const int anchor_y = (A.y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y; // sub_10988
@@ -335,6 +337,7 @@ int CombatII::battle_fx_39a49_anim(int unit_index) {
         weather_tick_enabled_ = true;
         battle_dim_row0_ = false;
         battle_highlight_clear();
+        A.fx_sprite_hidden = false;
         battle_nsp_release();
         return 1;
     }
@@ -523,6 +526,7 @@ int CombatII::battle_fx_39a49_anim(int unit_index) {
         weather_tick_enabled_ = true;
         battle_dim_row0_ = false;
         battle_highlight_clear();
+        A.fx_sprite_hidden = false;
         battle_nsp_release();
         return 1;
     }
@@ -541,6 +545,7 @@ int CombatII::battle_fx_39a49_anim(int unit_index) {
     battle_fx_commit();                                                        // sub_5E9E8
     wait_game_tick();                                                          // sub_499E4
     battle_highlight_clear();                                                  // sub_44D75
+    A.fx_sprite_hidden = false;                                                // sub_11E04
     for (int ti : battle_target_list_) {                                       // sub_12124 for all
         if (ti >= 0 && (size_t)ti < units_.size()) reset_unit_pose(units_[(size_t)ti]);
     }

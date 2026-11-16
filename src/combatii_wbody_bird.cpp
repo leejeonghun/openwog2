@@ -58,7 +58,8 @@
 //     var_10+2->var_C(direction code), var_14+2->var_10(main frame t), var_C+2->var_8(distance),
 //     [esp+36h]->var_20(start y), [esp+3Eh]->var_18(start x), [esp+4Ah]->var_C.
 //     Entries are 12 bytes, so the frame number is scaled by 0Ch before adding unk_F0DAA.
-//   - 11EE4/11E04 (release/re-occupy tile) are skipped: the port models occupancy with units_.
+//   - 11EE4/11E04 (release/re-occupy tile) become fx_sprite_hidden, which is what the port's
+//     CC998 occupancy reads.
 //   - The original repaints the screen with 454B3 on every subframe, so sprites from
 //     subframes 1 and 2 never reach the final image. The port advances state (slot lifetime,
 //     projectile movement) three times but only queues the draw on the third subframe
@@ -126,6 +127,7 @@ int CombatII::battle_fx_308ee_anim(int unit_index) {
     const int nframes = (int)magic_frames_.size();
     if (loaded && nframes > 0) {
         weather_tick_enabled_ = false;                                   // sub_103A8
+        A.fx_sprite_hidden = true;                                        // sub_11EE4
         battle_dim_row0_ = true;                                         // sub_44D6E(1)
         fx_pal_mix(0x60, 0x100, 0, 0x23);                                // sub_30824(0, 23h)
         game_timer_set(5);                                               // sub_1033B(5)
@@ -221,7 +223,7 @@ int CombatII::battle_fx_308ee_anim(int unit_index) {
     }
     A.x = (decltype(A.x))px;
     A.y = (decltype(A.y))py;
-    // 11E04 (re-occupy) is skipped: units_ coordinates define occupancy.
+    A.fx_sprite_hidden = false;                                          // sub_11E04 (re-occupy)
     battle_highlight_clear();                                            // sub_44D75
     for (int ti : battle_target_list_) battle_weapon_apply_status(ti, 0x01, 0x5A); // [1Eh]|=1, [1Fh]=5Ah
     battle_weapon_2caf7_loop(unit_index, 2, 0x2710);                     // sub_2CAF7(mul=2, add=2710h)

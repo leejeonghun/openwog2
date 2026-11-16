@@ -981,6 +981,7 @@ void CombatII::battle_fx_34c48_anim(int unit_index) {
     const int ax = (A.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X + 0x0C;
     const int ay = (A.y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y - 4;
     for (int ti : battle_target_list_) battle_highlight_add(ti);          // 44D89 all targets
+    A.fx_sprite_hidden = true;                                           // sub_11EE4
     battle_dim_row0_ = true;                                             // 44D6E(1, 28h)
     fx_pal_mix(0x60, 0x100, 0, 0x28);                                    // 30824(0, 28h)
     pal_load_range(0, 256, &battle_master_palette_[0][0]);                // 5F9AE(0, 100h, unk_12824C)
@@ -1084,6 +1085,7 @@ void CombatII::battle_fx_34c48_anim(int unit_index) {
     pal_load_range(0, 256, &battle_master_palette_[0][0]);                // 5F9AE(unk_12824C)
     battle_dim_row0_ = false;                                            // 44D6E(0)
     battle_highlight_clear();                                            // 44D75
+    A.fx_sprite_hidden = false;                                          // sub_11E04
     if (battle_trace_)
         fprintf(stderr, "COMBAT: 34C48 unit=%d dir=%d frames=%d(%d)\n",
                 A.id, dir, (int)magic_frames_.size(), 3 * 24 + 33);
@@ -1113,7 +1115,7 @@ void CombatII::battle_fx_34c48_anim(int unit_index) {
 //          1FFCD, 103A0 (weather tick on)
 //   Returns 1 (4C98A proceeds with 301BB and consumption).
 //
-//   Port approximation: 11EE4/11E04 tile occupation is modelled by units_ and skipped.
+//   Port note: 11EE4/11E04 become fx_sprite_hidden (the CC998 occupancy derived from it).
 //   5F42D/5F4AF are transparent RLE blits of the D66A8 sprite, equivalent to two
 //   blit_nc2_frame calls at x-4 / x+4.
 void CombatII::battle_fx_32589_anim(int unit_index, int target_index) {
@@ -1127,6 +1129,13 @@ void CombatII::battle_fx_32589_anim(int unit_index, int target_index) {
         return;
     }
     weather_tick_enabled_ = false;                                      // 103A8
+    // (2) sub_11EE4 releases both the caster and the target tile. The port's CC998 model
+    // skips a unit with fx_sprite_hidden, so the map pass no longer draws either of them
+    // (the effect frames below still redraw the target through 12F2A). The original
+    // restores only the caster (11E04 at 47370) and leaves the target released because
+    // 1DB1D kills it.
+    A.fx_sprite_hidden = true;                                          // 11EE4(caster)
+    units_[(size_t)target_index].fx_sprite_hidden = true;                // 11EE4(target)
     const int nframes = (int)magic_frames_.size();
     // (3) Facing block: south(0)=0, north(2)=0Ah, east(3)=14h, west(1)=1Eh.
     static const int kDirBase[4] = {0x00, 0x1E, 0x0A, 0x14};
@@ -1204,6 +1213,13 @@ void CombatII::battle_fx_32589_anim(int unit_index, int target_index) {
     //      1FFCD, 103A0
     battle_dim_row0_ = false;                                            // 44D6E(0, 100h)
     pal_load_range(0, 256, &battle_master_palette_[0][0]);               // 5F9AE(unk_12824C)
+    A.fx_sprite_hidden = false;                                          // 11E04 (caster only)
+    // The original leaves the target released and 1DB1D still animates it because 44DCC
+    // draws the dword_F9F08 unit pointers directly. The port's 44DCC replays draw entries
+    // built by the map pass, which skips fx_sprite_hidden units, so clear the target flag
+    // before the death animation (this also avoids a stale marker on a stored-[77h] revive).
+    if (target_index >= 0 && (size_t)target_index < units_.size())
+        units_[(size_t)target_index].fx_sprite_hidden = false;
     if (target_index >= 0 && (size_t)target_index < units_.size() && units_[(size_t)target_index].active)
         play_unit_death(target_index, unit_index);                       // 1DB1D ([48h] = 0)
     battle_nsp_release();                                                // 1FFCD
@@ -1257,6 +1273,7 @@ bool CombatII::battle_fx_32bcb_anim(int unit_index) {
     weather_tick_enabled_ = false;                                         // 103A8
     const int8_t saved_facing = A.facing;                                  // save [63h]
     A.facing = 0;                                                          // [63h] = 0
+    A.fx_sprite_hidden = true;                                             // sub_11EE4
     const int cnt = (int)battle_target_list_.size();                       // 0xF0B9E
     for (int ti : battle_target_list_) battle_highlight_add(ti);           // 44D89 all targets
     battle_dim_row0_ = true;                                               // 44D6E(1, 28h)
@@ -1279,9 +1296,9 @@ bool CombatII::battle_fx_32bcb_anim(int unit_index) {
     std::vector<uint8_t> p_steps(kSlots, 0);                               // var_154 sub-step
     std::vector<uint16_t> p_speed(kSlots, 0);                              // var_208 angle (degrees)
     std::vector<float> p_x(kSlots), p_y(kSlots);                           // var_4D8 / var_5C8
-    // 33E06 keeps a per-particle 100-byte x/y history (50 words each). var_118 is the
-    // visible trail length and grows to 0x31; the port keeps the same newest-first ring.
-    constexpr int kTrailCap = 0x31;
+    // 33E06 keeps a per-particle 100-byte x/y history (50 words each, indices 0..31h).
+    // The visible trail length stops at 0x31 and every step writes [0] before shifting.
+    constexpr int kTrailCap = 0x32;
     struct IceTrail {
         std::array<int16_t, kTrailCap> x{};
         std::array<int16_t, kTrailCap> y{};
@@ -1346,13 +1363,21 @@ bool CombatII::battle_fx_32bcb_anim(int unit_index) {
         }
         battle_fx_flush();                                                 // 5F29D above the dim, below 12F2A
     };
-    // 33E06: a live particle advances var_154 steps along var_208 degrees and stores each
-    // rounded position in its newest-first trail. The original draws the stored array, not
-    // just the current head; the colour is 18h and rises at si%10 == 4 (max 1Fh).
+    // 33E06: a live particle advances var_154 steps along var_208 degrees. Every step
+    // stores the truncated position in the newest-first history (loc_340C7: write [0], then
+    // shift [len-1..0] to [len..1], len = min(len+1, 31h)), so the head of the history is
+    // duplicated ([Pn, Pn, Pn-1, ...]). Drawing happens only on the last step (j == steps-1)
+    // and uses the history from before the update: first the 3x3 18h head at the current
+    // position, then si = 0..len-1 (si <= 10h a 5-pixel plus, otherwise one pixel, colour
+    // 18h+ramp with ramp++ every si%10 == 4, clamped to 7).
     auto ice_trail = [&]() {
         if (!ice_active) return;
         uint8_t* buf = video_.get_backbuffer();
         if (!buf) return;
+        auto put = [&](int x, int y, uint8_t col) {
+            if (x >= 0 && x < SCREEN_W && y >= 0 && y < SCREEN_H)
+                buf[(size_t)y * SCREEN_W + (size_t)x] = col;
+        };
         for (int i = 0; i < kSlots; ++i) {
             if (p_alive[(size_t)i] != 1) continue;
             const int steps = p_steps[(size_t)i];
@@ -1360,39 +1385,43 @@ bool CombatII::battle_fx_32bcb_anim(int unit_index) {
             const float ca = (float)std::cos(ang);
             const float sa = (float)std::sin(ang);
             IceTrail& tr = p_trail[(size_t)i];
-            int last_px = 0, last_py = 0;
+            int last_px = (int)p_x[(size_t)i];
+            int last_py = (int)p_y[(size_t)i];
             for (int k = 0; k < steps; ++k) {
                 p_x[(size_t)i] += ca;
                 p_y[(size_t)i] += sa;
-                const int px = (int)std::lround(p_x[(size_t)i]);
-                const int py = (int)std::lround(p_y[(size_t)i]);
+                // __CHP + fistp truncates toward zero; this is not lround.
+                const int px = (int)p_x[(size_t)i];
+                const int py = (int)p_y[(size_t)i];
                 last_px = px; last_py = py;
-                const int keep = std::min(tr.len, kTrailCap - 1);
-                for (int j = keep; j > 0; --j) {
-                    tr.x[(size_t)j] = tr.x[(size_t)(j - 1)];
-                    tr.y[(size_t)j] = tr.y[(size_t)(j - 1)];
+                if (k == steps - 1) {
+                    for (int dy = -1; dy <= 1; ++dy)
+                        for (int dx = -1; dx <= 1; ++dx) put(px + dx, py + dy, 0x18);
+                    int ramp = 0;
+                    for (int si = 0; si < tr.len; ++si) {
+                        if (si % 10 == 4) ++ramp;
+                        if (ramp > 7) ramp = 7;
+                        const uint8_t col = (uint8_t)(0x18 + ramp);
+                        const int hx = tr.x[(size_t)si];
+                        const int hy = tr.y[(size_t)si];
+                        if (si <= 0x10) {
+                            put(hx, hy, col); put(hx + 1, hy, col); put(hx - 1, hy, col);
+                            put(hx, hy - 1, col); put(hx, hy + 1, col);
+                        } else {
+                            put(hx, hy, col);
+                        }
+                    }
                 }
+                // loc_340C7: [0] = current, then shift the old entries up, then ++len.
                 tr.x[0] = (int16_t)px;
                 tr.y[0] = (int16_t)py;
-                if (tr.len < kTrailCap) ++tr.len;
-            }
-            auto put = [&](int x, int y, uint8_t col) {
-                if (x >= 0 && x < SCREEN_W && y >= 0 && y < SCREEN_H)
-                    buf[(size_t)y * SCREEN_W + (size_t)x] = col;
-            };
-            for (int si = 0; si < tr.len; ++si) {
-                const int band = (si >= 4) ? 1 + (si - 4) / 10 : 0;
-                const uint8_t col = (uint8_t)(0x18 + std::min(band, 7));
-                const int px = tr.x[(size_t)si];
-                const int py = tr.y[(size_t)si];
-                if (si <= 0x10) {
-                    put(px, py, col); put(px + 1, py, col); put(px - 1, py, col);
-                    put(px, py - 1, col); put(px, py + 1, col);
-                } else {
-                    put(px, py, col);
+                for (int j = tr.len - 1; j >= 0; --j) {
+                    tr.x[(size_t)(j + 1)] = tr.x[(size_t)j];
+                    tr.y[(size_t)(j + 1)] = tr.y[(size_t)j];
                 }
+                if (tr.len < 0x31) ++tr.len;
             }
-            // Off-screen particles die; 33E06 compares the last rounded position with
+            // Off-screen particles die; 33E06 compares the last truncated position with
             // x -50..370 and y -50..250 (flt_77A68/6C/70).
             if (last_px < -50 || last_px > 370 ||
                 last_py < -50 || last_py > 250)
@@ -1411,8 +1440,9 @@ bool CombatII::battle_fx_32bcb_anim(int unit_index) {
             const int f = p_alive[(size_t)b];
             if (f < nframes) {
                 const MagicFxFrame& e = magic_frames_[(size_t)f];
-                fx_blit_nsp_5ee51(f, (int)std::lround(p_x[(size_t)b] + e.xo),
-                                  (int)std::lround(p_y[(size_t)b] + e.yo));
+                // 33A2D: fild [entry+4] / fadd x / __CHP / fistp truncates toward zero.
+                fx_blit_nsp_5ee51(f, (int)(p_x[(size_t)b] + e.xo),
+                                  (int)(p_y[(size_t)b] + e.yo));
             }
             for (int ti = 0; ti < cnt && ti < (int)battle_target_list_.size(); ++ti) {
                 if (p_frame[(size_t)ti] <= 0 || p_frame[(size_t)ti] >= 0x64) continue;
@@ -1647,6 +1677,7 @@ bool CombatII::battle_fx_32bcb_anim(int unit_index) {
     pal_load_range(0, 256, &battle_master_palette_[0][0]);                 // 5F9AE(0, unk_12824C)
     battle_dim_row0_ = false;                                              // 44D6E(0)
     A.anim_frame = 4;                                                      // [64h] = 4 (pose 0)
+    A.fx_sprite_hidden = false;                                            // sub_11E04
     A.facing = saved_facing;                                               // restore [63h]
     for (int ti : battle_target_list_) {                                  // 12124 x CNT
         if (ti >= 0 && (size_t)ti < units_.size()) reset_unit_pose(units_[(size_t)ti]);
@@ -1697,6 +1728,7 @@ void CombatII::battle_fx_367ee_anim(int unit_index) {
     weather_tick_enabled_ = false;                                        // 103A8
     const int8_t saved_facing = A.facing;                                 // save [63h]
     A.facing = 0;
+    A.fx_sprite_hidden = true;                                            // sub_11EE4
     for (int ti : battle_target_list_) battle_highlight_add(ti);          // 44D89
     game_timer_set(8);                                                    // 1033B(8)
     const int ax0 = (A.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X;
@@ -1741,14 +1773,15 @@ void CombatII::battle_fx_367ee_anim(int unit_index) {
                     s.x += kAx[g]; s.y += kAy[g];
                     sfx(0x34);                                             // 4F4CD(34h)
                 }
-                if (nframes > 0) battle_fx_blit(0, (int)std::lround(s.x), (int)std::lround(s.y));
+                // sub_36531: __CHP + fistp truncates toward zero.
+                if (nframes > 0) battle_fx_blit(0, (int)s.x, (int)s.y);
                 continue;
             }
             const int base = kGroupBase[g] * 4;
             const int idx = (s.life > 7) ? (base + 0x0B) : (base + 0x13 - s.life);
             if (idx < 0 || idx >= nframes) continue;
             const MagicFxFrame& e = magic_frames_[(size_t)idx];
-            battle_fx_blit(idx, (int)std::lround(s.x + e.xo), (int)std::lround(s.y + e.yo));
+            battle_fx_blit(idx, (int)(s.x + e.xo), (int)(s.y + e.yo));
         }
     };
     // (1) 4 frames + (2) 4 frames
@@ -1857,6 +1890,7 @@ void CombatII::battle_fx_367ee_anim(int unit_index) {
     game_timer_set(0x14);                                                  // 1033B(14h)
     frame(); gblit(); ring(0, si, di); present();                          // F0DAC = F0DAA[0]
     battle_highlight_clear();                                             // 44D75
+    A.fx_sprite_hidden = false;                                           // sub_11E04
     A.facing = saved_facing;                                              // restore [63h]
     for (int ti : battle_target_list_) {                                  // 12124
         if (ti >= 0 && (size_t)ti < units_.size()) reset_unit_pose(units_[(size_t)ti]);

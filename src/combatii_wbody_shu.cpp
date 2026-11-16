@@ -108,6 +108,7 @@ int CombatII::battle_fx_377a6_anim(int unit_index) {
     const int block = (facing == 1 || facing == 3) ? 0 : 0x10;           // mov ecx,0/10h
     int ax = (A.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X + 0x0C; // 10971+0Ch
     int ay = (A.y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y - 2;    // 10988-2
+    A.fx_sprite_hidden = true;                                           // sub_11EE4
     for (int ti : targets) {                                             // sub_1214F
         if (ti < 0 || (size_t)ti >= units_.size()) continue;
         auto& T = units_[(size_t)ti];
@@ -204,6 +205,7 @@ int CombatII::battle_fx_377a6_anim(int unit_index) {
     battle_dim_row0_ = false;                                            // sub_44D6E(0)
     battle_fx_commit();                                                  // sub_5E9E8
     wait_game_tick();                                                    // sub_499E4
+    A.fx_sprite_hidden = false;                                          // sub_11E04
     if (battle_trace_)
         fprintf(stderr, "COMBAT: 377A6 unit=%d facing=%d block=%02X targets=%zu frames=%d\n",
                 A.id, facing, block, targets.size(), nframes);
