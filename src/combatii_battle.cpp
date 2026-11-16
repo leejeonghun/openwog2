@@ -9686,8 +9686,15 @@ void CombatII::battle_fx_blit_tinted(int frame, int x, int y, int tint_pct,
     MagicFxDraw d{frame, x, y, tint_pct, 0, 0}; // sub_5F305
     d.tint_limited = true;
     d.tint_mode1 = mode1;
-    for (int c : colors)
-        if (c >= 0 && c < 256) d.tint_mask[(size_t)(c >> 6)] |= 1ull << (c & 63);
+    int n = 0;
+    bool order_ok = true;
+    for (int c : colors) {
+        if (c < 0 || c >= 256) continue;
+        d.tint_mask[(size_t)(c >> 6)] |= 1ull << (c & 63);
+        if (n < (int)d.tint_order.size()) d.tint_order[(size_t)n++] = (uint8_t)c;
+        else order_ok = false;
+    }
+    d.tint_count = order_ok ? (uint8_t)n : 0;
     magic_fx_draws_.push_back(d);
 }
 
@@ -9702,8 +9709,15 @@ void CombatII::battle_fx_blit_tinted_unclipped(int frame, int x, int y, int tint
     MagicFxDraw d{frame, x, y, tint_pct, 0, 0, false, true}; // sub_5F29D
     d.tint_limited = true;
     d.tint_mode1 = mode1;
-    for (int c : colors)
-        if (c >= 0 && c < 256) d.tint_mask[(size_t)(c >> 6)] |= 1ull << (c & 63);
+    int n = 0;
+    bool order_ok = true;
+    for (int c : colors) {
+        if (c < 0 || c >= 256) continue;
+        d.tint_mask[(size_t)(c >> 6)] |= 1ull << (c & 63);
+        if (n < (int)d.tint_order.size()) d.tint_order[(size_t)n++] = (uint8_t)c;
+        else order_ok = false;
+    }
+    d.tint_count = order_ok ? (uint8_t)n : 0;
     magic_fx_draws_.push_back(d);
 }
 
@@ -9761,8 +9775,11 @@ void CombatII::battle_fx_present() {
 //   must skip the lookup for every colour outside that list.
 //   `mode1` = false is the fireblad exception: sub_5637D installs sub_609F9, builds one 61147
 //   page and switches back, so that page must not use sub_60B06 or touch byte_128571.
+//   `order`/`order_count` carry sub_611AA's colour list: all pages are built in that order
+//   before the pixel loop, so the shared state advances exactly as the original's 611AA call.
 void CombatII::blit_frame_tinted(int x, int y, const MagicFxFrame& fr, int tint_pct, bool clip,
-                                 const std::array<uint64_t, 4>* tint_mask, bool mode1) {
+                                 const std::array<uint64_t, 4>* tint_mask, bool mode1,
+                                 const uint8_t* order, int order_count) {
     if (fr.flat.empty() || fr.w <= 0 || fr.h <= 0) return;
     uint8_t* dst = video_.get_backbuffer();
     if (!dst) return;
@@ -9783,6 +9800,32 @@ void CombatII::blit_frame_tinted(int x, int y, const MagicFxFrame& fr, int tint_
     ++cache_gen;
 
     const int arg = std::max(0, std::min(100, tint_pct));   // 611AA ebx
+    auto tint_key = [&](uint8_t c) -> uint32_t {
+        return ((uint32_t)c << 8) | (uint32_t)arg | (mode1 ? 0x10000u : 0u);
+    };
+    // sub_611AA builds every listed page in list order, then 5F305/5F29D draws pixels without
+    // touching the generator. Reproduce that order here: a complete cached page replays the
+    // value it ended on, while a page that inherited byte_128571 is rebuilt from the value the
+    // preceding page left. The pixel loop below must not advance the global again.
+    if (order && order_count > 0) {
+        for (int k = 0; k < order_count; ++k) {
+            const uint8_t c = order[k];
+            const uint32_t key = tint_key(c);
+            auto it = cache.find(key);
+            if (it == cache.end() || (mode1 && it->second.order_dependent)) {
+                std::vector<uint8_t> lut(256);
+                const bool complete = build_shade_row_original(battle_master_palette_, c, arg,
+                                                               lut.data(), mode1);
+                if (it == cache.end()) it = cache.emplace(key, TintLut{}).first;
+                it->second.lut = std::move(lut);
+                it->second.order_dependent = !complete;
+                it->second.gen = cache_gen;
+            } else if (mode1) {
+                shade_mode1_replay_last(it->second.lut[255]);
+            }
+        }
+    }
+
     const long base = (long)y * SCREEN_W + x;               // sub_5EB00 destination
     const long limit = (long)SCREEN_W * SCREEN_H;
     for (int row = 0; row < fr.h; ++row) {
@@ -9807,8 +9850,7 @@ void CombatII::blit_frame_tinted(int x, int y, const MagicFxFrame& fr, int tint_
                 dst[(size_t)off] = px;                               // no LUT: source colour
                 continue;
             }
-            const uint32_t key = ((uint32_t)px << 8) | (uint32_t)arg |
-                                 (mode1 ? 0x10000u : 0u);
+            const uint32_t key = tint_key(px);
             auto it = cache.find(key);
             if (it == cache.end() ||
                 (it->second.order_dependent && it->second.gen != cache_gen)) {
@@ -9822,9 +9864,6 @@ void CombatII::blit_frame_tinted(int x, int y, const MagicFxFrame& fr, int tint_
                 it->second.order_dependent = !complete;
                 it->second.gen = cache_gen;
             }
-            // The original rebuilds the row on every 6106C call; a complete row ends on
-            // out[255], so replay that value when the cached row is reused.
-            if (mode1) shade_mode1_replay_last(it->second.lut[255]);
             dst[(size_t)off] = it->second.lut[dst[(size_t)off]];
         }
     }
@@ -9871,7 +9910,9 @@ void CombatII::render_magic_effect_layer() {
         } else {
             blit_frame_tinted(d.x, d.y, fr, d.tint_pct, !d.unclipped,
                               d.tint_limited ? &d.tint_mask : nullptr,
-                              d.tint_mode1);                                 // sub_5F305 / 5F29D
+                              d.tint_mode1,
+                              d.tint_count ? d.tint_order.data() : nullptr,
+                              d.tint_count);                                 // sub_5F305 / 5F29D
         }
     }
     magic_fx_draws_.clear();

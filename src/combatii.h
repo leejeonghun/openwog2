@@ -2247,10 +2247,12 @@ private:
     //   silhouette >= 0 selects sub_5F093: every non-0FFh source pixel becomes that colour.
     //   tint_mask/tint_limited mirror sub_611AA's colour list: a source colour without a LUT
     //   is copied unchanged by sub_5F29D/sub_5F305 instead of being shaded.
+    //   tint_order/tint_count keep that list's order; the blit builds those pages in order
+    //   before touching pixels so the shared mode-1 state advances exactly like sub_611AA.
     //   tint_mode1 = false only for fireblad's 61147 page: sub_5637D builds it while
     //   sub_61011(0) is installed, then switches back to sub_60B06.
     //   redraw_unit >= 0 queues the 12F2A caster redraw between earlier and later sprites.
-    struct MagicFxDraw { int frame; int x, y; int tint_pct; int dst_w, dst_h; bool expand_only = false; bool unclipped = false; bool clip319 = false; bool shrink_only = false; int silhouette = -1; std::array<uint64_t, 4> tint_mask{}; bool tint_limited = false; int redraw_unit = -1; bool tint_mode1 = true; };
+    struct MagicFxDraw { int frame; int x, y; int tint_pct; int dst_w, dst_h; bool expand_only = false; bool unclipped = false; bool clip319 = false; bool shrink_only = false; int silhouette = -1; std::array<uint64_t, 4> tint_mask{}; bool tint_limited = false; int redraw_unit = -1; bool tint_mode1 = true; std::array<uint8_t, 32> tint_order{}; uint8_t tint_count = 0; };
     std::vector<MagicFxDraw> magic_fx_draws_;
     // dword_F9F08 + word ptr dword_FA8B6+2: units that sub_44DCC redraws inside 454D5.
     // The original stores raw unit pointers and does not deduplicate (at most 59h entries).
@@ -2291,7 +2293,8 @@ private:
     void blit_frame_tinted(int x, int y, const MagicFxFrame& fr, int tint_pct,
                            bool clip = true,
                            const std::array<uint64_t, 4>* tint_mask = nullptr,
-                           bool mode1 = true); // sub_5F305 (clip) / sub_5F29D (no clip)
+                           bool mode1 = true,
+                           const uint8_t* order = nullptr, int order_count = 0); // sub_5F305 (clip) / sub_5F29D (no clip)
     int  battle_fx_frame_count() const { return (int)magic_frames_.size(); }
     bool battle_fx_loaded() const { return !magic_frames_.empty(); }
     // ---- Individual drivers (defined in their own .cpp; arguments are caster index, target tile
