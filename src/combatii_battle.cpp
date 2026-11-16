@@ -9681,10 +9681,11 @@ void CombatII::battle_fx_blit_tinted(int frame, int x, int y, int tint_pct) {
 }
 
 void CombatII::battle_fx_blit_tinted(int frame, int x, int y, int tint_pct,
-                                     std::initializer_list<int> colors) {
+                                     std::initializer_list<int> colors, bool mode1) {
     if (frame < 0 || (size_t)frame >= magic_frames_.size()) return;
     MagicFxDraw d{frame, x, y, tint_pct, 0, 0}; // sub_5F305
     d.tint_limited = true;
+    d.tint_mode1 = mode1;
     for (int c : colors)
         if (c >= 0 && c < 256) d.tint_mask[(size_t)(c >> 6)] |= 1ull << (c & 63);
     magic_fx_draws_.push_back(d);
@@ -9696,10 +9697,11 @@ void CombatII::battle_fx_blit_tinted_unclipped(int frame, int x, int y, int tint
 }
 
 void CombatII::battle_fx_blit_tinted_unclipped(int frame, int x, int y, int tint_pct,
-                                               std::initializer_list<int> colors) {
+                                               std::initializer_list<int> colors, bool mode1) {
     if (frame < 0 || (size_t)frame >= magic_frames_.size()) return;
     MagicFxDraw d{frame, x, y, tint_pct, 0, 0, false, true}; // sub_5F29D
     d.tint_limited = true;
+    d.tint_mode1 = mode1;
     for (int c : colors)
         if (c >= 0 && c < 256) d.tint_mask[(size_t)(c >> 6)] |= 1ull << (c & 63);
     magic_fx_draws_.push_back(d);
@@ -9747,33 +9749,40 @@ void CombatII::battle_fx_present() {
 //   through a colour LUT (dword_12764C[source colour]) instead of being copied. sub_611AA
 //   builds that LUT once per source colour:
 //     effect colour = sub_6098B(source) = RGB(source) * shade / 100  (shade = 100 - ebx)
-//     LUT[dest colour] = sub_609F9: nearest palette entry to
-//                        RGB(dest)*alpha/100 + effect colour (L1 distance, lowest error
-//                        wins, black on failure)
-//   611AA/6098B/609F9: the argument is the effect-colour weight (ebx). 6098B multiplies the
-//   source colour by it, 609F9 weights the destination by (100 - it) and adds 9 to each
-//   channel. Both sums are stored as bytes, so they wrap modulo 256 exactly like `mov [var],
-//   al`. The nearest palette entry is chosen by L1 distance, first match wins.
+//     LUT[dest colour] = dword_12854C: RGB(dest)*alpha/100 + effect colour + 9, matched against
+//                        the master palette. sub_55B59 installed sub_60B06 (mode 1) here, so
+//                        this is not the sub_609F9 nearest match used for dialogue rows 0/1.
+//   611AA/6098B: the argument is the effect-colour weight (ebx). 6098B multiplies the source
+//   colour by it, and the generator weights the destination by (100 - it) and adds 9 to each
+//   channel. The target is stored through `al`, so it wraps modulo 256 exactly like
+//   `mov [var], al`.
 //   611AA only allocates LUT pages for the colours in its list. sub_5F29D/sub_5F305 test
 //   dword_12764C[source] and copy the source byte unchanged when it is NULL, so tint_mask
 //   must skip the lookup for every colour outside that list.
+//   `mode1` = false is the fireblad exception: sub_5637D installs sub_609F9, builds one 61147
+//   page and switches back, so that page must not use sub_60B06 or touch byte_128571.
 void CombatII::blit_frame_tinted(int x, int y, const MagicFxFrame& fr, int tint_pct, bool clip,
-                                 const std::array<uint64_t, 4>* tint_mask) {
+                                 const std::array<uint64_t, 4>* tint_mask, bool mode1) {
     if (fr.flat.empty() || fr.w <= 0 || fr.h <= 0) return;
     uint8_t* dst = video_.get_backbuffer();
     if (!dst) return;
-    // Drop the cache when the weather- or time-adjusted master palette changes.
-    static std::unordered_map<uint32_t, std::vector<uint8_t>> cache;
+    // Drop the cache when the weather- or time-adjusted master palette changes. A page that
+    // inherited byte_128571 (no mode-1 candidate) depends on the shared global, so it is
+    // rebuilt once per call instead of keeping the value from its first build. Mode is part of
+    // the key because fireblad's 61147 page is built while sub_609F9 is installed.
+    struct TintLut { std::vector<uint8_t> lut; bool order_dependent = false; uint32_t gen = 0; };
+    static std::unordered_map<uint32_t, TintLut> cache;
     static uint32_t cache_pal = 0;
+    static uint32_t cache_gen = 0;
     uint32_t pal_hash = 2166136261u;
     for (int i = 0; i < 256; ++i)
         pal_hash = (pal_hash ^ (uint32_t)(battle_master_palette_[i][0] |
                                           (battle_master_palette_[i][1] << 8) |
                                           (battle_master_palette_[i][2] << 16))) * 16777619u;
     if (pal_hash != cache_pal) { cache.clear(); cache_pal = pal_hash; }
+    ++cache_gen;
 
     const int arg = std::max(0, std::min(100, tint_pct));   // 611AA ebx
-    const int dest_weight = 100 - arg;                      // dword_128558
     const long base = (long)y * SCREEN_W + x;               // sub_5EB00 destination
     const long limit = (long)SCREEN_W * SCREEN_H;
     for (int row = 0; row < fr.h; ++row) {
@@ -9798,32 +9807,25 @@ void CombatII::blit_frame_tinted(int x, int y, const MagicFxFrame& fr, int tint_
                 dst[(size_t)off] = px;                               // no LUT: source colour
                 continue;
             }
-            const uint32_t key = ((uint32_t)px << 8) | (uint32_t)arg;
+            const uint32_t key = ((uint32_t)px << 8) | (uint32_t)arg |
+                                 (mode1 ? 0x10000u : 0u);
             auto it = cache.find(key);
-            if (it == cache.end()) {
-                // 6098B: effect colour = master palette[px] * arg%.
-                const int er = battle_master_palette_[px][0] * arg / 100;
-                const int eg = battle_master_palette_[px][1] * arg / 100;
-                const int eb = battle_master_palette_[px][2] * arg / 100;
+            if (it == cache.end() ||
+                (it->second.order_dependent && it->second.gen != cache_gen)) {
                 std::vector<uint8_t> lut(256);
-                for (int d = 0; d < 256; ++d) {
-                    // 609F9: master palette[d] * (100-arg)% + effect + 9, stored through al.
-                    const int r = (uint8_t)(battle_master_palette_[d][0] * dest_weight / 100 + er + 9);
-                    const int g = (uint8_t)(battle_master_palette_[d][1] * dest_weight / 100 + eg + 9);
-                    const int b = (uint8_t)(battle_master_palette_[d][2] * dest_weight / 100 + eb + 9);
-                    int best = 0, best_d = 0x7FFFFFFF;
-                    for (int c = 0; c < 256; ++c) {
-                        const int dr = std::abs(r - (int)battle_master_palette_[c][0]);
-                        const int dg = std::abs(g - (int)battle_master_palette_[c][1]);
-                        const int db = std::abs(b - (int)battle_master_palette_[c][2]);
-                        const int dist = dr + dg + db;              // L1 (12824C sums the 3 deltas)
-                        if (dist < best_d) { best_d = dist; best = c; if (!dist) break; }
-                    }
-                    lut[(size_t)d] = (uint8_t)best;
-                }
-                it = cache.emplace(key, std::move(lut)).first;
+                // 611AA calls 6098B(px) and then dword_12854C for every destination entry;
+                // after sub_55B59 that pointer is sub_60B06 (mode 1).
+                const bool complete = build_shade_row_original(battle_master_palette_, px, arg,
+                                                               lut.data(), mode1);
+                if (it == cache.end()) it = cache.emplace(key, TintLut{}).first;
+                it->second.lut = std::move(lut);
+                it->second.order_dependent = !complete;
+                it->second.gen = cache_gen;
             }
-            dst[(size_t)off] = it->second[dst[(size_t)off]];
+            // The original rebuilds the row on every 6106C call; a complete row ends on
+            // out[255], so replay that value when the cached row is reused.
+            if (mode1) shade_mode1_replay_last(it->second.lut[255]);
+            dst[(size_t)off] = it->second.lut[dst[(size_t)off]];
         }
     }
 }
@@ -9868,7 +9870,8 @@ void CombatII::render_magic_effect_layer() {
             blit_flat_transparent(d.x, d.y, dbuf.data());                   // sub_5EE51
         } else {
             blit_frame_tinted(d.x, d.y, fr, d.tint_pct, !d.unclipped,
-                              d.tint_limited ? &d.tint_mask : nullptr);       // sub_5F305 / 5F29D
+                              d.tint_limited ? &d.tint_mask : nullptr,
+                              d.tint_mode1);                                 // sub_5F305 / 5F29D
         }
     }
     magic_fx_draws_.clear();

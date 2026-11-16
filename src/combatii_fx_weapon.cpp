@@ -27,8 +27,7 @@
 //   5EECF        save/restore a screen rect   -> the map is redrawn every frame instead
 //   5F945/5FC21/5FD1C/5F9AE  palette snapshot/mix/apply -> fx_pal_mix, palette_set_entry
 //   5ECC7(al)    scanline primitive selector  -> mode 1 (LUT pass) only in 341C7 (9)
-//   6104A/6106C  LUT select/build             -> fx_shade_lut_build, same
-//                                              build_shade_row_original as the dialogue shade
+//   6104A/6106C  LUT select/build             -> fx_shade_lut_build (mode 1, sub_60B06)
 //   5EDDE        filled/LUT rectangle         -> fx_shade_rect
 //   dword_30528 (341C7 (9) rock velocities)   -> kRockVel: word pairs
 //                                              {0,-1} {-1,0} {0,0} {1,0} {-1,1} {1,1} {0,1}
@@ -235,12 +234,15 @@ void CombatII::fx_blit_nsp_5ee51(int frame, int x, int y) {
 //   The original switches the fill primitive to the LUT variant (5ECC7(1) -> 5EE2B),
 //   selects row 3 (6104A(3)) and paints 5EDDE rectangles, so the rectangle passes existing
 //   pixels through the LUT instead of writing a colour. With dword_128558 = 100 - 46h = 1Eh
-//   and effect colour = pal[11h] * 46h / 100, entry[i] is the nearest palette match of
-//   pal[i] * 1Eh / 100 + effect colour + 9. build_shade_row_original matches 6106C exactly.
+//   and effect colour = pal[11h] * 46h / 100, entry[i] is chosen from
+//   pal[i] * 1Eh / 100 + effect colour + 9 by whichever generator sub_61011 installed.
+//   sub_55B59 switched dword_12854C to sub_60B06 (mode 1) before the battle starts, so this
+//   is a mode-1 table, not the 609F9 nearest match used for dialogue rows 0/1.
 void CombatII::fx_shade_lut_build(int color_index, int shade_pct) {
     // The original 6106C reads unk_12824C at build time, so weather and time-of-day changes
     // must be visible in this V-weapon LUT instead of the one-time dialogue snapshot.
-    build_shade_row_original(battle_master_palette_, color_index & 0xFF, shade_pct, fx_shade_lut_);
+    build_shade_row_original(battle_master_palette_, color_index & 0xFF, shade_pct,
+                             fx_shade_lut_, true);
 }
 
 // sub_5EDDE + sub_5EE2B(mode 1): pass every pixel of a rectangle through the LUT.

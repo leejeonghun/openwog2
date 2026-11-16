@@ -370,7 +370,14 @@ inline bool ai_uses_class40dfd_path(int weapon_class_value) {
 // syllable is never split. Defined in combatii_script.cpp.
 std::string log_text(const std::string& raw, size_t max_bytes = 60);
 
-// One row of sub_6106C (sub_6098B + sub_609F9 mode 0), defined in combatii_map.cpp.
-// The `sub_6106C(3, 0x11, 0x46)` call between steps 7 and 8 of 341C7 also builds its table here;
-// when sub_5EDDE runs in mode 1 it recolours the pixels inside the rectangle through it.
-void build_shade_row_original(const uint8_t pal[256][3], int tint, int bl, uint8_t out[256]);
+// One row of sub_6106C (sub_6098B + the generator selected by dword_12854C), defined in
+// combatii_map.cpp. `mode1` selects sub_60B06 (the one sub_55B59 installs with sub_61011(1)
+// after building rows 0/1), otherwise sub_609F9 is used. The `sub_6106C(3, 0x11, 0x46)` call
+// between steps 7 and 8 of 341C7 and the 61147/611AA tint pages run in mode 1.
+// Returns false (mode 1 only) when some destination had no candidate and inherited the shared
+// byte_128571 value, i.e. the row depends on the previous mode-1 build order.
+bool build_shade_row_original(const uint8_t pal[256][3], int tint, int bl, uint8_t out[256],
+                              bool mode1 = false);
+// byte_128571 after a mode-1 row: a complete row always ends on out[255], so a cached row can
+// replay that value instead of regenerating it (the original rebuilds on every 6106C call).
+void shade_mode1_replay_last(uint8_t index);

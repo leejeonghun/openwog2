@@ -124,7 +124,9 @@ int CombatII::battle_fx_2262c(int unit_index, int tx, int ty, int k) {
 }
 
 // sub_5637D(eax=unit, edx=ty, ebx=tx): fireblad.nsp particle vortex.
-//   Prologue: 61011(0) / 61147(1,0x32) / 61011(1) set the weapon palette ramp (not ported).
+//   Prologue: 61011(0) / 61147(1,0x32) / 61011(1) build the source-colour-1 page while
+//   sub_609F9 is installed, then restore sub_60B06; 561F4 draws through that page, so the
+//   port builds it with mode1=false (the only mode-0 tint page outside the dialogue rows).
 //   1FEA4("fireblad.nsp") -> 1124A -> 11DB2/135EB (centre of the occupying unit) -> 1033B(5) ->
 //   56129 (100-slot table) -> 56178(slot 0..19, x=0, y=0, base=14h, cycle=5, state=0).
 //   (1) 30 frames (0..29): {10AEB; 1FFFE(frame = (i % 0Eh) + 6); 12BEE; 454D5; 5E9E8;
@@ -182,8 +184,10 @@ int CombatII::battle_fx_5637d(int unit_index, int tx, int ty, int k) {
     };
     auto draw_561f4 = [&](int f, int x, int y) {            // sub_561F4 -> sub_5F29D
         if (f < 0 || f >= nframes) return;
+        // sub_5637D builds this 61147(1, 32h) page while sub_61011(0) is installed and only
+        // then restores sub_60B06, so this one page is mode 0 (ASM 95171..95177).
         battle_fx_blit_tinted_unclipped(f, x + magic_frames_[(size_t)f].xo,
-                                          y + magic_frames_[(size_t)f].yo, 0x32, {0x01});
+                                          y + magic_frames_[(size_t)f].yo, 0x32, {0x01}, false);
     };
 
     // sub_56129 + 56178: clear the table and seed slots 0..19 as inactive.

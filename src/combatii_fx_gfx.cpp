@@ -206,10 +206,9 @@ void CombatII::pal_crossfade(int start, int end, const uint8_t* from, const uint
 //   with the high word of its var_20 (always 0, so that one never flashes).
 void CombatII::battle_fx_1e565(int mode) {
     if ((int16_t)mode == 0) return;
-    // unk_12824C is the live master palette (weather included); dlg_shade_pal_ is its snapshot
-    // in the port (same reference as the 341C7 tail).
-    if (!dlg_shade_pal_set_) snapshot_dialog_shade_palette();
-    const uint8_t* master = &dlg_shade_pal_[0][0];
+    // sub_1E565 crossfades against unk_12824C itself: the live master palette (weather and
+    // time of day included), not the one-time dialogue shade snapshot.
+    const uint8_t* master = &battle_master_palette_[0][0];
     uint8_t red[256 * 3];
     for (int i = 0; i < 256; ++i) {
         red[i * 3 + 0] = 0x3F;
@@ -240,8 +239,8 @@ static void white_palette_284a3(const uint8_t* master, uint8_t* white) {
 }
 
 void CombatII::battle_fx_white_flash_up(int up_step) {
-    if (!dlg_shade_pal_set_) snapshot_dialog_shade_palette();
-    const uint8_t* master = &dlg_shade_pal_[0][0];
+    // sub_284A3 builds its white from unk_12824F and crossfades against unk_12824C (master).
+    const uint8_t* master = &battle_master_palette_[0][0];
     uint8_t white[256 * 3];
     white_palette_284a3(master, white);
     if (battle_trace_) fprintf(stderr, "COMBAT: white flash up=%d\n", up_step);
@@ -249,8 +248,8 @@ void CombatII::battle_fx_white_flash_up(int up_step) {
 }
 
 void CombatII::battle_fx_white_flash_down(int down_step) {
-    if (!dlg_shade_pal_set_) snapshot_dialog_shade_palette();
-    const uint8_t* master = &dlg_shade_pal_[0][0];
+    // sub_284A3 builds its white from unk_12824F and crossfades against unk_12824C (master).
+    const uint8_t* master = &battle_master_palette_[0][0];
     uint8_t white[256 * 3];
     white_palette_284a3(master, white);
     if (battle_trace_) fprintf(stderr, "COMBAT: white flash down=%d\n", down_step);

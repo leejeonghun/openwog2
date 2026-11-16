@@ -437,31 +437,78 @@ bool CombatII::load_terrain_overlays(const std::string& map_filename) {
 //    sub_5EDDE     : for y1..y2-1 call sub_5EE2B(x1, y, x2-x1) - box dimming
 //    sub_6075A     : midpoint ellipse fill; calls sub_5EE2B on every row
 
-// One row of sub_6106C(eax = row, dx = tint, bl = pct) + sub_6098B + sub_609F9(mode 0).
+// One row of sub_6106C(eax = row, dx = tint, bl = pct): sub_6098B + the table generator held
+// in dword_12854C (installed by sub_61011).
 //   dword_128558 = 100 - bl            (percent of the original color kept)
 //   sub_6098B  : tint component = pal[tint] * bl / 100               (byte_128563/66/65)
-//   sub_609F9  : target = pal[i] * (100-bl) / 100 + tint component + 9 (per channel, 6-bit VGA)
-//                -> the palette index whose |dR|+|dG|+|dB| is **first** minimal (cmp ax,cx; jge = strict <)
+//   target     : pal[i] * (100-bl) / 100 + tint component + 9, per channel; both generators
+//                store it through `al`, so it wraps modulo 256 before the match.
+// Two generators:
+//   mode 0 (sub_609F9): the palette index whose |dR|+|dG|+|dB| is **first** minimal
+//                       (cmp ax,cx; jge = strict <).
+//   mode 1 (sub_60B06): installed by sub_55B59's `sub_61011(1)` after rows 0/1 are built, so
+//                       every later table uses it: 341C7's `6106C(3, 11h, 46h)` between steps
+//                       7 and 8, 58619/59A70, and all 61147/611AA tint pages.
+//                       A candidate must be <= 0x12 **below** the target in every channel
+//                       (unsigned `cmp edx,12h; ja`, so negative deltas fail too).
+//                       score = (sum < 0Fh) ? 1Bh - sum : sum - 1Bh; the lowest score wins and
+//                       a score <= 9 ends the scan. With no candidate at all the result cell
+//                       (byte_128571) keeps its previous value - BSS 0 at startup, shared by
+//                       every mode-1 call and destination index.
 // The dialogue box builds its table in sub_55B59 with `sub_6106C(0, tint=0, bl=0x3C)`:
-// 40% original + 60% black + 9. sub_341C7 also builds a row between steps 7 and 8 with
-// `sub_6106C(3, 11h, 46h)`, so this is shared code.
-void build_shade_row_original(const uint8_t pal[256][3], int tint, int bl, uint8_t out[256]) {
+// 40% original + 60% black + 9, and row 1 with `sub_6106C(1, tint=1, bl=0x1E)`; both happen
+// before the mode switch, so they stay on sub_609F9.
+namespace {
+uint8_t g_shade_mode1_last = 0;   // byte_128571
+} // namespace
+
+bool build_shade_row_original(const uint8_t pal[256][3], int tint, int bl, uint8_t out[256],
+                              bool mode1) {
     const int keep = 100 - bl;
     const int tr = pal[tint][0] * bl / 100;
     const int tg = pal[tint][1] * bl / 100;
     const int tb = pal[tint][2] * bl / 100;
+    bool complete = true;
     for (int i = 0; i < 256; i++) {
-        const int r = pal[i][0] * keep / 100 + tr + 9;
-        const int g = pal[i][1] * keep / 100 + tg + 9;
-        const int b = pal[i][2] * keep / 100 + tb + 9;
-        int best = 0, best_d = 0x7FFF;
-        for (int j = 0; j < 256; j++) {
-            const int d = std::abs(r - pal[j][0]) + std::abs(g - pal[j][1]) + std::abs(b - pal[j][2]);
-            if (d < best_d) { best_d = d; best = j; }
+        const int t[3] = {(pal[i][0] * keep / 100 + tr + 9) & 0xFF,
+                          (pal[i][1] * keep / 100 + tg + 9) & 0xFF,
+                          (pal[i][2] * keep / 100 + tb + 9) & 0xFF};
+        if (!mode1) {
+            int best = 0, best_d = 0x7FFF;
+            for (int j = 0; j < 256; j++) {
+                const int d = std::abs(t[0] - pal[j][0]) + std::abs(t[1] - pal[j][1]) +
+                              std::abs(t[2] - pal[j][2]);
+                if (d < best_d) { best_d = d; best = j; }
+            }
+            out[i] = (uint8_t)best;
+            continue;
         }
-        out[i] = (uint8_t)best;
+        int best = 0x7FFF;
+        bool matched = false;
+        for (int j = 0; j < 256; j++) {
+            const int dr = t[0] - pal[j][0];
+            const int dg = t[1] - pal[j][1];
+            const int db = t[2] - pal[j][2];
+            if (dr < 0 || dr > 0x12) continue;
+            if (dg < 0 || dg > 0x12) continue;
+            if (db < 0 || db > 0x12) continue;
+            const int sum = dr + dg + db;
+            const int m = (sum < 0x0F) ? (0x1B - sum) : (sum - 0x1B);
+            if (m < best) {
+                best = m;
+                matched = true;
+                g_shade_mode1_last = (uint8_t)j;
+                if (m <= 9) break;
+            }
+        }
+        if (!matched) complete = false;   // inherited byte_128571
+        out[i] = g_shade_mode1_last;
     }
+    return !mode1 || complete;
 }
+
+// byte_128571: replay the value a cached mode-1 row ended on (out[255]).
+void shade_mode1_replay_last(uint8_t index) { g_shade_mode1_last = index; }
 
 namespace {
 
