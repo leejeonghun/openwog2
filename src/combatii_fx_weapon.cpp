@@ -1709,7 +1709,8 @@ bool CombatII::battle_fx_32bcb_anim(int unit_index) {
 //   life, then pick one of four NSP frames by slot/5 group (off_34C38 = 1,2,3,8,9,4,5,6):
 //   life >7 -> base*4+0Bh, 7 -> +0Ch, 6 -> +0Dh, 5 -> +0Eh, drawn with 5EE51 plus offsets.
 //   At life 4 the group acceleration (flt_77ACD.., kAx/kAy below) and 4F4CD(34h) apply;
-//   life 1..4 use the static tables F1032/F103E/F104A/F1056 (BSS = 0), i.e. frame 0.
+//   life 4..1 draw F0DAA[54..57] (F1032/F103E/F104A/F1056), each with its own payload and
+//   xo/yo (NANG.NSP records 54..57 are 43x53, 33x59, 18x66 and 6x74).
 //
 // Three equivalences:
 //   - The word dword_BA838 +-1 toggle only changes the 16.16 camera fraction (1/65536 px),
@@ -1759,8 +1760,8 @@ void CombatII::battle_fx_367ee_anim(int unit_index) {
     auto frame = [&]() { battle_fx_world_dim(); };                         // 454B3 + 454D5
     auto present = [&]() { battle_fx_flush(); battle_fx_commit(); wait_game_tick(); }; // 5EE51,5E9E8,499E4
     // sub_36531: move only while life > 4, then decrement life and pick the frame by
-    // life and group, drawing 5EE51(frame, x + [rec+4], y + [rec+6]). Life 1..4 uses the
-    // static tables F1032/F103E/F104A/F1056 (BSS = 0), i.e. frame 0 with no offset.
+    // life and group, drawing 5EE51(frame, x + [rec+4], y + [rec+6]). Life 4..1 use
+    // F0DAA[54..57] (F1032/F103E/F104A/F1056) with their own payload and offsets.
     auto draw_p = [&]() {
         for (int i = 0; i < 40; ++i) {
             PS& s = p[(size_t)i];
@@ -1773,15 +1774,22 @@ void CombatII::battle_fx_367ee_anim(int unit_index) {
                     s.x += kAx[g]; s.y += kAy[g];
                     sfx(0x34);                                             // 4F4CD(34h)
                 }
-                // sub_36531: __CHP + fistp truncates toward zero.
-                if (nframes > 0) battle_fx_blit(0, (int)s.x, (int)s.y);
+                // sub_36531: life 4..1 select F0DAA[54..57]; 5EE51 adds the record's
+                // [+4]/[+6] offsets with fild/fadd (80-bit) and __CHP + fistp truncates
+                // the anchored value. The double sum stays exact for this range.
+                const int idx = 0x36 + (4 - s.life);
+                if (idx < nframes) {
+                    const MagicFxFrame& e = magic_frames_[(size_t)idx];
+                    battle_fx_blit(idx, (int)((double)s.x + e.xo),
+                                   (int)((double)s.y + e.yo));
+                }
                 continue;
             }
             const int base = kGroupBase[g] * 4;
             const int idx = (s.life > 7) ? (base + 0x0B) : (base + 0x13 - s.life);
             if (idx < 0 || idx >= nframes) continue;
             const MagicFxFrame& e = magic_frames_[(size_t)idx];
-            battle_fx_blit(idx, (int)(s.x + e.xo), (int)(s.y + e.yo));
+            battle_fx_blit(idx, (int)((double)s.x + e.xo), (int)((double)s.y + e.yo));
         }
     };
     // (1) 4 frames + (2) 4 frames
