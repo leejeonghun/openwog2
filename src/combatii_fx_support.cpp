@@ -479,10 +479,11 @@ int CombatII::battle_fx_26810(int unit_index, int tx, int ty, int k) {
 // sub_26B1F(eax/edx=caster tile): confuse.nsp confuse (curse) effect.
 //   Tint LUT from 611AA (four-colour table, shade 0x28), 20021("death.rpl"), fade setup with
 //   601E5(0xF0), then 1033B(5, 0x0E) and 48 frames (0x30):
-//     - overlay frame 0 on the target centre with 5F305,
-//     - a second frame = (t/2) for t<10 then fixed at 9 (unk_F0DE6 = table start+9*0Ch),
+//     - overlay frame 0 on the target centre with 1FFFE (plain) plus its xo/yo,
+//     - a second frame = (t/2) for t<9 then fixed at 5 (unk_F0DE6 = table start+5*0Ch)
+//       with 5F305 (tinted) plus its xo/yo,
 //     - for t>19, while (9 - (t-20)/2) is at least 6, draw one extra shaking frame using
-//       499BD(1)+6.
+//       499BD(1)+6 with 1FFFE plus its xo/yo.
 //   602E3 advances the fade (the port does this in the render step); 602BF clears it.
 int CombatII::battle_fx_26b1f(int unit_index, int tx, int ty, int k) {
     (void)k;
@@ -501,15 +502,23 @@ int CombatII::battle_fx_26b1f(int unit_index, int tx, int ty, int k) {
     sfx(0x32);                                                           // sub_4F4CD(0x32)
     const int shade = 0x28;                                              // 611AA(ebx=28h)
     for (int t = 0; t < 0x30 && !should_exit_; ++t) {                    // `cmp cx,30h`
-        if (0 < nframes) battle_fx_blit_tinted(0, cx, cy, shade,
-                                               {0x00, 0x03, 0x05, 0x07}); // dword_1FE70
-        const int f2 = (t < 9) ? (t / 2) : 9;                            // `sar eax,1` -> /2
-        if (f2 < nframes) battle_fx_blit_tinted(f2, cx, cy, shade,
-                                                {0x00, 0x03, 0x05, 0x07});
+        if (0 < nframes) {
+            const MagicFxFrame& fr = magic_frames_[0];
+            battle_fx_blit(0, cx + fr.xo, cy + fr.yo);                   // sub_1FFFE
+        }
+        const int f2 = (t < 9) ? (t / 2) : 5;                            // loc_26BF6: unk_F0DE6
+        if (f2 < nframes) {
+            const MagicFxFrame& fr = magic_frames_[(size_t)f2];
+            battle_fx_blit_tinted(f2, cx + fr.xo, cy + fr.yo, shade,
+                                  {0x00, 0x03, 0x05, 0x07});             // sub_5F305
+        }
         if (t > 0x13) {                                                  // `cmp cx,13h; jle`
             int f3 = 9 - (t - 0x14) / 2;                                 // shaking frame
             if (f3 < 6) f3 = 6 + combat_rand(1);                         // 499BD(1)+6
-            if (f3 < nframes) battle_fx_blit(f3, cx, cy - 4);            // sub_1FFFE
+            if (f3 < nframes) {
+                const MagicFxFrame& fr = magic_frames_[(size_t)f3];
+                battle_fx_blit(f3, cx + fr.xo, cy + fr.yo);              // sub_1FFFE
+            }
         }
         battle_fx_present();
         wait_game_tick();
