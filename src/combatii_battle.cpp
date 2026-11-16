@@ -9670,6 +9670,19 @@ void CombatII::battle_fx_blit(int frame, int x, int y) {
     magic_fx_draws_.push_back(MagicFxDraw{frame, x, y, -1, 0, 0});       // sub_5EE51
 }
 
+// sub_5EDDE: dim pixels already in the backbuffer through the page fx_shade_lut_build built.
+// Queued like a sprite so 454B3's scene is dimmed before later 5EE51/5F29D draws, matching the
+// original call order (58619's particle columns, 59A70's full-screen pass).
+void CombatII::battle_fx_shade_rect(int x0, int y0, int x1, int y1) {
+    MagicFxDraw d{};
+    d.shade_rect = true;
+    d.x = x0;
+    d.y = y0;
+    d.dst_w = x1;
+    d.dst_h = y1;
+    magic_fx_draws_.push_back(d);
+}
+
 void CombatII::battle_fx_blit_clipped(int frame, int x, int y) {
     if (frame < 0 || (size_t)frame >= magic_frames_.size()) return;
     magic_fx_draws_.push_back(MagicFxDraw{frame, x, y, -1, 0, 0, false, false, true}); // sub_5EFB9
@@ -9872,6 +9885,10 @@ void CombatII::blit_frame_tinted(int x, int y, const MagicFxFrame& fr, int tint_
 // sub_5EE51: blit a [w][h]+flat block (0xFF transparent) to the back buffer.
 void CombatII::render_magic_effect_layer() {
     for (const MagicFxDraw& d : magic_fx_draws_) {
+        if (d.shade_rect) {
+            fx_shade_rect(d.x, d.y, d.dst_w, d.dst_h);            // sub_5EDDE
+            continue;
+        }
         if (d.redraw_unit >= 0) {
             battle_draw_unit_now(d.redraw_unit);                 // sub_12F2A marker
             continue;

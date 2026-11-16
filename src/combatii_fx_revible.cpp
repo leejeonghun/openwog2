@@ -58,8 +58,11 @@
 // Deviations from the original:
 //   1. The 611AA tint LUT is handled by battle_fx_blit_tinted_unclipped(pct=50h) (sub_5F29D
 //      does not clip). Palette save/restore (61115/103A8/103A0) is covered by the port.
-//   2. 5ECC7/5EDDE/6104A/6106C (clip, dim, LUT setup) and the 45x screen preparation already
-//      happen in render/present.
+//   2. 6106C(3,31h,32h)/6104A(3) are built explicitly with fx_shade_lut_build, and each
+//      454B3 frame queues the full-screen 5EDDE(0,0,140h,C8h) dim through
+//      battle_fx_shade_rect before its sprites. The original's initial full-screen 5EDDE
+//      is overwritten by the next 454B3 before any 5E9E8, so only the per-frame pass is emitted.
+//      Other clip/LUT selection and the 45x screen preparation happen in render/present.
 //   3. 11EE4/11E04 (occupancy release/restore) are omitted: the port derives occupancy from
 //      the unit tile.
 //   4. 5F517 (solid silhouette) / 5F3FD (unit frame) draw to the canvas rather than the magic
@@ -190,8 +193,10 @@ int CombatII::battle_fx_59a70(int caster_index, int revived_index) {
     for (int pct = 0x0A; pct <= 0x64; pct += 0x0A) apply_pal(0, 0x100, wash, pct);
 
     // ---- (6) 10 frames (light pillar + wash fade) ----
+    fx_shade_lut_build(0x31, 0x32);                                // sub_6106C(3,31h,32h)
     sfx(0x32);                                                     // sub_4F4CD(32h)
     for (int f = 0; f < 0x0A && !should_exit_; ++f) {
+        battle_fx_shade_rect(0, 0, 0x140, 0xC8);                   // 5EDDE(0,0,140h,C8h)
         const int fi = 0x10 + (f & 1);
         if (fi < nframes) {
             const MagicFxFrame& fr = magic_frames_[(size_t)fi];
@@ -212,6 +217,7 @@ int CombatII::battle_fx_59a70(int caster_index, int revived_index) {
     sfx(0x33);                                                     // sub_4F4CD(33h)
     const NC2Frame* unit_frame = nc2_frame_for(A.sprite_type, dir, 0);   // D66A8 (facing, pose 0)
     for (int f = 0; f < 0x24 && !should_exit_; ++f) {
+        battle_fx_shade_rect(0, 0, 0x140, 0xC8);                   // 5EDDE(0,0,140h,C8h)
         const int fi = 0x10 + (f & 1);
         if (fi < nframes) {
             const MagicFxFrame& fr = magic_frames_[(size_t)fi];

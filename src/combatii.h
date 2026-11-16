@@ -662,10 +662,10 @@ private:
     // sub_5EE51 does not clip there; fx_blit_nsp_5ee51 keeps only the 320x200 buffer bound.
     void fx_blit_nsp(int frame, int x, int y);
     void fx_blit_nsp_5ee51(int frame, int x, int y);
-    // sub_6106C: builds a palette LUT page (341C7 uses page 3, colour 11h, brightness 46h).
-    // The original selects a 256-byte row inside dword_128554 by page number; page 3 is used only
-    // by this effect, so the port keeps a single row (6104A(3) selects it, the tail's 5ECC7(0)
-    // clears mode 1).
+    // sub_6106C: builds palette LUT page 3 (341C7 and 58619 use colour 11h, brightness 46h;
+    // 59A70 uses colour 31h, brightness 32h). The original selects a 256-byte row inside
+    // dword_128554 by page number; page 3 is the only battle effect page, so the port keeps a
+    // single row (6104A(3) selects it).
     void fx_shade_lut_build(int color_index, int shade_pct);
     // sub_5EDDE + sub_5EE2B (5ECC7 mode 1): recolour the existing pixels inside a rectangle via the
     // LUT.
@@ -2252,7 +2252,9 @@ private:
     //   tint_mode1 = false only for fireblad's 61147 page: sub_5637D builds it while
     //   sub_61011(0) is installed, then switches back to sub_60B06.
     //   redraw_unit >= 0 queues the 12F2A caster redraw between earlier and later sprites.
-    struct MagicFxDraw { int frame; int x, y; int tint_pct; int dst_w, dst_h; bool expand_only = false; bool unclipped = false; bool clip319 = false; bool shrink_only = false; int silhouette = -1; std::array<uint64_t, 4> tint_mask{}; bool tint_limited = false; int redraw_unit = -1; bool tint_mode1 = true; std::array<uint8_t, 32> tint_order{}; uint8_t tint_count = 0; };
+    //   shade_rect = true queues a 5EDDE LUT rectangle (x/y = top-left, dst_w/dst_h = exclusive
+    //   right/bottom) so it dims the frame 454B3 already drew before later sprites.
+    struct MagicFxDraw { int frame; int x, y; int tint_pct; int dst_w, dst_h; bool expand_only = false; bool unclipped = false; bool clip319 = false; bool shrink_only = false; int silhouette = -1; std::array<uint64_t, 4> tint_mask{}; bool tint_limited = false; int redraw_unit = -1; bool tint_mode1 = true; std::array<uint8_t, 32> tint_order{}; uint8_t tint_count = 0; bool shade_rect = false; };
     std::vector<MagicFxDraw> magic_fx_draws_;
     // dword_F9F08 + word ptr dword_FA8B6+2: units that sub_44DCC redraws inside 454D5.
     // The original stores raw unit pointers and does not deduplicate (at most 59h entries).
@@ -2277,6 +2279,9 @@ private:
     // battle_fx_blit_tinted_unclipped: sub_5F29D (same LUT, but walks the framebuffer stride
     // without the 13Fh/C7h clip, like the original).
     void battle_fx_blit(int frame, int x, int y);
+    // sub_5EDDE: queue a page-3 LUT rectangle so it dims the frame 454B3 already drew before
+    // sprites queued later. fx_shade_lut_build must have built the page first.
+    void battle_fx_shade_rect(int x0, int y0, int x1, int y1);
     void battle_fx_blit_clipped(int frame, int x, int y);
     void battle_fx_blit_tinted(int frame, int x, int y, int tint_pct);
     void battle_fx_blit_tinted(int frame, int x, int y, int tint_pct,

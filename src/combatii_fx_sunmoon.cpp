@@ -22,9 +22,10 @@
 //     magic_frames_ holds the same table in the same order and stride, so the port uses frame
 //     numbers instead: unk_F0DC2/F0DCE/F0DDA = frames 2/3/4, dword_F0DB2/F0DBE = frames 0/1,
 //     unk_F0DAA+0x48 = frame 6. xo/yo are added by the caller, as in the original [+2]/[+4].
-//   - 611AA/6106C/6104A (tint LUT setup and selection) are folded into blit_frame_tinted,
-//     which caches the same computation, so the port skips LUT selection and passes the
-//     original shade (0x3C/0x46) as tint_pct.
+//   - 611AA page setup for 5A267/5A566 is folded into blit_frame_tinted, which caches the same
+//     computation, so those drivers pass the original shade (0x3C) as tint_pct. 58619's
+//     6106C(3,11h,46h) is built explicitly with fx_shade_lut_build, and its 5EDDE columns are
+//     queued with battle_fx_shade_rect before the particle sprites.
 //   - 61115/103A0 (palette LUT restore) has no counterpart here; each driver restores the
 //     palette with pal_shift_fade(0) / pal_scale_range(100) at the end.
 //   - 11EE4/11E04 (occupancy release and rewrite) are dropped because the port models
@@ -59,10 +60,13 @@ inline void sunmoon_anchor(const CombatUnitPlacement& u, int cam_x, int cam_y, i
 //       5FA2C brings the palette back 0% -> 100% -> 1033B(5) -> 5E9E8 -> 5 ticks.
 //   (4) 10 falling particle slots (var_34[]), one every 3rd frame up to frame 100, life 0x12,
 //       spawned at x = rand()%0x12C+0x0A, y = rand()%0x8C+0x32 with sfx(0x33).
+//       Before the loop: 6106C(3,11h,46h) builds page 3 (6104A(3) selects it).
 //   (5) Main loop: shakes camera fine Y by +-1 (var_14) and particle y by +-2 (var_18).
-//       life > 0x0F draws frame 2 at x-5+{1,4,7}, y+2 (3 sprites); 0x0A < life <= 0x0F draws
-//       frame 3 in the same layout; life <= 0x0A draws frame 4 at x-5+life/2. At life 0 the
-//       done counter (var_4) advances. The loop ends after frame 100 when all 10 are done.
+//       Each particle first dims its vertical trail through that LUT: x = px-5..px+5 while
+//       life > 0x0A, x = px-life/2..px+life/2 while 0 < life <= 0x0A, both y = 0..py.
+//       life > 0x0F then draws frame 2 at x-5+{1,4,7}, y+2 (3 sprites); 0x0A < life <= 0x0F
+//       draws frame 3 in the same layout; life <= 0x0A draws frame 4 at x-5+life/2. At life 0
+//       the done counter (var_4) advances. The loop ends after frame 100 when all 10 are done.
 //   (6) dword_BA838 = 0 -> repeat the (2) fade (darken) -> 454B3+5E9E8 -> brighten -> 61115 ->
 //       12124 restores each pose -> 103A0 -> 1FFCD.
 int CombatII::battle_fx_58619(int unit_index, int tx, int ty, int k) {
@@ -119,6 +123,8 @@ int CombatII::battle_fx_58619(int unit_index, int tx, int ty, int k) {
     battle_fx_present();                                       // sub_5E9E8
     for (int i = 0; i < 5 && !should_exit_; ++i) wait_game_tick();
 
+    fx_shade_lut_build(0x11, 0x46);                            // sub_6106C(3,11h,46h)
+
     // (4) 10 falling particle slots (var_34[0Ah], x=var_5C[], y=var_48[], life 0x12)
     struct MoonP { int x = 0, y = 0, life = 0; };
     constexpr int kSlots = 10;
@@ -155,6 +161,15 @@ int CombatII::battle_fx_58619(int unit_index, int tx, int ty, int k) {
         for (int i = 0; i < kSlots; ++i) {
             MoonP& p = part[i];
             const int jitter_y = p.y + shake_amp;
+            // 5EDDE: dim the column the particle has already fallen through. The original
+            // reads py[] (not the jittered y) and applies the page-3 LUT to the frame 454B3
+            // drew, before the particle sprites.
+            if (p.life > 0x0A) {
+                battle_fx_shade_rect(p.x - 5, 0, p.x + 5, p.y); // 5EDDE (life > 0Ah)
+            } else if (p.life > 0) {
+                const int half = p.life / 2;
+                battle_fx_shade_rect(p.x - half, 0, p.x + half, p.y); // 5EDDE (life <= 0Ah)
+            }
             if (p.life > 0x0F) {                               // frame 2 x 3
                 for (int off = 1; off < 0x0A; off += 3) {
                     if (2 < nframes)
