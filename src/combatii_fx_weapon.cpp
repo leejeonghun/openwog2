@@ -79,16 +79,32 @@ void CombatII::render_highlight_units_direct() {
 //   Uses the coordinate convention of the render_battle_map unit pass (UNIT_ANCHOR_X/Y plus
 //   walk offsets) and draws only the sprite and its ground shadow. Sink/decal/clip need the
 //   terrain, and 305A2 only overlays a unit on an effect frame.
+//   The shadow branch follows sub_12F2A's class test: a large sprite (>= 12Ch) uses the
+//   -12/+4 offsets only when the tile attribute is >= 64h. On normal ground both classes
+//   use entry[7]/[8] + 12 - which is why an RCR (whose entry[7]/[8] stay zero) puts its
+//   shadow directly under the feet. Water tiles (attr & 0Fh == 8) skip the shadow, and so do
+//   sunken tiles (attr > 64h): loc_1302F draws the clipped sprite and its foot decal there,
+//   but never the unit shadow.
 void CombatII::battle_draw_unit_now(int unit_index) {
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return;
     const auto& u = units_[(size_t)unit_index];
     if (!u.active || u.drop_wait > 0) return;
     const int sx = (u.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + UNIT_ANCHOR_X + u.walk_off_x;
     const int sy = (u.y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + UNIT_ANCHOR_Y + u.walk_off_y;
+    // sub_12F2A calls sub_1093D(x, y) first and branches on the tile attribute (al).
+    int tile_attr = -1;
+    if (!tile_attr_.empty() && u.x >= 0 && u.y >= 0 &&
+        u.x < (int)map_w_ && u.y < (int)map_h_) {
+        const size_t ti = (size_t)u.y * map_w_ + (size_t)u.x;
+        if (ti < tile_attr_.size()) tile_attr = tile_attr_[ti];
+    }
     if (const NC2Frame* fr = nc2_frame_for(u.sprite_type, u.facing & 3, (int)u.anim_frame)) {
-        if (sce_map_kind_ < 4 && !u.flying && fr->shadow_idx >= 0 && fr->shadow_idx < 7 &&
+        const bool water = (tile_attr >= 0 && (tile_attr & 0xF) == 8);    // loc_13096
+        const bool sunken = (tile_attr > 0x64);                           // loc_1302F sink path
+        if (sce_map_kind_ < 4 && !u.flying && !water && !sunken &&
+            fr->shadow_idx >= 0 && fr->shadow_idx < 7 &&
             !shadow_sprites_[fr->shadow_idx].rle.empty()) {
-            const bool big = (u.sprite_type >= 0x12C);
+            const bool big = (u.sprite_type >= 0x12C && tile_attr >= 0x64);   // loc_12FDE
             const int sh_x = big ? sx - 12 : sx + fr->sil_x;
             const int sh_y = big ? sy + 4 : sy + fr->sil_y + 12;
             blit_sprite_rle(sh_x, sh_y, shadow_sprites_[fr->shadow_idx].rle.data());

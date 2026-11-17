@@ -2175,8 +2175,9 @@ void CombatII::render_battle_map(bool magic_pass, bool overlay_only, bool skip_m
                 // [4] x_off, [5] y_off, [6] shadow, [7] sil_x, [8] sil_y; the sink depth is
                 // unk_70A58[(attr-65h)&0Fh].
                 //   (1) sprite (common): (sx + x_off + u65, sy + y_off + u66 + depth)
-                //   (2) branch (loc_12FDE): type < 12Ch -> loc_12FE4, otherwise loc_13016 when
-                //       attr >= 100h. Both paths fall into the shared sink block (loc_1302F), so
+                //   (2) branch (loc_12FDE): type < 12Ch -> loc_12FE4; type >= 12Ch uses
+                //       loc_13016 only when the tile attr is >= 64h, otherwise loc_12FE4.
+                //       Both paths fall into the shared sink block (loc_1302F), so
                 //       class 0 also gets sink/clip/decal on tiles with attr > 100. Entering
                 //       loc_1302F sets edx/ebx per class:
                 //         class 0 (loc_12FE4): shadow var_C = sx + sil_x,
@@ -2194,10 +2195,12 @@ void CombatII::render_battle_map(bool magic_pass, bool overlay_only, bool skip_m
                 int shadow_spr = -1;
                 bool special_terrain = false;
                 int depth = 0;
+                int tile_attr = -1;
                 const int tile_idx = (u.x >= 0 && u.y >= 0 && u.x < map_w_ && u.y < map_h_)
                                      ? (int)((size_t)u.y * map_w_ + u.x) : -1;
                 if (sce_map_kind_ < 4 && !u.flying && tile_idx >= 0 && !tile_attr_.empty()) {
                     const int attr = tile_attr_[(size_t)tile_idx];
+                    tile_attr = attr;
                     const bool wide = ((attr >> 4) == 0xFF);   // sar 10h -> 0FFFFFFFh
                     if (!wide && (attr & 0xF) != 8)
                         shadow_spr = ncf->shadow_idx;          // dword_D6658[entry6*3]
@@ -2211,7 +2214,7 @@ void CombatII::render_battle_map(bool magic_pass, bool overlay_only, bool skip_m
                     // and
                     // only the shadow position is class-specific (loc_12FE4). The type-2 push uses
                     // base coordinates; the draw switch adds the offsets.
-                    const bool big = (u.sprite_type >= 0x12C);
+                    const bool big = (u.sprite_type >= 0x12C && tile_attr >= 0x64);
                     const int sh_x = big ? sx - 12 : sx + ncf->sil_x;
                     const int sh_y = big ? sy + 4 : sy + ncf->sil_y + 12;
                     if (u.death_dissolve == 0 && shadow_spr >= 0 && shadow_spr < 7 &&
