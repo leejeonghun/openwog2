@@ -477,15 +477,17 @@ int CombatII::battle_fx_26810(int unit_index, int tx, int ty, int k) {
 }
 
 // sub_26B1F(eax/edx=caster tile): confuse.nsp confuse (curse) effect.
-//   Tint LUT from 611AA (four-colour table, shade 0x28), 20021("death.rpl"), fade setup with
-//   601E5(0xF0), then 1033B(5, 0x0E) and 48 frames (0x30):
+//   611AA(four-colour table, shade 0x28) -> 20021("death.rpl") -> 1033B(5) -> 601E5(0F0h, 0Eh)
+//   -> 4F4CD(32h), then 48 frames (0x30):
 //     - overlay frame 0 on the target centre with 1FFFE (plain) plus its xo/yo,
 //     - a second frame = (t/2) for t<9 then fixed at 5 (unk_F0DE6 = table start+5*0Ch)
 //       with 5F305 (tinted) plus its xo/yo,
 //     - for t>19, while (9 - (t-20)/2) is at least 6, draw one extra shaking frame using
-//       499BD(1)+6 with 1FFFE plus its xo/yo.
-//   601E5(0F0h) / 602E3 / 602BF (the 0F0h..0FFh DAC scroll) are not implemented by this
-//   driver; only the frame layers and their order are ported.
+//       499BD(1)+6 with 1FFFE plus its xo/yo,
+//     - 602E3 advances the DAC scroll slot one step before 454D5/5E9E8, so the rotated colours
+//       are already on the presented frame.
+//   602BF frees the slot after the loop without restoring the DAC (the 14-colour band stays in
+//   its final position, as in the original).
 int CombatII::battle_fx_26b1f(int unit_index, int tx, int ty, int k) {
     (void)k;
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return 0;
@@ -499,7 +501,9 @@ int CombatII::battle_fx_26b1f(int unit_index, int tx, int ty, int k) {
         cx = (tx - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X + 12;
         cy = (ty - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y + 8;
     }
-    game_timer_set(5);                                                   // sub_1033B(5, 0Eh)
+    battle_rpl_apply("death.rpl");                                       // sub_20021
+    game_timer_set(5);                                                   // sub_1033B(5)
+    pal_scroll_begin(0xF0, 0x0E);                                        // sub_601E5(0F0h, 0Eh)
     sfx(0x32);                                                           // sub_4F4CD(0x32)
     const int shade = 0x28;                                              // 611AA(ebx=28h)
     for (int t = 0; t < 0x30 && !should_exit_; ++t) {                    // `cmp cx,30h`
@@ -525,6 +529,7 @@ int CombatII::battle_fx_26b1f(int unit_index, int tx, int ty, int k) {
                 battle_fx_blit(f3, cx + fr.xo, cy + fr.yo);              // sub_1FFFE
             }
         }
+        pal_scroll_step();                                               // sub_602E3
         battle_hud_time_ = battle_time_;                                 // 454D5 frame time
         render_battle_map(false, false);                                 // sub_10AEB + frame 0 + sub_12BEE
         battle_fx_flush();                                               // sub_5F305 + sub_1FFFE
@@ -532,6 +537,7 @@ int CombatII::battle_fx_26b1f(int unit_index, int tx, int ty, int k) {
         battle_fx_commit();                                              // sub_5E9E8
         wait_game_tick();                                                // sub_499E4
     }
+    pal_scroll_end();                                                    // sub_602BF
     battle_nsp_release();                                                // sub_1FFCD
     return 1;
 }

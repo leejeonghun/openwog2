@@ -2415,7 +2415,23 @@ private:
     int  pal_ramp_step(int base_pct, int dir_start_pct);               // sub_562C1 (returns 1/0/2)
     void pal_shift_fade(int mul_pct, int end = 0x100);                 // 5F945+5FC21+5FD1C (fade toward palette[1])
     void pal_cycle_entries(uint8_t* buf, int count);                   // loc_27B88 (2799A palette cycle)
+    bool battle_rpl_apply(const char* name);                           // sub_20021 (.rpl -> DAC)
+    void pal_scroll_begin(int start, int len);                         // sub_601E5 (register a DAC scroll slot)
+    void pal_scroll_step();                                            // sub_602E3 (rotate + upload every slot)
+    void pal_scroll_resync();                                          // sub_60275 (re-read slots from the DAC)
+    void pal_scroll_end();                                             // sub_602BF (free the last slot, no restore)
     uint8_t fx_pal_cycle_[256 * 3] = {};                               // 5F945 copy cycled by step 2 of 2799A
+    // byte_128564 / byte_12820C[n*4] / unk_127EDC: active DAC scroll slots. The original keeps 16
+    // colours per slot (unk_127EDC + n*30h) and passes `buf - start*3` to 5F945/5F9AE so those
+    // helpers index by absolute palette number; buf is palette-sized here to match them.
+    struct PalScrollSlot {
+        int start = 0;      // +0: first DAC index
+        int end = 0;        // +1: one past the last (start+len; swapped when len < 0)
+        int len = 0;        // +2: signed rotation length, 0 = free
+        int counter = 0;    // +3: signed ping-pong counter, starts at len
+        uint8_t buf[256 * 3] = {};
+    };
+    std::vector<PalScrollSlot> pal_scroll_slots_;
     int pal_ramp_color_ = 0;        // word_11233C = high word of unk_11233A (palette entry the ramp targets)
     int pal_ramp_pos_ = 0;          // word_7550C (current ramp %)
     int pal_ramp_dir_ = 0;          // word_7550E (0 = rising, 1 = falling)

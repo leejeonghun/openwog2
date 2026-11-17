@@ -26,7 +26,9 @@
 #include "combatii_internal.h"
 #include "palette.h"
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
+#include <string>
 
 namespace {
 
@@ -166,6 +168,105 @@ void CombatII::pal_load_range(int start, int end, const uint8_t* src) {
     for (int i = start; i < end; ++i) {
         palette_set_entry((uint8_t)i, src[i * 3 + 0], src[i * 3 + 1], src[i * 3 + 2]); // out 3C9h
     }
+}
+
+// sub_20021(eax = name): load MAGICSPR\<name> (.rpl) and program the DAC entries it lists.
+//   Format: u16 first, u16 last, then one R,G,B triple per index in [first,last]. Values are
+//   6-bit DAC values with no conversion; sub_5F986 writes 3C8h/3C9h directly.
+//   sub_20021 reads the channels one byte at a time and does not check the result, so a file
+//   that ends early repeats the last channel values. DEATH.RPL and BARRIER.RPL hold 15 triples
+//   for 240..255 and DARKZONE.RPL/ENERGY.RPL hold 13 for 240..253; the missing index is outside
+//   the bands the drivers scroll.
+bool CombatII::battle_rpl_apply(const char* name) {
+    if (!name) return false;
+    const std::string path = game_path((std::string("MAGICSPR/") + name).c_str());
+    FILE* fp = fopen(path.c_str(), "rb");
+    if (!fp) {
+        if (battle_trace_) fprintf(stderr, "COMBAT: 20021 %s not found\n", name);
+        return false;
+    }
+    uint8_t hdr[4] = {};
+    if (fread(hdr, 1, sizeof hdr, fp) != sizeof hdr) { fclose(fp); return false; }
+    const int first = hdr[0] | (hdr[1] << 8);
+    const int last  = hdr[2] | (hdr[3] << 8);
+    uint8_t rgb[3] = {0, 0, 0};
+    for (int i = first; i <= last; ++i) {
+        for (int c = 0; c < 3; ++c) {
+            uint8_t v = 0;
+            if (fread(&v, 1, 1, fp) == 1) rgb[c] = v;   // short read leaves the old channel
+        }
+        palette_set_entry((uint8_t)i, rgb[0], rgb[1], rgb[2]);   // sub_5F986
+    }
+    fclose(fp);
+    if (battle_trace_)
+        fprintf(stderr, "COMBAT: 20021 %s first=%d last=%d\n", name, first, last);
+    return true;
+}
+
+// sub_601E5(eax = start, dl = len): register a DAC scroll slot (byte_128564/byte_12820C).
+//   len > 0 uses [start, start+len); len < 0 uses [start+len, start). The slot stores the signed
+//   len as both the rotation length (+2) and the initial counter (+3), then snapshots the range
+//   into its buffer with 5F945.
+void CombatII::pal_scroll_begin(int start, int len) {
+    PalScrollSlot s;
+    s.len = len;
+    s.counter = len;
+    if (len > 0) { s.start = start;       s.end = start + len; }
+    else         { s.start = start + len; s.end = start; }
+    s.start &= 0xFF;                                // byte fields in 12820C
+    s.end &= 0xFF;
+    pal_snapshot_range(s.start, s.end, s.buf);      // sub_5F945
+    pal_scroll_slots_.push_back(s);
+}
+
+// sub_602E3: for each active slot rotate its len colours by one and upload the range with 5F9AE.
+//   The counter ping-pongs: with len > 0 the first len frames shift upward (e[i] = e[i-1],
+//   e[0] = old e[len-1]) and the next len frames shift downward; len < 0 starts in the opposite
+//   direction (loc_6041B). The counter steps toward zero and reloads as -len when it was
+//   positive, +len when it was not (loc_6037A / loc_604F7). Processing stops at the first free
+//   slot, as in loc_602ED.
+void CombatII::pal_scroll_step() {
+    for (size_t n = 0; n < pal_scroll_slots_.size(); ++n) {
+        PalScrollSlot& s = pal_scroll_slots_[n];
+        if (s.len == 0) break;                          // `test dl,dl; jz loc_60533`
+        const int count = (s.len < 0) ? -s.len : s.len; // abs(len)
+        if (count > 16) break;                          // unk_127EDC holds 16 colours per slot
+        const int base = s.start;
+        const bool upward = ((s.len < 0) != (s.counter > 0));
+        uint8_t tmp[3];
+        if (upward) {                                   // loc_60341: e[i] = e[i-1]
+            memcpy(tmp, s.buf + (base + count - 1) * 3, 3);
+            for (int i = count - 1; i >= 1; --i)
+                memcpy(s.buf + (base + i) * 3, s.buf + (base + i - 1) * 3, 3);
+            memcpy(s.buf + base * 3, tmp, 3);
+        } else {                                        // loc_603B2: e[i-1] = e[i]
+            memcpy(tmp, s.buf + base * 3, 3);
+            for (int i = 0; i < count - 1; ++i)
+                memcpy(s.buf + (base + i) * 3, s.buf + (base + i + 1) * 3, 3);
+            memcpy(s.buf + (base + count - 1) * 3, tmp, 3);
+        }
+        if (s.counter > 0) {
+            if (--s.counter == 0) s.counter = -s.len;   // loc_6037A
+        } else {
+            if (++s.counter == 0) s.counter = s.len;    // loc_604F7
+        }
+        pal_load_range(s.start, s.end, s.buf);          // sub_5F9AE
+    }
+}
+
+// sub_60275: re-read every registered slot's range from the current DAC. sub_197CA calls this
+//   after it rewrites the palette for the time of day, so a scroll in progress rotates the dimmed
+//   colours instead of uploading its pre-dim snapshot.
+void CombatII::pal_scroll_resync() {
+    for (auto& s : pal_scroll_slots_) pal_snapshot_range(s.start, s.end, s.buf);
+}
+
+// sub_602BF: free the last slot (count--, len = 0). The DAC is deliberately not restored; the
+//   rotated band stays as-is until another palette write (e.g. sub_197CA) replaces it.
+void CombatII::pal_scroll_end() {
+    if (pal_scroll_slots_.empty()) return;
+    pal_scroll_slots_.back().len = 0;
+    pal_scroll_slots_.pop_back();
 }
 
 // sub_49A3E(eax = start, edx = end, ebx = from, ecx = to, [esp+8] = step): crossfade the DAC

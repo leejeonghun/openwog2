@@ -4087,9 +4087,10 @@ void CombatII::battle_load_time_of_day() {
 //   phase >= 8: brightness % = 0x34 + (phase-8)*6 (52 .. 94) -> word ptr dword_F042A+2
 //   sub_5FA2C(0, 0x100, ..., brightness %) writes unk_12824C <- unk_F9188 (the palette
 //   before dimming) to the DAC as c' = c * brightness% / 100 (idiv, still 6-bit), and
-//   sub_5F945 reads the DAC back to settle unk_12824C. sub_6004E/sub_60275 re-read the
-//   palette rotation ranges (byte_128564/byte_128568 entries) from the DAC; the port has
-//   no DAC rotation ranges, so g_palette is enough.
+//   sub_5F945 reads the DAC back to settle unk_12824C. sub_6004E re-reads the ramp ranges;
+//   sub_60275 re-reads every active DAC scroll slot (byte_128564) from the DAC, so a rotation
+//   running during the dim continues from the dimmed colours instead of the pre-dim snapshot.
+//   The port has no ramp ranges but keeps the scroll slots, so it calls pal_scroll_resync().
 void CombatII::battle_time_of_day_step() {
     tod_phase_ = (uint8_t)((tod_phase_ + 1) % 16);
     if (tod_phase_ == 8) tod_day_ = (uint16_t)(tod_day_ + 1);
@@ -4105,6 +4106,7 @@ void CombatII::battle_time_of_day_step() {
     // sub_197CA then reads the dimmed DAC back into unk_12824C. Keep the same palette in the
     // separate master buffer so effect restores do not depend on the live DAC contents.
     memcpy(battle_master_palette_, g_palette, sizeof(battle_master_palette_));
+    pal_scroll_resync();                                   // sub_60275
     if (battle_trace_)
         fprintf(stderr, "COMBAT: sub_197CA phase=%u day=%u brightness=%u%%\n", tod_phase_, tod_day_, tod_factor_);
 }

@@ -11,7 +11,7 @@
 //     here too, the same rule already used by 2016A/203CC.
 //   - Not ported: sub_12BEE (redraw the unit in enchant colours), 10AEB (commit the camera),
 //     61011/6104A/61147 (per-weapon palette ramps), 5F611/5F570 (expand and rotate blitters),
-//     602E3/602BF (palette scroll), 20021 (.rpl), 103A8 and 12F2A. 5F29D and the 56129/56178/
+//     103A8 and 12F2A. 5F29D and the 56129/56178/
 //     561E5 particle table are ported locally in 5637D (the original table is one global).
 //     call sites keep a note and preserve only the draw order and frame placement.
 #include "combatii.h"
@@ -327,11 +327,12 @@ int CombatII::battle_fx_229cc(int unit_index, int tx, int ty, int k) {
 }
 
 // sub_2690B(bl=flag, eax=ty, edx=tx): barrier.nsp barrier.
-//   20021("barrier.rpl") is not ported. 1FEA4("barrier.nsp") -> 1124A -> 11DB2/135EB (centre of
-//   the occupying unit) -> 1033B(5) -> 601E5(0F0h, 0Fh, frame table) -> 4F4CD(32h).
-//   601E5 copies the 15 DAC entries [0F0h,0FFh) into a 16-entry ring and 602E3 rotates one step
-//   per frame and uploads it with 5F9AE. All three size phases draw frame 0 (esi stays at
-//   unk_F0DAA).
+//   20021("barrier.rpl") -> 1FEA4("barrier.nsp") -> 1124A -> 11DB2/135EB (centre of the
+//   occupying unit) -> 1033B(5) -> 601E5(0F0h, 0Fh) -> 4F4CD(32h).
+//   601E5 snapshots the 15 DAC entries [0F0h,0FFh) into a slot buffer and 602E3 rotates it one
+//   step per frame (15 frames upward, then 15 downward) and uploads it with 5F9AE; 602BF frees
+//   the slot at the end without restoring the DAC. All three size phases draw frame 0 (esi stays
+//   at unk_F0DAA).
 //   (1) 15 frames: size 3Ch down to 4 (step -4), 5F611 with width=size, height=size/2 at
 //       (centre + size/2 + xo, centre + size/4 + yo); 602E3 after 5E9E8.
 //   (2) flag > 0: size starts at 2 and grows by flag*4 while < flag*3Ch, 5F570 with
@@ -342,6 +343,7 @@ int CombatII::battle_fx_229cc(int unit_index, int tx, int ty, int k) {
 //   reaches the display; the original only waits for the retrace.
 int CombatII::battle_fx_2690b(int unit_index, int tx, int ty, int k) {
     (void)unit_index;
+    battle_rpl_apply("barrier.rpl");                        // sub_20021 (before 1FEA4 in the original)
     if (!battle_nsp_load("barrier.nsp") || magic_frames_.empty()) return 0;
     camera_center_on(tx, ty);                               // sub_1124A
     int cx = 0, cy = 0;
@@ -352,34 +354,18 @@ int CombatII::battle_fx_2690b(int unit_index, int tx, int ty, int k) {
         cy = (ty - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y + 8;
     }
     game_timer_set(5);                                      // sub_1033B(5)
+    pal_scroll_begin(0xF0, 0x0F);                           // sub_601E5(0F0h, 0Fh)
     sfx(0x32);                                              // sub_4F4CD(32h)
     const int flag = k;                                     // bl
     const MagicFxFrame& fr = magic_frames_[0];              // esi = unk_F0DAA throughout
-    // sub_601E5(0F0h, 0Fh, unk_F0DAA): snapshot DAC [0F0h,0FFh) into the ring buffer.
-    int scroll_pos = 0x0F;                                  // byte_12820F
-    uint8_t scroll[0x10 * 3] = {};
-    pal_snapshot_range(0xF0, 0xF0 + 0x0F, scroll);          // sub_5F945(start, count)
-    auto scroll_step = [&]() {                              // sub_602E3
-        const int p = scroll_pos;
-        if (p > 0) {
-            // Rotate the first p entries right by one: [a0..a(p-1)] -> [a(p-1),a0..a(p-2)]
-            uint8_t first[3] = {scroll[(p - 1) * 3], scroll[(p - 1) * 3 + 1],
-                                scroll[(p - 1) * 3 + 2]};
-            for (int i = p - 1; i > 0; --i)
-                for (int c = 0; c < 3; ++c)
-                    scroll[i * 3 + c] = scroll[(i - 1) * 3 + c];
-            for (int c = 0; c < 3; ++c) scroll[c] = first[c];
-            scroll_pos = p - 1;
-            if (scroll_pos == 0) scroll_pos = 0x0F;          // reload byte_12820E
-        }
-        pal_load_range(0xF0, 0xF0 + 0x0F, scroll);           // sub_5F9AE(start, count)
-    };
+    // 602E3 runs after 5E9E8 in the original; the port reads g_palette at present time, so each
+    // step goes just before battle_fx_present to show the rotated colours on the same frame.
     // (1) edi = 0x3C, -4 per frame (15 frames); 5F611 shrink, width r, height r/2.
     for (int r = 0x3C; r > 0 && !should_exit_; r -= 4) {
         battle_fx_blit_scaled(0, cx + r / 2 + fr.xo, cy + r / 4 + fr.yo,
                               r, r / 2, false, true);        // sub_5F611
+        pal_scroll_step();                                  // sub_602E3
         battle_fx_present();                                // sub_454D5 + sub_5E9E8
-        scroll_step();                                      // sub_602E3 (after 5E9E8)
         wait_game_tick();
     }
     if (flag > 0) {
@@ -388,24 +374,25 @@ int CombatII::battle_fx_2690b(int unit_index, int tx, int ty, int k) {
         for (int sz = 2; sz < limit && !should_exit_; sz += flag * 4) {
             battle_fx_blit_scaled(0, cx - sz / 2 + fr.xo, cy - sz / 4 + fr.yo,
                                   sz, sz / 2, true);         // sub_5F570
+            pal_scroll_step();                              // sub_602E3
             battle_fx_present();
-            scroll_step();
             wait_game_tick();
         }
     } else if (!should_exit_) {
         // (3) loc_26AB6: one 1FFFE frame at the centre.
         battle_fx_blit(0, cx + fr.xo, cy + fr.yo);
+        pal_scroll_step();                                  // sub_602E3
         battle_fx_present();
-        scroll_step();
         wait_game_tick();
     }
-    // (4) 30 palette-scroll frames; the original does not redraw the world here.
+    // (4) 30 palette-scroll frames (602E3 + 499E4, no redraw); re-present the same backbuffer so
+    // the DAC change reaches the display without redrawing the world.
     for (int i = 0; i < 0x1E && !should_exit_; ++i) {
-        scroll_step();                                      // sub_602E3
-        battle_fx_present();
+        pal_scroll_step();                                  // sub_602E3
+        video_.present();                                   // original only waits for the retrace
         wait_game_tick();                                   // sub_499E4
     }
-    scroll_pos = 0;                                         // sub_602BF disables the entry
+    pal_scroll_end();                                       // sub_602BF
     battle_nsp_release();                                   // sub_1FFCD
     if (battle_trace_) fprintf(stderr, "COMBAT: 2690B barrier tile=(%d,%d) flag=%d\n", tx, ty, flag);
     return 1;
