@@ -1892,7 +1892,7 @@ const uint8_t* CombatII::battle_move_shade_lut() {
 // full-screen dark spells. magic_pass skips the sub_1547F shading and the whole sub_12BEE unit
 // queue; overlay_only skips the sub_10AEB FPM/base-tile part and redraws only the sub_12D65
 // top tiles/effects over an existing 454B3 frame.
-void CombatII::render_battle_map(bool magic_pass, bool overlay_only){
+void CombatII::render_battle_map(bool magic_pass, bool overlay_only, bool skip_move_range){
     // sub_1FFFE queued for the gap between sub_10AEB (base tiles) and sub_12BEE (tops + units).
     // 26B1F's confuse frame 0 belongs under the units, so it is drawn here rather than through
     // the battle_fx_blit queue (which the caller flushes after this pass).
@@ -1946,7 +1946,7 @@ void CombatII::render_battle_map(bool magic_pass, bool overlay_only){
     // sub_454B3: sub_10AEB (base) -> [sub_1547F when word_FA8BC != 0] -> sub_12BEE (tops + units).
     // The move-range shading must sit between the base tiles and the tops/units so unit sprites
     // are never dimmed. sub_12D65 has neither, so magic_pass skips it.
-    if (!magic_pass) render_player_move_range();
+    if (!magic_pass && !skip_move_range) render_player_move_range();
     if (!overlay_only) under_units_blit();
     // Build one merged Y-sorted draw list (top tiles + units); the original uses a stable foot_y
     // sort so units and roofs occlude each other correctly.

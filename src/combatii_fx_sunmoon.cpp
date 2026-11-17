@@ -5,7 +5,7 @@
 //
 // The three drivers share the file/load/palette setup but not one frame loop:
 //   1FEA4(<file>.nsp) -> 103A8 (clear effect state) -> 1033B (tick period) -> 11EE4 (release
-//   occupancy, sub_58619 only) -> caster screen position via 10971+0Ch / 10988 -> palette fade
+//   occupancy, 5A267/5A566) -> caster screen position via 10971+0Ch / 10988 -> palette fade
 //   (5FA2C, or 5F945+5FC21+5FD1C) -> driver-specific frames -> 61115/103A0 restore -> 1FFCD.
 //   58619's main loop clears the work buffer and composes moon frame 0 -> 12F2A units ->
 //   particles -> moon frame 1 -> 5E9E8; it does not call 10AEB/12BEE/454D5. Its intro draws
@@ -31,8 +31,9 @@
 //     queued with battle_fx_shade_rect before the particle sprites.
 //   - 61115/103A0 (palette LUT restore) has no counterpart here; each driver restores the
 //     palette with pal_shift_fade(0) / pal_scale_range(100) at the end.
-//   - 11EE4/11E04 (occupancy release and rewrite) are dropped because the port models
-//     occupancy through units_.
+//   - 11EE4/11E04 (occupancy release and rewrite) are modelled with fx_sprite_hidden, which
+//     the port's CC998 map pass checks. Both sun drivers release the caster and then redraw
+//     it explicitly with 12F2A, so only the map pass changes.
 //   - The 5F611/5F570 target sizes come from original stack locals (var_18/var_1C/var_20)
 //     whose values cannot be read statically, so the port approximates them from the frame
 //     counter (see each driver).
@@ -255,9 +256,9 @@ int CombatII::battle_fx_58619(int unit_index, int tx, int ty, int k) {
 //   (3) Palette delta: 5FC21 subtracts the master from 100h copies of unk_12824F
 //       (= palette[1]); each frame 5FD1C(mul) fades toward that one colour
 //       (port: pal_shift_fade).
-//   (4) sfx(0x32) -> while var_C > 5, two frames at a time: frame 0 at the anchor via 5F611
-//       (scaled), then 5E9E8+499E4; var_C--.
-//   (5) While var_C < 8, same 5F611 draw; var_C++ (grows again).
+//   (4) sfx(0x32) -> while var_C > 5, two frames at a time: 12F2A redraws the caster, then
+//       frame 0 at the anchor via 5F611 (scaled), then 5E9E8+499E4; var_C--.
+//   (5) While var_C < 8, same 12F2A + 5F611 draw; var_C++ (grows again).
 //   (6) sfx(0x33) -> 5 rounds x 10 frames: frame [var_8 = 1..5] at the anchor via 5F29D
 //       (tinted), then 12F2A redraws the caster; each frame 5FD1C(old mul) is called after
 //       the tick and mul += 2, capped at 0x64.
@@ -275,6 +276,9 @@ int CombatII::battle_fx_5a267(int unit_index, int tx, int ty, int k) {
     sunmoon_anchor(caster, cam_tile_x_, cam_tile_y_, cam_fine_x_, cam_fine_y_, ax, ay);
 
     game_timer_set(5);                                         // sub_1033B(5)
+    // sub_11EE4(caster): the shrink stages below redraw the caster with 12F2A, so clearing the
+    // CC998 footprint only removes the duplicate from the map pass.
+    caster.fx_sprite_hidden = true;
     sfx(0x32);                                                 // sub_4F4CD(32h)
 
     int counter = 0x19;                                        // var_C = 0x19
@@ -285,6 +289,7 @@ int CombatII::battle_fx_5a267(int unit_index, int tx, int ty, int k) {
     auto draw_scaled = [&](int sz) {
         if (nframes <= 0) return;
         const MagicFxFrame& e = magic_frames_[0];
+        battle_fx_redraw_unit(unit_index);                     // sub_12F2A (between 454B3 and 5F611)
         battle_fx_blit_scaled(0, ax + sz / 2 + e.xo, ay + sz / 2 + e.yo,
                               sz, sz, false, true);            // sub_5F611
     };
@@ -323,6 +328,7 @@ int CombatII::battle_fx_5a267(int unit_index, int tx, int ty, int k) {
         }
     }
 
+    caster.fx_sprite_hidden = false;                           // sub_11E04(caster)
     pal_shift_fade(0);                                         // 5FD1C(0) - original palette
     battle_nsp_release();                                      // sub_1FFCD
     return 1;
@@ -332,8 +338,9 @@ int CombatII::battle_fx_5a267(int unit_index, int tx, int ty, int k) {
 //   Port signature: (unit_index, tx, ty, k); only unit_index is used (the caster).
 //   (1) 611AA (9-byte table dword_560F9, shade 0x3C) -> 1FEA4("sunl2.nsp") -> 103A8 -> 1033B(5)
 //       -> 11EE4 -> anchor (10971+0Ch / 10988) -> delta palette (5FC21) -> sfx(0x34).
-//   (2) 5 rounds (var_10 = 1..5), each 8 frames (var_1C = 6..13): draws var_10 copies of
-//       frame var_1C at size 8*(count-1)+step-5, centered, with 454D5 + 5E9E8 per copy.
+//   (2) 5 rounds (var_10 = 1..5), each 8 frames (var_1C = 6..13): 12F2A redraws the caster,
+//       then draws var_10 copies of frame var_1C at size 8*(count-1)+step-5, centered, with
+//       454D5 + 5E9E8 per copy.
 //   (3) sfx(0x32) -> 5 rounds (var_8 = 1..5) x 10 frames: 5F29D frame var_8 at the anchor,
 //       then 12F2A redraws the caster, then frame 6 via 5F570 at size 41..90, with
 //       5FD1C(old mul) after the tick and mul += 2, capped at 0x64.
@@ -351,6 +358,8 @@ int CombatII::battle_fx_5a566(int unit_index, int tx, int ty, int k) {
     sunmoon_anchor(caster, cam_tile_x_, cam_tile_y_, cam_fine_x_, cam_fine_y_, ax, ay);
 
     game_timer_set(5);                                         // sub_1033B(5)
+    // sub_11EE4(caster): both stages redraw the caster with 12F2A, so the map pass must skip it.
+    caster.fx_sprite_hidden = true;
 
     // (2) count 1..5, step 6..13. The original draws `count` copies of frame `step` at
     // size 8*(count-1)+step-5, centered on the frame offset (probe: 1..40 px).
@@ -360,6 +369,7 @@ int CombatII::battle_fx_5a566(int unit_index, int tx, int ty, int k) {
             const int sz = 8 * (count - 1) + (step - 5);
             const MagicFxFrame& e = magic_frames_[(size_t)fi];
             for (int n = 0; n < count && !should_exit_; ++n) {
+                battle_fx_redraw_unit(unit_index);                 // sub_12F2A (after 12BEE, before 5F570)
                 battle_fx_blit_scaled(fi, ax + e.xo - sz / 2, ay + e.yo - sz / 2,
                                       sz, sz, true);
                 battle_fx_overlay();                           // sub_454D5
@@ -394,6 +404,7 @@ int CombatII::battle_fx_5a566(int unit_index, int tx, int ty, int k) {
         }
     }
 
+    caster.fx_sprite_hidden = false;                           // sub_11E04(caster)
     sfx(0x33);                                                 // sub_4F4CD(33h)
     pal_shift_fade(0);                                         // 5FD1C(0)
     battle_nsp_release();                                      // sub_1FFCD

@@ -176,7 +176,7 @@ int CombatII::battle_fx_25047(int unit_index, int tx, int ty, int k) {
 //   Frame = (screen y/2) % 5, with 4F4CD(0x32) every 8 frames; 1FFCD once the radius reaches
 //   0xA0.
 int CombatII::battle_fx_25254(int unit_index, int tx, int ty, int k) {
-    (void)k;
+    (void)tx; (void)ty; (void)k;
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return 0;
     if (!battle_nsp_load("wideheal.nsp") || magic_frames_.empty()) return 0;
     const int nframes = (int)magic_frames_.size();
@@ -258,7 +258,7 @@ int CombatII::battle_fx_253dc(int unit_index, int tx, int ty, int k) {
 //   frames. Ring r (0..4) grows from radius 0 to 0xA0 by 7,5,5,5,5 while rotating +4 per frame.
 //   Frame = 0x0A + (4 - (t%0x1E)), i.e. it cycles 0x0E..0x0A over a 30-frame period.
 int CombatII::battle_fx_25591(int unit_index, int tx, int ty, int k) {
-    (void)k;
+    (void)tx; (void)ty; (void)k;
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return 0;
     if (!battle_nsp_load("wideheal.nsp") || magic_frames_.empty()) return 0;
     const int nframes = (int)magic_frames_.size();
@@ -531,7 +531,8 @@ int CombatII::battle_fx_26b1f(int unit_index, int tx, int ty, int k) {
         }
         pal_scroll_step();                                               // sub_602E3
         battle_hud_time_ = battle_time_;                                 // 454D5 frame time
-        render_battle_map(false, false);                                 // sub_10AEB + frame 0 + sub_12BEE
+        // 26B1F's map pass is sub_10AEB + sub_12BEE only; it does not call sub_1547F.
+        render_battle_map(false, false, true);                           // sub_10AEB + frame 0 + sub_12BEE
         battle_fx_flush();                                               // sub_5F305 + sub_1FFFE
         battle_fx_overlay();                                             // sub_454D5
         battle_fx_commit();                                              // sub_5E9E8

@@ -63,8 +63,9 @@
 //      battle_fx_shade_rect before its sprites. The original's initial full-screen 5EDDE
 //      is overwritten by the next 454B3 before any 5E9E8, so only the per-frame pass is emitted.
 //      Other clip/LUT selection and the 45x screen preparation happen in render/present.
-//   3. 11EE4/11E04 (occupancy release/restore) are omitted: the port derives occupancy from
-//      the unit tile.
+//   3. 11EE4/11E04 (occupancy release/restore) are modelled with fx_sprite_hidden, which the
+//      port's CC998 map pass checks. 59A70 never calls 12F2A, so hiding the caster is what
+//      keeps it out of every frame until step (8) restores it.
 //   4. 5F517 (solid silhouette) / 5F3FD (unit frame) draw to the canvas rather than the magic
 //      layer, so this step alone splits present into render_battle_frame() -> overlay ->
 //      battle_fx_commit() to keep the original order (background/table -> unit -> present).
@@ -99,6 +100,9 @@ int CombatII::battle_fx_59a70(int caster_index, int revived_index) {
     if (!battle_nsp_load("revible.nsp") || magic_frames_.empty()) return 0;   // sub_1FEA4
     const int nframes = (int)magic_frames_.size();
     camera_center_on((int)(int8_t)A.x, (int)(int8_t)A.y);                    // sub_1124A
+    // sub_11EE4(caster): 59A70 never calls 12F2A, so the caster must stay out of the map pass
+    // for the whole effect (only the nsp frames are seen).
+    A.fx_sprite_hidden = true;
 
     const uint8_t* master = &battle_master_palette_[0][0];        // unk_12824C
 
@@ -261,6 +265,7 @@ int CombatII::battle_fx_59a70(int caster_index, int revived_index) {
     }
 
     // ---- (8) restore ----
+    A.fx_sprite_hidden = false;                                    // sub_11E04(caster)
     uint8_t rev[kPalLen];
     for (int k = 0; k < kPalLen; ++k)                              // "swap copy - master"
         rev[k] = (uint8_t)(master[k] - wash_pal[k]);

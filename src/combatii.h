@@ -903,7 +903,10 @@ private:
     // magic_pass: sub_12D65 instead of sub_12BEE - top tiles and sub_18605 map effects only,
     //   with no sub_1547F shading and no unit sprites/shadows/water list.
     // overlay_only: draw only that sub_12D65 part over an already-rendered sub_454B3 frame.
-    void render_battle_map(bool magic_pass = false, bool overlay_only = false);
+    // skip_move_range: omit sub_1547F on a sub_10AEB+sub_12BEE pass (sub_26B1F calls those two
+    //   directly and never calls sub_454B3).
+    void render_battle_map(bool magic_pass = false, bool overlay_only = false,
+                           bool skip_move_range = false);
     // sub_18555: rebuild the 10-slot per-frame marker table from battle_tile_events_.
     void battle_map_effect_register_18555();
     // sub_18605: consume the markers of the current row and append item/field sprites into
