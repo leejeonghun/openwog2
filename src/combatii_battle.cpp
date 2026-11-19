@@ -5283,12 +5283,14 @@ void CombatII::render_player_move_overlay() {
         battle_render_ring_panels(battle_player_unit_);
         // sub_4C72A draws "MP %d" at y=60h on every magic-ring stage; x is C2h or 1Eh
         // depending on whether the ring centre x (the eax argument; sub_4B0FB uses it as
-        // x) is below/above A0h.
+        // x) is below/above A0h. The AI-config magic ring enters sub_4C72A too, so its
+        // stages (AIMagic) show the same line.
         // The line goes through sub_5E048 (vsprintf) -> sub_5DD5B, i.e. the dialogue font
         // (NEWASCII/NEWHAN 8x16/16x16), not the TEXT.CHR small HUD font. sub_4C72A sets
         // sub_5DB66(4, 0x1106, 0xFF) before the line and restores mode 4 with 0x1100 after.
         if ((ring_subkind_ == SubRingKind::MagicG || ring_subkind_ == SubRingKind::MagicD ||
-             ring_subkind_ == SubRingKind::MagicK) && ring_sub_open_) {
+             ring_subkind_ == SubRingKind::MagicK || ring_subkind_ == SubRingKind::AIMagic) &&
+            ring_sub_open_) {
             char mp[16];
             snprintf(mp, sizeof(mp), "MP %d", (int)(int16_t)u.combat_mp_50);
             const int mp_x = ring_sub_center_x_ < 0xA0 ? 0xC2 : 0x1E;
@@ -6021,7 +6023,11 @@ void CombatII::battle_show_info_modal(int unit_index) {
 // (12F2A) + HP (13498) over the dim layer are drawn by the renderer before this call.
 void CombatII::battle_render_ring_panels(int unit_index) {
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return;
-    if (ring_subkind_ == SubRingKind::MagicG && ring_sub_open_) {
+    // AIMagic reuses sub_4C72A, which passes kind 1 to sub_4B8EB only on its first stage
+    // (kind 0 afterwards), so the magic list appears on the level-1 stage of both the
+    // player menu and the AI-config menu.
+    if (ring_sub_open_ && (ring_subkind_ == SubRingKind::MagicG ||
+                           (ring_subkind_ == SubRingKind::AIMagic && ring_sub_magic_g_ < 0))) {
         battle_panel_magic_4b18f(unit_index);
         return;
     }
