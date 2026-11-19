@@ -5284,12 +5284,17 @@ void CombatII::render_player_move_overlay() {
         // sub_4C72A draws "MP %d" at y=60h on every magic-ring stage; x is C2h or 1Eh
         // depending on whether the ring centre x (the eax argument; sub_4B0FB uses it as
         // x) is below/above A0h.
+        // The line goes through sub_5E048 (vsprintf) -> sub_5DD5B, i.e. the dialogue font
+        // (NEWASCII/NEWHAN 8x16/16x16), not the TEXT.CHR small HUD font. sub_4C72A sets
+        // sub_5DB66(4, 0x1106, 0xFF) before the line and restores mode 4 with 0x1100 after.
         if ((ring_subkind_ == SubRingKind::MagicG || ring_subkind_ == SubRingKind::MagicD ||
              ring_subkind_ == SubRingKind::MagicK) && ring_sub_open_) {
             char mp[16];
             snprintf(mp, sizeof(mp), "MP %d", (int)(int16_t)u.combat_mp_50);
             const int mp_x = ring_sub_center_x_ < 0xA0 ? 0xC2 : 0x1E;
-            draw_small_text(mp_x, 0x60, mp, 0xFF, 1);
+            font_.set_text_mode(4, 0x1106, 0xFF);
+            font_.draw_string(bb, SCREEN_W, SCREEN_H, mp_x, 0x60, mp);
+            font_.set_text_mode(4, 0x1100, 0xFF);
         }
     }
     if (battle_atk_phase_ != 0) {
