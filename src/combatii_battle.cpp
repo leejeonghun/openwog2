@@ -4412,6 +4412,21 @@ bool CombatII::battle_player_input() {
                 battle_ring_cancel_to_free(ui);
             }
         };
+        // sub_4C72A runs sub_4B9D7 (hide) after every pick, then either steps the
+        // stage back and runs sub_4B8EB (show) again, or returns -2 at stage 0.
+        // loc_4D337 sends that -2 to loc_4D0D0, so the AI level-1 ring is shown.
+        auto aimagic_cancel = [&]() {
+            const bool level3 = ring_sub_magic_g_ >= 0 && ring_sub_magic_d_ >= 0;
+            const bool level2 = ring_sub_magic_g_ >= 0;
+            ring_sub_close(); // 4C72A: 4B9D7 before the next stage
+            if (level3) {
+                ring_sub_magic_d_ = -2;
+            } else {
+                ring_sub_magic_g_ = -1;
+                ring_sub_magic_d_ = -1;
+            }
+            ring_sub_open(level2 ? SubRingKind::AIMagic : SubRingKind::AI1, ui);
+        };
         const MouseState& mst0 = input_.get_mouse();
         const bool esc0 = input_.is_key_pressed(SDLK_ESCAPE);
         // Right click/Esc: back (sub_4BA7F -1; per-level meaning below).
@@ -4456,23 +4471,8 @@ bool CombatII::battle_player_input() {
                     return true;
                 }
                 case SubRingKind::AIMagic:
-                    ring_subkind_ = SubRingKind::AI2;
-                    ring_sub_open_ = true;
-                    // AIMagic per-level back: k (d>=0) -> d (d=-2), d (d==-2) -> g (g=-1),
-                    // g -> AI2.
-                    if (ring_sub_magic_g_ >= 0 && ring_sub_magic_d_ >= 0) {
-                        ring_sub_magic_d_ = -2;
-                        ring_subkind_ = SubRingKind::AIMagic;
-                        ring_sub_compute_layout(ui);
-                    } else if (ring_sub_magic_g_ >= 0) {
-                        ring_sub_magic_g_ = -1;
-                        ring_sub_magic_d_ = -1;
-                        ring_subkind_ = SubRingKind::AIMagic;
-                        ring_sub_compute_layout(ui);
-                    } else {
-                        ring_subkind_ = SubRingKind::AI2;
-                        ring_sub_compute_layout(ui);
-                    }
+                    // k -> d -> g, and the g stage returns to loc_4D0D0 (AI1).
+                    aimagic_cancel();
                     return true;
                 case SubRingKind::AIWeapon:
                     ring_subkind_ = SubRingKind::AI2;
@@ -4533,21 +4533,7 @@ bool CombatII::battle_player_input() {
                         ring_sub_compute_layout(ui);
                         return false;
                     case SubRingKind::AIMagic:
-                        ring_subkind_ = SubRingKind::AI2;
-                        ring_sub_open_ = true;
-                        if (ring_sub_magic_g_ >= 0 && ring_sub_magic_d_ >= 0) {
-                            ring_sub_magic_d_ = -2;
-                            ring_subkind_ = SubRingKind::AIMagic;
-                            ring_sub_compute_layout(ui);
-                        } else if (ring_sub_magic_g_ >= 0) {
-                            ring_sub_magic_g_ = -1;
-                            ring_sub_magic_d_ = -1;
-                            ring_subkind_ = SubRingKind::AIMagic;
-                            ring_sub_compute_layout(ui);
-                        } else {
-                            ring_subkind_ = SubRingKind::AI2;
-                            ring_sub_compute_layout(ui);
-                        }
+                        aimagic_cancel();
                         return false;
                     case SubRingKind::AIWeapon:
                         ring_subkind_ = SubRingKind::AI2;
@@ -4718,13 +4704,12 @@ bool CombatII::battle_player_input() {
                         return false;
                     }
                     if (opt == 10) {
-                        // loc_4D337: 4C72A -> [80h] = R/3 (= g*7 + d). The original
-                        // has no learned-group gate here; sub_4C72A shows ids 1..7.
+                        // loc_4D337: the AI level-2 ring is already hidden; sub_4C72A
+                        // then shows its stage 0 through sub_4B8EB.
+                        ring_sub_close();
                         ring_sub_magic_g_ = -1;
                         ring_sub_magic_d_ = -1;
-                        ring_subkind_ = SubRingKind::AIMagic;
-                        ring_sub_open_ = true;
-                        ring_sub_compute_layout(ui);
+                        ring_sub_open(SubRingKind::AIMagic, ui);
                         return false;
                     }
                     if (opt == 12) {
@@ -4751,26 +4736,33 @@ bool CombatII::battle_player_input() {
                 }
                 case SubRingKind::AIMagic: {
                     // AIMagic level 3 (group -> b -> c): sub_4BFCA ids and unk_74FA8.
+                    // Every pick hides the current stage (4B9D7) before the next stage
+                    // is shown (4B8EB); the final pick returns to AI level 1.
                     if (ring_sub_magic_g_ < 0) {
-                        ring_sub_magic_g_ = opt - 1; // stage-0 id 1..7
+                        const int g = opt - 1; // stage-0 id 1..7
+                        ring_sub_close();
+                        ring_sub_magic_g_ = g;
                         ring_sub_magic_d_ = -2;
-                        ring_sub_compute_layout(ui);
                         if (battle_trace_)
-                            fprintf(stderr, "COMBAT: AI magic a=%d g=%d\n", opt, ring_sub_magic_g_);
+                            fprintf(stderr, "COMBAT: AI magic a=%d g=%d\n", opt, g);
+                        ring_sub_open(SubRingKind::AIMagic, ui);
                     } else if (ring_sub_magic_d_ == -2) {
-                        ring_sub_magic_d_ = (opt == 0) ? 7 : opt - 8;
-                        ring_sub_compute_layout(ui);
+                        const int d = (opt == 0) ? 7 : opt - 8;
+                        ring_sub_close();
+                        ring_sub_magic_d_ = d;
                         if (battle_trace_)
                             fprintf(stderr, "COMBAT: AI magic g=%d id=%d b=%d\n",
-                                    ring_sub_magic_g_, opt, ring_sub_magic_d_);
+                                    ring_sub_magic_g_, opt, d);
+                        ring_sub_open(SubRingKind::AIMagic, ui);
                     } else {
                         const int g = ring_sub_magic_g_, b = ring_sub_magic_d_;
                         const int c = (opt == 0) ? 7 : opt - 15;
                         const int v = battle_magic_ring_value(g, b, c);
                         const int r = (v == 0) ? -1
                             : (v - 1) + battle_spell_kind(u, (v - 1) / 21);
-                        // loc_4D337: R < 0 leaves [80h] untouched and returns to AI1;
-                        // otherwise [80h] = R/3 (= g*7+d).
+                        // 4C72A hides the level-3 ring before it returns R. loc_4D337
+                        // then applies [80h] (R >= 0) and jumps to loc_4D0D0.
+                        ring_sub_close();
                         if (r >= 0) u.ai_field_80 = (uint8_t)(r / 3);
                         if (battle_trace_) {
                             if (r >= 0)
@@ -4782,9 +4774,7 @@ bool CombatII::battle_player_input() {
                         }
                         ring_sub_magic_g_ = -1;
                         ring_sub_magic_d_ = -1;
-                        ring_subkind_ = SubRingKind::AI1;
-                        ring_sub_open_ = true;
-                        ring_sub_compute_layout(ui);
+                        ring_sub_open(SubRingKind::AI1, ui);
                     }
                     return false;
                 }
