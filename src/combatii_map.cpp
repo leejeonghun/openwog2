@@ -2159,6 +2159,13 @@ void CombatII::render_battle_map(bool magic_pass, bool overlay_only, bool skip_m
             }
             const NC2Frame* ncf = nc2_frame_for(u.sprite_type, dir, pose);
             if (ncf) {
+                // loc_13165: the preserved form record ([+77h]) drawn after the unit and decal.
+                auto push_stored_form = [&](int depth) {
+                    if (!u.stored_77 || u.code_b > 6) return;
+                    const NC2Frame* wf = nc2_frame_for(u.stored_77->sprite_type,
+                                                       u.facing & 3, (int)u.anim_frame);
+                    if (wf) unit_push({sx, sy + depth, foot_y, 2, 0, wf, 0, 0, nullptr});
+                };
                 if (frame_trace && i < 64 &&
                     (trace_face[i] != u.facing || trace_pose[i] != (int)u.anim_frame ||
                      trace_char[i] != u.sprite_type)) {
@@ -2186,12 +2193,17 @@ void CombatII::render_battle_map(bool magic_pass, bool overlay_only, bool skip_m
                 //           var_10 = sy + 4, clip var_28 = 14 - y_off - depth
                 //       (while sinking var_10/var_C += depth+2, which gives the decal position)
                 //   (3) shadow = dword_D6658[entry[6]] (SHADOW.SYB; class 0 hardcodes entry[6]=0,
-                //       class 1 reads record +0x0E). Skipped when the attribute high word is -1
-                //       (wide) or (attr & 0Fh) == 8 (water). The sink path has no shadow.
+                //       class 1 reads record +0x0E). Skipped while sinking: the var_18+2 dword
+                //       read aliases the depth slot, so the tested -1 is the FFFFh sentinel of
+                //       var_14, cleared once the sink branch loads a depth. Water
+                //       ((attr & 0Fh) == 8) also skips the shadow. The sink path has none.
                 //   (4) decal (loc_13123, sinking only): MAP_EFFC[(terr&0Fh)*2 + BA84A+2], repeated
                 //       entry[0] times at 24px steps from (var_C, var_10):
                 //       class 0 -> (sx + sil_x, sy + sil_y + 14 + depth) (entry[0] = 1),
                 //       class 1/2 -> (sx - 12, sy + 6 + depth).
+                //   (5) stored form (sub_12567 12A73 / sub_12F2A loc_13165): [77h] != 0 and [5Ch] <= 6,
+                //       the preserved record's frame is drawn last at the live unit's anchor
+                //       with the live facing/pose and +depth on y.
                 //   Flying ([esi+14h]&1) and map kind >= 4 skip both shadow and sink (jge loc_130DC).
                 int shadow_spr = -1;
                 bool special_terrain = false;
@@ -2227,6 +2239,7 @@ void CombatII::render_battle_map(bool magic_pass, bool overlay_only, bool skip_m
                         fprintf(stderr, "COMBAT: unit[%zu] type=%d normal shadow=%d\n",
                                 i, u.sprite_type, shadow_spr);
                     unit_push({sx, sy, foot_y, 2, 0, ncf, 0, 0, nullptr});
+                    push_stored_form(0);
                     // sub_123C1: the status overlay follows the unit frame immediately (same
                     // foot_y);
                     // the original calls it right after sub_12567 pushes the unit entry.
@@ -2269,6 +2282,7 @@ void CombatII::render_battle_map(bool magic_pass, bool overlay_only, bool skip_m
                             unit_push({decal_x + t*0x18, decal_y,
                                        foot_y, 5, 0, nullptr, 0, 0, &ov});
                     }
+                    push_stored_form(depth);
                     status_overlay();
                 }
                 continue;

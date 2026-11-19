@@ -85,6 +85,9 @@ void CombatII::render_highlight_units_direct() {
 //   sprite drops by the tile depth, its lower scanlines are clipped by sub_5F4AF, it gets no
 //   shadow, and loc_13123 repeats the MAP_EFFC foot decal across the tile width. The formulas
 //   below mirror render_battle_map's sink entry so sub_44DCC replays the same pixels.
+//   Every path then reaches loc_13165: when the unit has a preserved form record ([+77h]) and
+//   [5Ch] <= 6, that record's frame is drawn on top with the live unit's facing/pose, its own
+//   entry offsets, and the sink depth added to y.
 void CombatII::battle_draw_unit_now(int unit_index) {
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return;
     const auto& u = units_[(size_t)unit_index];
@@ -99,6 +102,13 @@ void CombatII::battle_draw_unit_now(int unit_index) {
         if (ti < tile_attr_.size()) tile_attr = tile_attr_[ti];
     }
     if (const NC2Frame* fr = nc2_frame_for(u.sprite_type, u.facing & 3, (int)u.anim_frame)) {
+        // loc_13165: the preserved form record's frame on top of the live unit.
+        auto draw_stored_form = [&](int depth) {
+            if (!u.stored_77 || u.code_b > 6) return;
+            const NC2Frame* wf = nc2_frame_for(u.stored_77->sprite_type, u.facing & 3,
+                                               (int)u.anim_frame);
+            if (wf) blit_nc2_frame(sx + wf->x_off, sy + wf->y_off + depth, *wf);
+        };
         // Sunken terrain (loc_13016/loc_1302F): drop the sprite by the tile depth and clip its
         // lower scanlines; the foot decal replaces the shadow.
         if (sce_map_kind_ < 4 && !u.flying && tile_attr > 0x64) {
@@ -125,6 +135,7 @@ void CombatII::battle_draw_unit_now(int unit_index) {
                 for (int t = 0; t < reps; ++t)
                     blit_sprite_rle(decal_x + t * TOWN_TILE_W, decal_y, ov.rle.data());
             }
+            draw_stored_form(depth);                                       // loc_13165
             return;
         }
         const bool water = (tile_attr >= 0 && (tile_attr & 0xF) == 8);    // loc_13096
@@ -137,6 +148,7 @@ void CombatII::battle_draw_unit_now(int unit_index) {
             blit_sprite_rle(sh_x, sh_y, shadow_sprites_[fr->shadow_idx].rle.data());
         }
         blit_nc2_frame(sx + fr->x_off, sy + fr->y_off, *fr);
+        draw_stored_form(0);                                               // loc_13165
         return;
     }
     // CITIZEN fallback (same facing block and pose wrap as render_battle_map).
