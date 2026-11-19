@@ -881,6 +881,17 @@ bool CombatII::handle_scroll_input(double now_us, const std::function<void()>& d
             fine += sub_px;
             while(fine > rest) { fine -= tile_px; tile -= 1; }
         } else {               // right (4D00h -> 10F5C) / down (5000h -> 10E2F): fine -= sub_px
+            // Both routines compare the camera tile with map-12 right after subtracting the
+            // step and undo it before the wrap/draw. 10E2F adds the step back, so fine Y keeps
+            // the value it entered with; 10F5C stores 0Ch (the resting fine X). Testing the
+            // boundary only after the wrap (as this port used to) let the 4px down-scroll run
+            // its first three sub-steps at the bottom edge and leave fine Y = -12, which is
+            // what made sub_341C7's (9) draw the registered units 12px lower than the frame
+            // before it (sub_44DCC -> sub_12F2A -> sub_10988 reads the live fine Y).
+            if(tile >= max_tile) {
+                if(axis == 0) fine = rest;   // 10F5C: mov word ptr dword_7001C, 0Ch
+                return false;
+            }
             fine -= sub_px;
             while(fine <= rest - tile_px) { fine += tile_px; tile += 1; }
         }
