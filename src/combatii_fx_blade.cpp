@@ -36,8 +36,8 @@ struct FxPoint { int x = 0; int y = 0; };
 
 // sub_13669(eax=unit, edx=colour): solid silhouette of the unit's pose-0 D66A8 frame via
 //   5F517, at 10971(x)+0Ch / 10988(y)-2 plus the sprite entry [4]/[5] and the unit's [65h]/[66h].
-//   When [unit+77h] != 0 and [unit+5Ch] <= 6 the stored record's sprite is filled at the same
-//   live-unit anchor, using the live unit's facing/pose.
+//   When [unit+77h] != 0 and [unit+5Ch] <= 6 the preserved record's rider image slot
+//   (sub_11B77) is filled at the same live-unit anchor, using the live unit's facing/pose.
 void CombatII::battle_fx_silhouette_13669(int unit_index, int color) {
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return;
     const CombatUnitPlacement& u = units_[(size_t)unit_index];
@@ -53,7 +53,7 @@ void CombatII::battle_fx_silhouette_13669(int unit_index, int color) {
         blit_draw_entry(e);                           // adds fr->x_off/y_off
     };
     draw(u.sprite_type);
-    if (u.stored_77 && u.code_b <= 6) draw(u.stored_77->sprite_type);
+    if (u.stored_77 && u.code_b <= 6) draw(battle_rider_image_type(u));
 }
 
 // sub_204E8(eax=ty, edx=tx, ebx=N, ecx=flag, [esp+4]=repeat count): "magic<N>.nsp" enchant.

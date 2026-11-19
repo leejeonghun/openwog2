@@ -8003,8 +8003,9 @@ int CombatII::battle_item_3b7ce(int unit_index, int tx, int ty) {
     merged.linked_class = saved.combat_class;            // sub_174CF: [[77h]+11h] = the stash record's class
     units_[(size_t)unit_index] = merged;
     battle_form_17e6d(units_[(size_t)unit_index], units_[(size_t)unit_index].code_b); // sub_17E6D
-    // sub_11B77: the stash [60h] is the rider image slot (forms 1..4 -> word_706D4[61h],
-    // 5/6 -> word_70896[61h], +0x1F4). The port keys its NC2 cache by type and uses no slots.
+    // sub_11B77: the stash [60h] is the rider image slot (forms 0..4 -> word_706D4[61h],
+    // 5/6 -> word_70896[61h], +0x1F4). The port has no slot table; the overlay draw recomputes
+    // the same mapped type from the stash record and the live form (battle_rider_image_type).
     battle_wc1_occupancy_preserve_or_close("mount (3B7CE)");          // sub_11E04
     present_cutscene_frame();                                         // sub_45559
     if (battle_trace_)

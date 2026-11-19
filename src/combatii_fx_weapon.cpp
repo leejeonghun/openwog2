@@ -86,8 +86,8 @@ void CombatII::render_highlight_units_direct() {
 //   shadow, and loc_13123 repeats the MAP_EFFC foot decal across the tile width. The formulas
 //   below mirror render_battle_map's sink entry so sub_44DCC replays the same pixels.
 //   Every path then reaches loc_13165: when the unit has a preserved form record ([+77h]) and
-//   [5Ch] <= 6, that record's frame is drawn on top with the live unit's facing/pose, its own
-//   entry offsets, and the sink depth added to y.
+//   [5Ch] <= 6, the rider image in that record's slot (sub_11B77) is drawn on top with the live
+//   unit's facing/pose, its own entry offsets, and the sink depth added to y.
 void CombatII::battle_draw_unit_now(int unit_index) {
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return;
     const auto& u = units_[(size_t)unit_index];
@@ -102,10 +102,11 @@ void CombatII::battle_draw_unit_now(int unit_index) {
         if (ti < tile_attr_.size()) tile_attr = tile_attr_[ti];
     }
     if (const NC2Frame* fr = nc2_frame_for(u.sprite_type, u.facing & 3, (int)u.anim_frame)) {
-        // loc_13165: the preserved form record's frame on top of the live unit.
+        // loc_13165: the preserved record's rider image slot (sub_11B77) on top of the live
+        // unit, at the live facing/pose.
         auto draw_stored_form = [&](int depth) {
             if (!u.stored_77 || u.code_b > 6) return;
-            const NC2Frame* wf = nc2_frame_for(u.stored_77->sprite_type, u.facing & 3,
+            const NC2Frame* wf = nc2_frame_for(battle_rider_image_type(u), u.facing & 3,
                                                (int)u.anim_frame);
             if (wf) blit_nc2_frame(sx + wf->x_off, sy + wf->y_off + depth, *wf);
         };

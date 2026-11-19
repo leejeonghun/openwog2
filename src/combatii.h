@@ -1013,6 +1013,12 @@ private:
     bool battle_d66a8_raw(int type_code, int dir, int pose, uint8_t out13[13]) const;
     // D66A8 footprint (entry[0]/[1], facing pose 0). Falls back to 1x1 and false when missing.
     bool battle_d66a8_footprint(int type_code, int dir, int* w, int* h) const;
+    // sub_11B77: image type loaded into the preserved record's slot ([+77h]+60h) for the live
+    // form ([+5Ch] 0..6). It maps the preserved record's [+61h] type through word_706D4 (forms
+    // 0..4) or word_70896 (forms 5/6) and adds 1F4h with the original's cwde wrap. Returns -1
+    // when there is no preserved record or the form is >6, and the preserved type unchanged
+    // when the type is outside 0..224 (the original reads past the 225-entry table there).
+    int battle_rider_image_type(const CombatUnitPlacement& u) const;
     // Same lookup for a specific D66A8 pose (sub_11E04 uses the current [unit+64h]).
     bool battle_d66a8_footprint_pose(int type_code, int dir, int pose, int* w, int* h) const;
     // Draws a w*h strip, skipping 0xFF (transparent) pixels (the sub_10083 convention).
