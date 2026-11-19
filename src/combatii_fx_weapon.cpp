@@ -77,14 +77,14 @@ void CombatII::render_highlight_units_direct() {
 
 // ---- sub_12F2A: redraw one unit ----
 //   Uses the coordinate convention of the render_battle_map unit pass (UNIT_ANCHOR_X/Y plus
-//   walk offsets) and draws only the sprite and its ground shadow. Sink/decal/clip need the
-//   terrain, and 305A2 only overlays a unit on an effect frame.
-//   The shadow branch follows sub_12F2A's class test: a large sprite (>= 12Ch) uses the
-//   -12/+4 offsets only when the tile attribute is >= 64h. On normal ground both classes
-//   use entry[7]/[8] + 12 - which is why an RCR (whose entry[7]/[8] stay zero) puts its
-//   shadow directly under the feet. Water tiles (attr & 0Fh == 8) skip the shadow, and so do
-//   sunken tiles (attr > 64h): loc_1302F draws the clipped sprite and its foot decal there,
-//   but never the unit shadow.
+//   walk offsets). The shadow branch follows sub_12F2A's class test: a large sprite (>= 12Ch)
+//   uses the -12/+4 offsets only when the tile attribute is >= 64h. On normal ground both
+//   classes use entry[7]/[8] + 12 - which is why an RCR (whose entry[7]/[8] stay zero) puts
+//   its shadow directly under the feet. Water tiles (attr & 0Fh == 8) skip the shadow.
+//   Sunken tiles (attr > 64h, map kind < 4, grounded) take loc_13016/loc_1302F instead: the
+//   sprite drops by the tile depth, its lower scanlines are clipped by sub_5F4AF, it gets no
+//   shadow, and loc_13123 repeats the MAP_EFFC foot decal across the tile width. The formulas
+//   below mirror render_battle_map's sink entry so sub_44DCC replays the same pixels.
 void CombatII::battle_draw_unit_now(int unit_index) {
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return;
     const auto& u = units_[(size_t)unit_index];
@@ -99,9 +99,36 @@ void CombatII::battle_draw_unit_now(int unit_index) {
         if (ti < tile_attr_.size()) tile_attr = tile_attr_[ti];
     }
     if (const NC2Frame* fr = nc2_frame_for(u.sprite_type, u.facing & 3, (int)u.anim_frame)) {
+        // Sunken terrain (loc_13016/loc_1302F): drop the sprite by the tile depth and clip its
+        // lower scanlines; the foot decal replaces the shadow.
+        if (sce_map_kind_ < 4 && !u.flying && tile_attr > 0x64) {
+            const int depth = TERRAIN_DEPTH[(tile_attr - 0x65) & 0xF];     // unk_70A58
+            const bool big = (u.sprite_type >= 0x12C);
+            const int clip_h = big ? 14 - (int)fr->y_off - depth           // loc_13016
+                                   : (int)fr->sil_y - (int)fr->y_off + 22 - depth; // loc_12FE4
+            const int draw_x = sx + fr->x_off;
+            const int draw_y = sy + fr->y_off + depth;
+            if (clip_h > 0) blit_nc2_frame_clipped(draw_x, draw_y, *fr, clip_h); // 5F4AF
+            else blit_nc2_frame(draw_x, draw_y, *fr);                      // 5F3FD
+            // loc_13123: MAP_EFFC overlay at the foot anchor, repeated entry[0] times in 24px
+            // steps. The original only reaches it through the clipped branch.
+            const int terr_idx = (tile_attr - 0x65) & 0xF;
+            const TerrainOverlayFrame& ov =
+                terrain_overlay_[(size_t)(terr_idx * 2 + terrain_anim_frame_)];
+            if (clip_h > 0 && !ov.rle.empty()) {
+                // loc_13123 consumes the anchor set by the class branch: class 1/2 uses the fixed
+                // foot point (var_C = sx-12, var_10 = sy+4+depth+2), class 0 uses entry[7]/[8]
+                // (var_10 = sy+sil_y+12+depth+2).
+                const int decal_x = big ? sx - 12 : sx + fr->sil_x;
+                const int decal_y = big ? sy + 6 + depth : sy + fr->sil_y + 14 + depth;
+                const int reps = std::max(1, fr->tile_w);
+                for (int t = 0; t < reps; ++t)
+                    blit_sprite_rle(decal_x + t * TOWN_TILE_W, decal_y, ov.rle.data());
+            }
+            return;
+        }
         const bool water = (tile_attr >= 0 && (tile_attr & 0xF) == 8);    // loc_13096
-        const bool sunken = (tile_attr > 0x64);                           // loc_1302F sink path
-        if (sce_map_kind_ < 4 && !u.flying && !water && !sunken &&
+        if (sce_map_kind_ < 4 && !u.flying && !water &&
             fr->shadow_idx >= 0 && fr->shadow_idx < 7 &&
             !shadow_sprites_[fr->shadow_idx].rle.empty()) {
             const bool big = (u.sprite_type >= 0x12C && tile_attr >= 0x64);   // loc_12FDE

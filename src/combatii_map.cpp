@@ -2189,8 +2189,9 @@ void CombatII::render_battle_map(bool magic_pass, bool overlay_only, bool skip_m
                 //       class 1 reads record +0x0E). Skipped when the attribute high word is -1
                 //       (wide) or (attr & 0Fh) == 8 (water). The sink path has no shadow.
                 //   (4) decal (loc_13123, sinking only): MAP_EFFC[(terr&0Fh)*2 + BA84A+2], repeated
-                //       entry[0] times at 24px steps from (var_C, var_10) =
-                //       (sx + sil_x, sy + sil_y + 14 + depth); class 0 uses entry[0] = 1.
+                //       entry[0] times at 24px steps from (var_C, var_10):
+                //       class 0 -> (sx + sil_x, sy + sil_y + 14 + depth) (entry[0] = 1),
+                //       class 1/2 -> (sx - 12, sy + 6 + depth).
                 //   Flying ([esi+14h]&1) and map kind >= 4 skip both shadow and sink (jge loc_130DC).
                 int shadow_spr = -1;
                 bool special_terrain = false;
@@ -2251,16 +2252,21 @@ void CombatII::render_battle_map(bool magic_pass, bool overlay_only, bool skip_m
                         unit_push({draw_x, spr_y, foot_y, 4, 0, ncf, clip_h, 0, nullptr});
                     else
                         unit_push({draw_x, spr_y, foot_y, 2, 0, ncf, 0, 0, nullptr});
-                    // Foot decal (loc_13123): x = sx + sil_x, y = sy + sil_y + 14 + depth
-                    // (shadow y + depth + 2), repeated entry[0] times at 24px steps.
+                    // Foot decal (loc_13123): loc_13016 (class 1/2) anchors at
+                    // (sx - 12, sy + 4); loc_12FE4 (class 0) at
+                    // (sx + sil_x, sy + sil_y + 12). The sink block adds depth+2 to y, so
+                    // class 1/2 is sy + 6 + depth and class 0 is sy + sil_y + 14 + depth.
+                    // Repeated entry[0] times at 24px steps.
                     const int terr_idx = (tile_attr_[(size_t)tile_idx] - 0x65) & 0xF;
                     const TerrainOverlayFrame& ov =
                         terrain_overlay_[(size_t)(terr_idx * 2 + terrain_anim_frame_)];
                     if (clip_h > 0 && !ov.rle.empty()) {
+                        const int decal_x = big ? sx - 12 : sx + ncf->sil_x;
+                        const int decal_y = big ? sy + 6 + depth
+                                                : sy + ncf->sil_y + 14 + depth;
                         const int reps = std::max(1, ncf->tile_w);
                         for (int t = 0; t < reps; t++)
-                            unit_push({sx + ncf->sil_x + t*0x18,
-                                       sy + ncf->sil_y + 14 + depth,
+                            unit_push({decal_x + t*0x18, decal_y,
                                        foot_y, 5, 0, nullptr, 0, 0, &ov});
                     }
                     status_overlay();
