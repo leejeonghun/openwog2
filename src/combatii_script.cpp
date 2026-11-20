@@ -3013,6 +3013,9 @@ void CombatII::battle_spawn_activate(const VmEvent& ev) {
         // drop/walk animation). Right after activation a class-0 descriptor's 44 frames may not be
         // ready yet, so the gate is not closed too eagerly.
         if (ev.walk_units.empty()) {
+            // sub_51211 ends with one sub_4559F, i.e. sub_454B3 + sub_5046B: step the camera and
+            // draw/advance a pending message window on this frame too.
+            camera_update_frame();
             present_cutscene_frame();
             battle_wc1_occupancy_preserve_or_close("VM 0x03 spawn/list insertion", ev.offset);
             return;
@@ -3165,12 +3168,13 @@ void CombatII::play_vm_events(const std::vector<VmEvent>& events) {
             battle_wc1_occupancy_preserve_or_close(ev.text.c_str(), ev.offset);
             break;
         case VmEventType::Message:
-            // As in sub_52B4F, only the window is reserved (no input wait). The remaining display
-            // time is consumed by the following 0x0F mode 2 wait loop while it runs sub_5046B.
+            // loc_52FDE: `call sub_52B4F` then `jmp loc_52EFF` - only the window is reserved.
+            // sub_52B4F neither draws nor decrements, and the original does not present a frame
+            // here, so the next sub_5046B call (the following wait loop) is the first one to
+            // draw the text and count it down.
             message_window_set(ev.text, ev.msg_frames);
             fprintf(stderr, "COMBAT: play message %d frames: %s\n", ev.msg_frames,
                     log_text(ev.text).c_str());
-            present_cutscene_frame();
             break;
         case VmEventType::Dialogue: {
             if (ev.text.empty()) { present_cutscene_frame(); break; }
@@ -3566,7 +3570,11 @@ void CombatII::play_vm_events(const std::vector<VmEvent>& events) {
             }
             if (idx >= 0 && (size_t)idx < tile_attr_.size())
                 tile_attr_[(size_t)idx] = (uint8_t)ev.tile_attr_value;
-            if (ev.tile_last) present_cutscene_frame(); // sub_4559F once after the record loop
+            if (ev.tile_last) {
+                // sub_52C06 ends with sub_4559F (sub_454B3 + sub_5046B), once after the loop.
+                camera_update_frame();
+                present_cutscene_frame();
+            }
             break;
         }
         case VmEventType::Weather:

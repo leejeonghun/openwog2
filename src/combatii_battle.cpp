@@ -1314,6 +1314,9 @@ void CombatII::play_unit_pose(const VmEvent& ev) {
     a.anim_frame = (uint8_t)(v % 11);
             fprintf(stderr, "COMBAT: play unit pose: unit %d -> facing %d pose %d (32 ticks)\n",
                 a.id, a.facing, a.anim_frame);
+    // loc_51E44: `call sub_4559F; call sub_5E9E8` - sub_5046B steps the camera and draws or
+    // advances a pending message window on this frame.
+    camera_update_frame();
     present_cutscene_frame();
     game_timer_set(0x20);
     wait_game_tick();

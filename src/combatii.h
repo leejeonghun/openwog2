@@ -623,11 +623,12 @@ private:
                      int speaker_tx = -1, int speaker_ty = -1, int speaker_unit = -1);
     void render_overlay();
     // Draws one frame as background (FPM + tiles) -> weather -> units -> UI, which is
-    // sub_454B3 + sub_454D5, plus the cutscene message/drop layers in battle_fx_world().
+    // sub_454B3 + sub_454D5, then the sub_5046B message text and the sub_50216 drop (sub_4559F
+    // -> sub_508E6 order).
     void render_battle_frame();
     void present_cutscene_frame();
     // ---- Original frame chain (the order the spell drivers call every frame) ----
-    void battle_fx_world();      // sub_454B3 + sub_5046B message + sub_50216 drop (map/units/weather)
+    void battle_fx_world();      // sub_454B3 (map/units/weather; no message/drop; falls into 454D5)
     void battle_fx_world_dim();  // sub_454B3 + sub_12E01 + sub_454D5 (dim before post-dim effects)
     void battle_fx_world_12d65();        // sub_10AEB + sub_12D65 (no unit pass, no weather)
     void battle_fx_world_454b3_12d65();  // sub_454B3 then sub_12D65 over it (276B9 step 2)
@@ -635,6 +636,7 @@ private:
     void battle_fx_world_keep(); // sub_454B3 without clearing the backbuffer (equip screens sub_48BC1/48863)
     void battle_fx_flush();      // sub_12E01: send queued spell sprites (5F570/5EE51/5F305)
     void battle_fx_overlay();    // sub_454D5: dim -> sub_12161 -> sub_44DCC -> sub_13546 -> sub_45431
+    void battle_fx_message_window(); // sub_5046B message head, after sub_454D5 (sub_4559F order)
     void battle_fx_commit();     // sub_5E9E8 (send including the dialogue box)
     // ---- sub_44D89 / sub_44D81 / sub_44D75: dword_F9F08 highlight list (max 59h) ----
     // sub_44DCC in 454D5 redraws these units with sub_12F2A, above spell effects and dimming
@@ -835,7 +837,7 @@ private:
     MessageWindow msg_cur_;
     std::deque<MessageWindow> msg_queue_;
     int msg_timer_ = 0;           // word_11057C
-    bool msg_frame_due_ = false;  // next world pass corresponds to sub_4559F (message frame)
+    bool msg_frame_due_ = false;  // a sub_5046B call is due on this frame (set by camera_update_frame)
     void message_window_set(const std::string& text, int frames); // sub_52B4F
     void render_message_window(); // sub_5E048(x=0x20, y=0x24, text) from the head of sub_5046B
     void advance_message_window(); // sub_5046B: decrement/advance after the text has been drawn

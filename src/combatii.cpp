@@ -96,6 +96,9 @@ void CombatII::camera_center_on(int tx, int ty) {
     if (battle_instant_camera_) { // equivalent of sub_111BE (FDAEA!=0, no animation)
         cam_tile_x_ = cx; cam_tile_y_ = cy;
         cam_fine_x_ = CAM_FINE_X_REST; cam_fine_y_ = CAM_FINE_Y_REST;
+        // sub_1124A's FDAEA path is sub_111BE + sub_454B3 (+ 49FE1/4A106/5E9E8) and never calls
+        // sub_5046B, so this frame must not draw or decrement a pending message window either.
+        msg_frame_due_ = false;
         render_battle_frame(); // equivalent of sub_454B3
         video_.present();
         return;
@@ -106,6 +109,9 @@ void CombatII::camera_center_on(int tx, int ty) {
     // to the final camera.
     while (camera_scrolling()) {
         camera_update_frame();
+        // loc_1110A calls only sub_45577 (454B3 + present): it never calls sub_5046B, so this
+        // frame must neither draw nor decrement the message window.
+        msg_frame_due_ = false;
         render_battle_frame();
         video_.present();
     }
@@ -125,26 +131,14 @@ bool CombatII::battle_ring_dim_active() const {
 }
 
 // ---- sub_454B3: map/FPM -> units -> weather ----
-// 454B3 = sub_10AEB (map) -> [sub_1547F] -> sub_12BEE (units) -> sub_4512E (weather).
-// render_battle_map finishes sub_10AEB + sub_12BEE (towers and units sorted by Y), so the
-// weather layer is drawn on top afterwards. sub_4559F calls sub_5046B (the 0x73 message
-// window text) after sub_454B3, and sub_508E6 calls sub_50216 for the drop after that.
-// The text is therefore written before the drop layer, not after it.
+// 454B3 = sub_10AEB (map) -> [sub_1547F] -> sub_12BEE (units) -> sub_4512E (weather), then
+// falls through into sub_454D5 (see render_battle_frame). It does not call sub_5046B, so the
+// 0x73 message window is not drawn here. The full sub_4559F frame is sub_454B3 -> sub_454D5 ->
+// sub_5046B (text), and sub_508E6 draws the sub_50216 drop after that text.
 void CombatII::battle_fx_world() {
     video_.clear();
     render_battle_map();                                            // sub_10AEB + sub_12BEE
     render_weather_layer();                                         // sub_4512E
-    // sub_4559F: sub_454B3 -> sub_5046B, then sub_508E6 -> sub_50216.
-    // sub_5046B draws the current text first and only then decrements word_11057C, so the
-    // final timer value (1) must still produce a drawn frame. Advance here, after the draw.
-    if (msg_frame_due_) {
-        if (msg_active_) {
-            if (!ui_visible_) render_message_window();              // sub_5046B: draw first
-            advance_message_window();                               // then decrement/advance
-        }
-        msg_frame_due_ = false;
-    }
-    render_battle_drop_layer();                                     // sub_50216 (after sub_4559F)
 }
 
 // sub_454B3 + sub_12E01 + sub_454D5: draw the world, consume any pre-dim queue, then apply
@@ -226,11 +220,14 @@ void CombatII::battle_fx_commit() {
     dump_frame_if_requested();
 }
 
-// sub_454B3 plus the fall-through sub_454D5: one whole frame.
+// sub_454B3 plus the fall-through sub_454D5: one whole frame. sub_4559F then calls sub_5046B
+// (text over the HUD), and sub_508E6 calls sub_50216 for the drop after that text.
 void CombatII::render_battle_frame() {
     battle_fx_world();                                              // sub_454B3 = 10AEB + 12BEE + 4512E
     battle_fx_flush();                                              // sub_12E01
     battle_fx_overlay();                                            // sub_454D5
+    battle_fx_message_window();                                     // sub_5046B (after sub_454D5)
+    render_battle_drop_layer();                                     // sub_50216 (after the text)
     render_sprites();          // move/attack queue (15D0A family) - drawn outside 454D5
 }
 
@@ -252,9 +249,9 @@ void CombatII::render_overlay() {
         if (ui_is_overlay_) show_overlay_message(ui_text_);
         else show_dialogue_line(ui_text_, ui_portrait_, ui_speaker_, ui_speaker_tx_, ui_speaker_ty_, ui_speaker_unit_);
     }
-    // sub_5046B's message window is not part of sub_454D5: battle_fx_world() writes it before
-    // the sub_50216 drop layer, matching sub_4559F -> sub_508E6. Do not redraw it here after
-    // the drop, which would put the text on top of the drop sprites.
+    // sub_5046B's message window is not part of sub_454D5: sub_4559F draws it after the whole
+    // 454B3/454D5 frame, and sub_508E6 draws the sub_50216 drop after that text. It is drawn by
+    // battle_fx_message_window() in render_battle_frame, after this overlay.
 }
 
 void CombatII::present_cutscene_frame() {
@@ -324,7 +321,8 @@ void CombatII::message_window_set(const std::string& text, int frames) {
         msg_cur_ = w;
         msg_timer_ = w.frames;
         msg_active_ = true;
-        msg_frame_due_ = true;      // the next world pass is the sub_4559F message frame
+        // No draw/decrement here: sub_52B4F only opens the window. The first sub_5046B call
+        // (the following wait loop) draws the text and then counts this frame down.
         fprintf(stderr, "COMBAT: message window open: %d frames, %zu chars\n",
                 msg_timer_, w.text.size());
     } else {
@@ -340,10 +338,20 @@ void CombatII::render_message_window() {
     show_overlay_message(msg_cur_.text);
 }
 
-// sub_5046B's message head: the caller has already drawn the current text. Decrement the
-// remaining-frame counter, then switch to the next queued window or close when it reaches 0.
-// This is deliberately separate from camera_update_frame(): the original draws the text before
-// this decrement, so the last frame with timer == 1 must remain visible for one full frame.
+// sub_5046B's message head: draw the current text with sub_5E048(110250h, 20h, 24h), then
+// decrement word_11057C, switching to the next queued window or closing at 0. The draw must
+// precede the decrement so the last frame with timer == 1 stays visible for a full frame.
+// Called after sub_454D5 in render_battle_frame (sub_4559F order), not in sub_454B3.
+void CombatII::battle_fx_message_window() {
+    if (!msg_frame_due_) return;
+    if (msg_active_) {
+        if (!ui_visible_) render_message_window();                   // sub_5E048: draw first
+        advance_message_window();                                    // mov dx,word_11057C; sub edx,1; jg
+    }
+    msg_frame_due_ = false;
+}
+
+// sub_5046B's counter/dispatch part: the caller has already drawn the current text.
 void CombatII::advance_message_window() {
     if (!msg_active_) return;
     if (--msg_timer_ <= 0) {
@@ -363,15 +371,16 @@ void CombatII::advance_message_window() {
 }
 
 // ---- sub_5046B: one step of "scroll camera + consume waypoints" per frame ----
-// The message-window draw/decrement is performed by battle_fx_world() after sub_454B3, because
-// sub_5046B draws the text before changing word_11057C. This function only keeps the camera and
-// return-value semantics of the same routine.
+// The message-window draw/decrement is performed by battle_fx_message_window() in
+// render_battle_frame(), after the sub_454D5 overlay (sub_4559F order), because sub_5046B draws
+// the text before changing word_11057C. This function only keeps the camera and return-value
+// semantics of the same routine.
 // Returns 0 = still busy (a window is open or frames remain -> loc_50695),
 //         1 = nothing to do (loc_50593: no scroll, no queue, no window),
 //         2 = popped the next waypoint and started a new scroll.
 int CombatII::camera_update_frame() {
     // bx on entry reports whether a window was open; the actual text draw/decrement is done in
-    // battle_fx_world(). This frame still reports "busy" (0) when it was open.
+    // render_battle_frame(). This frame still reports "busy" (0) when it was open.
     bool msg_was_active = msg_active_;
     if (msg_was_active) msg_frame_due_ = true;   // the next world pass is a sub_4559F frame
     // 1) One scroll step while frames remain (loc_505B6).
@@ -1228,6 +1237,15 @@ int CombatII::run(const std::string& scenario_param){
     fprintf(stderr, "COMBAT: cutscene done -> battle viewer loop (tick period %d game ticks%s)\n",
             battle_tick_period_, battle_tick_period_ == 0 ? " = free-run" : "");
     skip_cutscene_ = false;   // clearing the ESC cutscene skip keeps in-battle events playing
+    // The original wait loop cannot leave while a message window is open: sub_5046B returns 0
+    // whenever dword_110250 was non-zero on entry and loc_53030 only exits on 1. ESC skipping
+    // the cutscene is port-only, so drop any window/sub_52B4F queue left open here. The battle
+    // viewer loop (5580F) has no sub_5046B call and would never drain it.
+    msg_active_ = false;
+    msg_cur_.text.clear();
+    msg_queue_.clear();
+    msg_timer_ = 0;
+    msg_frame_due_ = false;
     battle_loop_active_ = true;
     battle_tick_next_us_ = 0.0;
     while(running && !should_exit_){
