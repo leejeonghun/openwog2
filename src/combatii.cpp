@@ -567,6 +567,16 @@ void CombatII::drain_camera_scroll() {
     // port dumped nothing here). Drains that actually advance (camera waypoints/scroll or a
     // message window) keep dumping every frame, as before.
     const bool drain_advances = camera_scrolling() || !cam_waypoints_.empty() || msg_active_;
+    if (!drain_advances) {
+        // loc_53030: sub_5046B returns 1 on its first call, so the original jumps straight to
+        // loc_5305D and runs `call sub_5E9E8` only - it presents the backbuffer it already has,
+        // without sub_454B3 redrawing the world. The port's backbuffer already holds the last
+        // drawn frame (dialogue box included), so a plain present is the exact equivalent.
+        video_.present();
+        fprintf(stderr, "COMBAT: play camera drain (0 frames, %d/%d remaining)\n",
+                (int)cam_scroll_frames_x_, (int)cam_scroll_frames_y_);
+        return;
+    }
     int frames = 0;
     for (;;) {
         int r = camera_update_frame();

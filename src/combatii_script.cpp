@@ -2238,6 +2238,12 @@ void CombatII::dump_script_engine() {
 // The port takes g_palette to 0 in 10 steps and presents after each step.
 void CombatII::victory_fade_out() {
     fprintf(stderr, "COMBAT: victory fade-out (sub_44CCA)\n");
+    // sub_44CCA+11..+21: sub_44D6E(1)/sub_44DEC(0) stop scrolling/overlays, then
+    // `sub_454B3(camX, camY, 0xC8)` redraws the world before the palette fade. The port needs
+    // that redraw: a dialogue box dismissed just before the stage clear lives only in the
+    // backbuffer (the port has no sub_4A210 background restore), and the loc_5305D empty drain
+    // now presents without a world pass.
+    render_battle_frame();
     if (auto_advance_) {
         // Auto-advance mode skips the fade frames so verification stays fast.
         memset(g_palette, 0, sizeof(g_palette));
@@ -3197,7 +3203,14 @@ void CombatII::play_vm_events(const std::vector<VmEvent>& events) {
         return find_unit_index_ctx(sel, id, forced_context);
     };
     for (const auto& ev : events) {
-        if (should_exit_ || skip_cutscene_) return;
+        if (should_exit_) return;
+        // ESC skip is a port-only shortcut: it fast-forwards the playback, but the commands that
+        // end the module must still run. 0x01 (sub_506F3) does the stage-clear fade/save/
+        // contmap.dat cleanup and 0x12 (sub_52D33) writes the next-scenario handoff; the original
+        // always executes them when the walk reaches them.
+        if (skip_cutscene_ && ev.type != VmEventType::Victory &&
+            ev.type != VmEventType::NextScenario)
+            continue;
         switch (ev.type) {
         case VmEventType::OccupancyStateUnknown:
             // At the parser marker the reinforcement may not be active and its NC2 may not be
@@ -3237,7 +3250,14 @@ void CombatII::play_vm_events(const std::vector<VmEvent>& events) {
                     log_text(ev.text).c_str());
             fprintf(stderr, "COMBAT: dialogue wait: key or 700 ticks (%.3fs), timer period=700\n",
                     700.0 / kTimerHz);
-            if (wait_key_or_ticks(0x2BC)) return;
+            if (wait_key_or_ticks(0x2BC)) {
+                if (should_exit_) return;
+                // ESC dismisses the line (the original clears it after the wait) and then
+                // fast-forwards the rest of the stream; the loop head still lets the
+                // module-ending events through.
+                set_ui_text("", false, -1);
+                continue;
+            }
             set_ui_text("", false, -1);
             break;
         }
@@ -3338,10 +3358,11 @@ void CombatII::play_vm_events(const std::vector<VmEvent>& events) {
                         (2 * (std::max(1, ev.walk_frames) + 8) + 1) * 12.0 / kTimerHz);
             }
             animate_unit_walk(ev);
-            if (should_exit_ || skip_cutscene_) {
+            if (should_exit_) return;
+            if (skip_cutscene_) {
                 if (preserve_occupancy)
                     battle_wc1_occupancy_unknown("VM 0x05 scripted movement interrupted", ev.offset);
-                return;
+                break;   // ESC: skip the post-move proofs; the loop continues to the terminal events
             }
             bool moved_to_proven_endpoints = preserve_occupancy;
             if (moved_to_proven_endpoints) {
@@ -3518,8 +3539,8 @@ void CombatII::play_vm_events(const std::vector<VmEvent>& events) {
                 battle_f14d8_ = saved_f14d8;                   // sub_2CA39(0)
                 if ((size_t)ui < units_.size()) units_[(size_t)ui].combat_acc57 = 0; // [57h]=0
             }
-            if (should_exit_ || skip_cutscene_) return;
-            present_cutscene_frame();
+            if (should_exit_) return;
+            if (!skip_cutscene_) present_cutscene_frame();
             break;
         }
         case VmEventType::FactionTransform: {
@@ -3640,11 +3661,11 @@ void CombatII::play_vm_events(const std::vector<VmEvent>& events) {
         case VmEventType::Attack:
             // sub_51C74 loc_51DFE/loc_51E0F: sub_1E61D (attacker) [+ sub_1EF5C]
             play_attack_sequence(ev);
-            if (should_exit_ || skip_cutscene_) return;
+            if (should_exit_) return;
             break;
         case VmEventType::UnitPose:
             play_unit_pose(ev);                        // loc_51E34
-            if (should_exit_ || skip_cutscene_) return;
+            if (should_exit_) return;
             break;
         case VmEventType::Item: {
             // sub_5196F: kind 0 stores the item, kinds 1..3 equip it (weapon / shield /
@@ -3697,16 +3718,16 @@ void CombatII::play_vm_events(const std::vector<VmEvent>& events) {
                 }
                 if (!msg.empty()) battle_unit_message(ui, msg);                 // sub_482A5
             }
-            if (should_exit_ || skip_cutscene_) return;
+            if (should_exit_) return;
             break;
         }
         case VmEventType::UnitEffect:
             play_unit_effect(ev);                      // sub_51FF7
-            if (should_exit_ || skip_cutscene_) return;
+            if (should_exit_) return;
             break;
         case VmEventType::Hp:
             play_hp_change(ev);                        // sub_5211D
-            if (should_exit_ || skip_cutscene_) return;
+            if (should_exit_) return;
             break;
         case VmEventType::UnitLeave: {
             if (!ev.leave_units.empty())
@@ -3716,7 +3737,7 @@ void CombatII::play_vm_events(const std::vector<VmEvent>& events) {
             // (border) and then sub_11EE4(x,y,U) plus removal from the legion list take it off the
             // field.
             play_retreat(ev);
-            if (should_exit_ || skip_cutscene_) return;
+            if (should_exit_) return;
             break;
         }
         case VmEventType::Face: {
