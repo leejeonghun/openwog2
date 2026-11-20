@@ -2726,7 +2726,7 @@ void CombatII::play_retreat_pillar_508e6(const VmEvent& ev, int edd74) {
         units_[(size_t)ui].drop_wait = 1;             // hidden until the counter reaches 7
         units_[(size_t)ui].drop_step = -1;
         units_[(size_t)ui].drop_sil = 0;
-        units_[(size_t)ui].drop_in_cc998 = true;      // mode-4 retreat stays in the grid
+        units_[(size_t)ui].drop_in_cc998 = true;      // mode-4 retreat is in the grid until counter 6
     }
     if (ps.empty()) { present_cutscene_frame(); return; }
 
@@ -2760,10 +2760,12 @@ void CombatII::play_retreat_pillar_508e6(const VmEvent& ev, int edd74) {
                 if (p.removed) continue;
                 --p.counter;                          // dec al
                 if (p.counter == 6) {                 // cmp al,6; jne (mode 4 path 509EC)
-                    // 197AD/113E4/113CC remove the unit from the ready, unit and army lists, but
-                    // the draw loop keeps calling 50216 with the dword_F0648 pointer, so the
-                    // port must keep drawing it until the counter drops below 0.
+                    // 197AD/113E4/113CC remove the unit from the ready, unit and army lists;
+                    // 11F74(x,y,0) clears its CC998 cell. The draw loop keeps calling 50216 with
+                    // the dword_F0648 pointer, so the drop sprite continues, but the normal map
+                    // pass must stop drawing the unit and its status overlay from here on.
                     battle_remove_from_ready_queue(p.ui); // sub_197AD
+                    units_[(size_t)p.ui].drop_in_cc998 = false; // sub_11F74(x,y,0)
                     p.removed = true;
                 }
             }

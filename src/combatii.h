@@ -194,9 +194,10 @@ struct CombatUnitPlacement {
     // sub_50216+82: solid colour is cl = 9-dx = 2+counter. This mirror is kept for
     // state/trace output; the drop renderer computes the colour directly. 0 = no drop.
     int drop_sil = 0;
-    // True while the drop runs for a unit that is still in the CC998 grid (mode-4 retreat).
-    // Mode-1 spawn drops are not inserted into CC998 until landing (sub_11F74); their map pass
-    // therefore draws no normal sprite or status overlay.
+    // True while the drop runs for a unit that is still in the CC998 grid (mode-4 retreat
+    // before sub_11F74(x,y,0) clears the cell at counter 6). Mode-1 spawn drops are not inserted
+    // into CC998 until landing (sub_11F74); their map pass therefore draws no normal sprite or
+    // status overlay.
     bool drop_in_cc998 = false;
     // Pixel dissolve state for large-unit deaths (sub_46A11). While death_dissolve > 0 the
     // renderer draws the strip with the pixels marked in death_mask[] erased to 0xFF.

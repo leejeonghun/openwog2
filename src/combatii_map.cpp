@@ -2155,8 +2155,9 @@ void CombatII::render_battle_map(bool magic_pass, bool overlay_only, bool skip_m
             //   sub_4559F's map+weather pass runs before sub_50216, so the drop sprites are
             //   collected separately and flushed after weather. A mode-1 spawn drop is not in
             //   the CC998 grid until landing (sub_11F74), so sub_12567 draws neither the normal
-            //   sprite nor its status overlay. Mode-4 retreat units are still in the grid; their
-            //   status overlay stays in the map-pass draw list below the drop sprites.
+            //   sprite nor its status overlay. Mode-4 retreat units are still in the grid at
+            //   counter 7, so that one frame falls through to the normal map path; counter 6
+            //   clears the grid cell and only the drop sprite remains.
             if (u.drop_step >= 0) {
                 load_event_syb();
                 const int dx = 7 - u.drop_step;          // dx = drop counter
@@ -2171,7 +2172,6 @@ void CombatII::render_battle_map(bool magic_pass, bool overlay_only, bool skip_m
                     if (hl) highlight_draws_.push_back(e);
                     drop_draws_.push_back(e);
                 };
-                if (u.drop_in_cc998) status_overlay();
                 if (dx > 1) {                             // dx 0/1: silhouette skipped, pillar drawn
                     const NC2Frame* sf = nc2_frame_for(u.sprite_type, u.facing & 3, 0);
                     if (sf) drop_push({drop_x, drop_y, foot_y, 3, 9 - dx, sf});
@@ -2180,7 +2180,10 @@ void CombatII::render_battle_map(bool magic_pass, bool overlay_only, bool skip_m
                     const NC2Frame& ds = syb[u.drop_step];
                     drop_push({drop_x, drop_y, foot_y, 2, 0, &ds});   // xo/yo are applied by the type-2 draw
                 }
-                continue;                                 // skip the normal NC2/CITIZEN path
+                if (!u.drop_in_cc998) continue;           // spawn drop: no normal map-pass entry
+                // Mode-4 retreat at counter 7: let the normal map pass draw the unit and its
+                // status overlay below the collected drop sprites. drop_in_cc998 is cleared when
+                // the counter reaches 6, so later frames take the branch above.
             }
             // ---- sub_12567 (dasm 3751..3796): map_kind 6 flips facing from the unit tile
             // attribute ----
