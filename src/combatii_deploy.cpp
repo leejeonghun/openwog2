@@ -40,8 +40,8 @@
 //   - sub_455BD (HUD panel relocate) and sub_49C05 (cursor shape) are skipped: the port uses the
 //     SDL hardware cursor, so the software cursor (sub_5D41E/5D570) and the INT 33h AX=7/8 mouse
 //     trap are replaced by g2move::confine_box. The two sub_44C75 load-bar ticks of sub_55518 are
-//     drawn with battle_g2msg_progress_tick(); the two calls inside sub_55B59's VSP loading have
-//     no equivalent port stage (weapon VSPs are loaded on demand).
+//     drawn with battle_g2msg_progress_tick(); the two calls inside sub_55B59's VSP loading are
+//     drawn at the VSP stage of load_scenario().
 //   - Cell background save/restore (sub_545AA/54603) snapshots the 27x27 backbuffer right
 //     after the battle screen is drawn and restores it.
 //   - sub_48083's internal wait (sub_499EF(5Ah)) is performed by the caller through

@@ -2452,15 +2452,24 @@ bool CombatII::battle_quick_save_4f4ef() {
 }
 
 bool CombatII::battle_quick_load_4fd25() {
-    // sub_4FD25: sub_5AF1B -> sub_5CD0D -> sub_44C05 ... The banner is drawn over the frame
-    // that was on screen when quick load was chosen, before the qsv restore.
+    // sub_4FD25: sub_5AF1B -> sub_5CD0D -> sub_44C05 ... sub_44C05 clears the screen to index 0
+    // and draws the banner, so the frame that was on screen when quick load was chosen is not
+    // kept underneath it.
     battle_g2msg_scenario_banner();
     std::string path = battle_qsv_path();
-    FILE* f = path.empty() ? nullptr : fopen(path.c_str(), "rb");
-    if (!f) {
-        fprintf(stderr, "COMBAT: warning: quick load file missing (%s)\n", path.c_str());
+    // Port-only failure path (the original has no missing/corrupt-qsv handling): redraw a real
+    // battle frame so the banner does not stay on screen until the next frame. The system menu
+    // closes on cx == 2 regardless, so the caller returns to the live battle.
+    auto fail = [&](const std::string& why) {
+        fprintf(stderr, "COMBAT: warning: %s\n", why.c_str());
+        if (map_w_ > 0 && map_h_ > 0) render_battle_frame();
+        else video_.clear();
+        video_.present();
         return false;
-    }
+    };
+    FILE* f = path.empty() ? nullptr : fopen(path.c_str(), "rb");
+    if (!f)
+        return fail("quick load file missing (" + path + ")");
     // Read the header into locals first: reloading the scenario makes load_scenario() reset map
     // size, camera, clock and unit state, so the values must be applied after that load.
     struct QsvHeader {
@@ -2507,7 +2516,7 @@ bool CombatII::battle_quick_load_4fd25() {
     ok = ok && qsv_read_u32(f, uw); h.hostility = uw != 0;
     ok = ok && qsv_read_u32(f, uw); h.simple_ring = uw != 0;
     ok = ok && qsv_read_u32(f, uw); h.fdf85 = (uint16_t)uw;
-    if (!ok) { fclose(f); fprintf(stderr, "COMBAT: warning: quick load header corrupt (%s)\n", path.c_str()); return false; }
+    if (!ok) { fclose(f); return fail("quick load header corrupt (" + path + ")"); }
 
     // A different scenario reloads map and script; the same scenario keeps the current map.
     const bool same_scen = h.scen.empty() || h.scen == current_scenario_name_;
@@ -2518,12 +2527,11 @@ bool CombatII::battle_quick_load_4fd25() {
         suppress_start_banner_ = true;
         const bool scen_ok = load_scenario(h.scen);
         suppress_start_banner_ = false;
-        if (!scen_ok) {
-            fprintf(stderr, "COMBAT: warning: quick load scenario load failed (%s)\n", h.scen.c_str());
-            return false;
-        }
+        if (!scen_ok)
+            return fail("quick load scenario load failed (" + h.scen + ")");
         f = fopen(path.c_str(), "rb");
-        if (!f) return false;
+        if (!f)
+            return fail("quick load file missing (" + path + ")");
         // Skip the header again (load_scenario replaced units_/map). The skipped length must
         // match the writer exactly: scenario name + w/h (2) + the 18 u32 fields below.
         char m2[8] = {};
@@ -2531,10 +2539,11 @@ bool CombatII::battle_quick_load_4fd25() {
         if (fread(m2, 1, 8, f) != 8 || memcmp(m2, "G2QSV2", 6) != 0 ||
             !skip_u32(uw) || (uw != 2 && uw != 3 && uw != 4 && uw != 5) ||
             !skip_u32(uw) || uw >= 256) {
-            fclose(f); return false;
+            fclose(f); return fail("quick load header corrupt (" + path + ")");
         }
-        if (uw && fseek(f, (long)uw, SEEK_CUR) != 0) { fclose(f); return false; }
-        for (int i = 0; i < 20; ++i) if (!skip_u32(uw)) { fclose(f); return false; } // w/h + time..fdf85
+        if (uw && fseek(f, (long)uw, SEEK_CUR) != 0) { fclose(f); return fail("quick load header corrupt (" + path + ")"); }
+        for (int i = 0; i < 20; ++i)
+            if (!skip_u32(uw)) { fclose(f); return fail("quick load header corrupt (" + path + ")"); } // w/h + time..fdf85
     }
 
     uint32_t unit_count = 0;
@@ -2612,7 +2621,8 @@ bool CombatII::battle_quick_load_4fd25() {
         if (ok) morale_trigger_fired_ = morale_flags[0];
     }
     fclose(f);
-    if (!ok || !tail_ok) { fprintf(stderr, "COMBAT: warning: quick load body corrupt (%s)\n", path.c_str()); return false; }
+    if (!ok || !tail_ok)
+        return fail("quick load body corrupt (" + path + ")");
 
     // Apply the saved header values only when the body parsed cleanly, so a corrupt file
     // cannot break the running battle.

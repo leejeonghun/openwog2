@@ -2253,9 +2253,9 @@ const std::vector<G2MsgFrame>& g2msg_frames(const std::string& path) {
     static std::vector<G2MsgFrame> frames;
     static bool loaded = false;
     if (loaded) return frames;
-    loaded = true;
     FILE* fp = fopen(path.c_str(), "rb");
-    if (!fp) return frames;
+    if (!fp) return frames;   // do not latch: a later call retries once the file is present
+    loaded = true;
     fseek(fp, 0, SEEK_END);
     const long fsz = ftell(fp);
     fseek(fp, 0, SEEK_SET);
@@ -2265,7 +2265,11 @@ const std::vector<G2MsgFrame>& g2msg_frames(const std::string& path) {
     fclose(fp);
     if (got != buf.size() || buf.size() < 0x84) return frames;
 
-    const uint16_t nrec = (uint16_t)(buf[0x42] | (buf[0x43] << 8));
+    // sub_44BCE calls sub_4F25F("g2msg.syb", 0, unk_FA6AC, 5). Inside, the count word read from
+    // file offset 0x42 lands in an unused local and both the preread loop (`cmp di,si`, si = 0)
+    // and the load loop (`cmp di,word [var_C]`, var_C = 5) use the argument, so exactly five
+    // records are loaded. A shorter/corrupt header count must not change that.
+    const uint16_t nrec = 5;
     size_t pos = 0x80;
     for (uint16_t i = 0; i < nrec; ++i) {
         if (buf.size() - pos < 12) break;
@@ -3896,7 +3900,12 @@ void CombatII::play_vm_events(const std::vector<VmEvent>& events) {
             // block that ended on 00 drains its message windows/camera scroll before the fade.
             // When no block ran (empty/failed condition) the original does not drain either.
             if (ev.value == 1 && !skip_cutscene_) drain_camera_scroll();
-            victory_fade_out(0);                // sub_44CCA(0) -> g2msg rec 3
+            // sub_506F3: `cmp word ptr dword_11209E,1; jnz short loc_5070B` - the victory
+            // banner/fade (sub_44CCA(0)) only runs when the SCE zone grid enabled deployment
+            // (dword_11209E == 1, see battle_deploy_zone_parse). Without zones the original goes
+            // straight to the save/cleanup block, so no banner is shown or waited on.
+            if (battle_deploy_enabled_)
+                victory_fade_out(0);            // sub_44CCA(0) -> g2msg rec 3
             fprintf(stderr, "COMBAT: stage-clear: save BLACKBOX, cleanup battle units, unlink contmap.dat, write '$'=' ', exit\n");
             battle_blackbox_save(2);               // sub_4E4C4(2)+sub_4E622
             battle_battle_cleanup_4ec51();         // sub_4EC51+sub_4EAF3 (write the 0x88 records)
@@ -3912,6 +3921,7 @@ void CombatII::play_vm_events(const std::vector<VmEvent>& events) {
             // port
             // exits only through should_exit_ (do_transition("EXIT") would write EXIT to '$').
             write_dollar(" ");
+            next_scenario_fade_out();          // sub_55EBC: fade 100 -> 0, 21 steps
             // sub_506F3 ends with `mov eax,1; jmp sub_61CFF`, so the process exit code is 1.
             // MAIN.EXE (main_ loc_10100 / 0x101E2) returns to loc_100EA when the spawnl result is
             // not

@@ -1629,8 +1629,11 @@ void CombatII::battle_g2msg_scenario_banner() {
 }
 
 // sub_44C75 (dasm 70989): ++word_75010, then draw that many rec2 ticks at
-// x = 0xAB + 6*i + xo, y = 0xB4 + yo and present. sub_4ED18 calls it once before the unit
-// group loop, once per group and once after the script engine, giving six marks.
+// x = 0xAB + 6*i + xo, y = 0xB4 + yo and present. The original draws ten marks in total:
+// sub_4ED18 once after sub_4EA22, once per unit group (4) and once after the script engine;
+// sub_55B59 twice after the VSP loads; sub_55518 twice in the deploy step. The port parses the
+// unit groups in load_battle_map, so its four group marks are drawn right after the banner,
+// followed by the sub_4EA22 and script-engine marks (order within the bar is visual only).
 void CombatII::battle_g2msg_progress_tick() {
     ++g2msg_progress_;                                           // word_75010
     const std::string g2msg_path = game_path("G2MSG.SYB");
@@ -1693,9 +1696,13 @@ bool CombatII::load_scenario(const std::string& sce_filename) {
     // draws the g2msg start banner (rec0 + rec1) while the remaining data loads.
     const bool show_start_banner = !suppress_start_banner_;
     if (show_start_banner) battle_g2msg_scenario_banner();
+    if (show_start_banner) {
+        // sub_4ED18: four ticks, one after each unit group's records were read. The port parses
+        // all four groups in load_battle_map, so the marks land here, right after the banner.
+        for (int group = 0; group < 4; ++group) battle_g2msg_progress_tick();   // sub_44C75
+    }
     // ---- sub_10420: load MAP_EFFC.SYB (terrain foot overlays, unk_789AC[32]) ----
     load_terrain_overlays(map_info_.map_filename);
-    if (show_start_banner) battle_g2msg_progress_tick();          // sub_44C75
     //  SCE +0x00/+0x02 hold the initial camera tile (low/high word of dword_BA83C) and override the
     //  leader-centred value load_battle_map computed.
     //  1-1 uses (23,4); the cutscene shows the mountain range and then moves down to (23,18).
@@ -1769,7 +1776,6 @@ bool CombatII::load_scenario(const std::string& sce_filename) {
         if(cutscene_dialogues_[i].is_overlay) cutscene_dialogues_[i].portrait_id = -1;
         else cutscene_dialogues_[i].portrait_id = (int)(i % 8);
     }
-    if (show_start_banner) battle_g2msg_progress_tick();          // sub_44C75
     // sub_105AD derives the FPM filename from a name embedded in the .MAP's own
     // trailer (e.g. "IM05.PCX" -> "IM05.fpm"), not from the SCE/MAP filename.
     // Try that first (matches the original exactly), then fall back to the old
@@ -1784,7 +1790,6 @@ bool CombatII::load_scenario(const std::string& sce_filename) {
         std::string map_base=map_info_.map_filename; auto mdot=map_base.find('.'); if(mdot!=std::string::npos) map_base=map_base.substr(0,mdot);
         if(!load_fpm(fpm_cand)) load_fpm(map_base+".FPM");
     }
-    if (show_start_banner) battle_g2msg_progress_tick();          // sub_44C75
     // ---- Script engine load (sub_5306A) ----
     // Loads the 12 slots and the bytecode that follow the SCE body (four unit groups + n*12B
     // table).
@@ -1802,9 +1807,15 @@ bool CombatII::load_scenario(const std::string& sce_filename) {
     // parser-only state is left behind afterwards.
     battle_reset();
     battle_load_time_of_day();
-    // Ensure sprites available for cutscene overlay
+    // Ensure sprites available for cutscene overlay (sub_55B59's VSP stage).
     load_battle_sprites();
-    if (show_start_banner) battle_g2msg_progress_tick();          // sub_44C75
+    if (show_start_banner) {
+        // sub_55B59: two sub_44C75 marks, after the first 18 VSPs and after the remaining 16.
+        // The original reloads them in a fresh process; the port draws the marks per scenario
+        // load even when the sprite bank is already cached in this process.
+        battle_g2msg_progress_tick();                              // sub_44C75
+        battle_g2msg_progress_tick();                              // sub_44C75
+    }
     return true;
 }
 
