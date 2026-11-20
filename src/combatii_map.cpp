@@ -23,9 +23,8 @@ namespace {
 // word_706D4 / word_70896 (EXE VA 0x706D4 / 0x70896): 225 word entries each, indexed by the
 // preserved record's sprite type. sub_11B77 uses the first table for forms 0..4 and the second
 // for forms 5/6; the value is an index into the 76-entry CHARACTE\*.RCR name table, and 0xFFFF
-// is a real entry (it wraps to image type 0x1F3 through the +0x1F4/cwde sequence). 0x1F3 is
-// outside the original's 127-entry class-1 name table, so nc2_frame_for rejects it and the
-// overlay is skipped for those sentinels.
+// is a real entry: +0x1F4 then cwde wraps it to 0x1F3, which sub_11575 resolves through the
+// class-1 name table's overrun into the rider table (row 199 == rider row 72, DERICH.RCR).
 constexpr uint16_t kRiderImageForm1To4[225] = {
     0x0000, 0x0002, 0x0001, 0x0000, 0x0002, 0x0001, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF,
     0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0x0000, 0x0002, 0x0001, 0x0000, 0x0002, 0x0001, 0xFFFF,
@@ -66,14 +65,15 @@ int CombatII::battle_rider_image_type(const CombatUnitPlacement& u) const {
     if (!u.stored_77) return -1;
     const int form = (int)u.code_b;
     if (form > 6) return -1;
-    const int type = (int)u.stored_77->sprite_type;
-    // sub_11B77 indexes the 225-entry table without a bounds check. Preserved rider records
-    // are class-0 types (0..224); keep the previous overlay for anything outside that range
-    // instead of reading adjacent data. A 0xFFFF entry maps to 0x1F3, which the class-1 loader
-    // rejects (the original would read past its 127-entry name table).
-    if (type < 0 || type >= 225) return type;
+    // mov dx, [record+61h] / movsx eax, dx: the type is a signed 16-bit field.
+    const int type = (int)(int16_t)(uint16_t)u.stored_77->sprite_type;
+    // sub_11B77 indexes the 225-entry table without a bounds check. Outside 0..224 it reads the
+    // neighbouring words (the class-2 name table ends exactly at word_706D4, and unk_70A58
+    // follows word_70896), which is not a sprite type this port can reproduce; skip the overlay
+    // there. In range, 0FFFFh entries still take the original's +0x1F4/cwde wrap.
+    if (type < 0 || type >= 225) return -1;
     const uint16_t mapped = (form <= 4) ? kRiderImageForm1To4[type] : kRiderImageForm5To6[type];
-    // movsx eax, dx / add eax, 1F4h / cwde: 0FFFFh becomes 1F3h, not an invalid type.
+    // 0FFFFh + 1F4h = 101F3h, cwde -> 0x1F3 (499), i.e. DERICH.RCR through the name-table overrun.
     return (int16_t)(uint16_t)(mapped + 0x1F4);
 }
 
@@ -190,11 +190,15 @@ void CombatII::blit_nc2_frame(int x, int y, const NC2Frame& fr) {
 // sub_5F4AF (NC2 strip version): draw only the top scan_limit scanlines.
 // The unit frame is already decoded, so a row-limit test gives the same result as leaving the
 // original RLE decode loop.
+// sub_5F4AF: ecx = scanlines to keep. `cmp cx, 0 / jz` skips only the exact zero; a negative
+// count starts at 0FFFFh rows and the RLE segment count ends the decode first, so the whole
+// sprite is drawn. Keep that distinction because the sunk-terrain clip can go negative.
 void CombatII::blit_nc2_frame_clipped(int x, int y, const NC2Frame& fr, int scan_limit) {
-    if (fr.pixels.empty() || fr.w <= 0 || fr.h <= 0 || scan_limit <= 0) return;
+    if (fr.pixels.empty() || fr.w <= 0 || fr.h <= 0 || scan_limit == 0) return;
     uint8_t* dest = video_.get_backbuffer();
     if (!dest) return;
-    for (int row = 0; row < fr.h && row < scan_limit; row++) {
+    const int rows = (scan_limit < 0 || scan_limit > fr.h) ? fr.h : scan_limit;
+    for (int row = 0; row < rows; row++) {
         const int dy = y + row;
         if (dy < 0 || dy >= SCREEN_H) continue;
         const uint8_t* src = fr.pixels.data() + (size_t)row * fr.w;
@@ -2235,7 +2239,7 @@ void CombatII::render_battle_map(bool magic_pass, bool overlay_only, bool skip_m
                             ncf->w, ncf->h, ncf->x_off, ncf->y_off,
                             sx + ncf->x_off, sy + ncf->y_off, u.x, u.y, u.walk_off_x, u.walk_off_y);
                 }
-                // ---- sub_12F2A recreation ----
+                // ---- sub_12567 row-pass recreation (same sink block as sub_12F2A) ----
                 // Unit render y anchor: sy = (ty-cam)*16 + cam_fine_y + 4 (var_1C = sub_10988-2).
                 // u65/u66 are the walk sub-pixel offsets [65h]/[66h]. Entry fields:
                 // [4] x_off, [5] y_off, [6] shadow, [7] sil_x, [8] sil_y; the sink depth is
@@ -2320,8 +2324,12 @@ void CombatII::render_battle_map(bool magic_pass, bool overlay_only, bool skip_m
                                 (int)map_trailer_.mapeffc[(tile_attr_[(size_t)tile_idx] - 0x65) & 0xF],
                                 ncf->tile_w);
 
-                    if (clip_h > 0)
-                        unit_push({draw_x, spr_y, foot_y, 4, 0, ncf, clip_h, 0, nullptr});
+                    // sub_12567 loc_12922/loc_12943: the clip height is written to the entry's
+                    // byte [+4] and the row pass reads it back unsigned (sub_12E5E), so truncate
+                    // it here; zero takes the full-sprite blit. (sub_12F2A keeps a word instead.)
+                    const int clip_byte = (int)(uint8_t)clip_h;
+                    if (clip_byte != 0)
+                        unit_push({draw_x, spr_y, foot_y, 4, 0, ncf, clip_byte, 0, nullptr});
                     else
                         unit_push({draw_x, spr_y, foot_y, 2, 0, ncf, 0, 0, nullptr});
                     // Foot decal (loc_13123): loc_13016 (class 1/2) anchors at
@@ -2332,12 +2340,16 @@ void CombatII::render_battle_map(bool magic_pass, bool overlay_only, bool skip_m
                     const int terr_idx = (tile_attr_[(size_t)tile_idx] - 0x65) & 0xF;
                     const TerrainOverlayFrame& ov =
                         terrain_overlay_[(size_t)(terr_idx * 2 + terrain_anim_frame_)];
-                    if (clip_h > 0 && !ov.rle.empty()) {
+                    // sub_12567 loc_12968: both arms of the depth test fall into the decal
+                    // loop (depth == 0 only leaves the clip byte at 0), so every sunk-terrain
+                    // unit gets the overlay. sub_12F2A gates it on var_28 instead.
+                    if (!ov.rle.empty()) {
                         const int decal_x = big ? sx - 12 : sx + ncf->sil_x;
                         const int decal_y = big ? sy + 6 + depth
                                                 : sy + ncf->sil_y + 14 + depth;
-                        const int reps = std::max(1, ncf->tile_w);
-                        for (int t = 0; t < reps; t++)
+                        // loc_129D0: `mov dl,[eax] / cmp dx, word [var_10] / jl` - a plain
+                        // before-test loop, so entry[0] == 0 draws no decal.
+                        for (int t = 0; t < ncf->tile_w; t++)
                             unit_push({decal_x + t*0x18, decal_y,
                                        foot_y, 5, 0, nullptr, 0, 0, &ov});
                     }
@@ -2498,7 +2510,8 @@ void CombatII::blit_draw_entry(const DrawEntry& e) {
         if (draw_x < -64 || draw_x >= SCREEN_W+64 || draw_y < -64 || draw_y >= SCREEN_H+64) return;
         blit_nc2_frame_solid(draw_x, draw_y, *fr, (uint8_t)e.idx);
     } else if (e.type==4) {
-        // sub_12F2A loc_13102: clip height > 0 uses sub_5F4AF (scanlines below the feet omitted).
+        // sub_12F2A loc_13102: a non-zero clip height uses sub_5F4AF (scanlines below the feet
+        // omitted). A negative height draws the whole sprite (see blit_nc2_frame_clipped).
         const NC2Frame* fr = e.nc2;
         if (!fr) return;
         blit_nc2_frame_clipped(e.x, e.y, *fr, e.clip_h);

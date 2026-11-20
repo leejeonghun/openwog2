@@ -119,21 +119,23 @@ void CombatII::battle_draw_unit_now(int unit_index) {
                                    : (int)fr->sil_y - (int)fr->y_off + 22 - depth; // loc_12FE4
             const int draw_x = sx + fr->x_off;
             const int draw_y = sy + fr->y_off + depth;
-            if (clip_h > 0) blit_nc2_frame_clipped(draw_x, draw_y, *fr, clip_h); // 5F4AF
+            // loc_130E7 tests `var_28 != 0`: zero uses the full-sprite blit, and a negative
+            // height means 0FFFFh rows in sub_5F4AF, which decodes the whole sprite anyway.
+            if (clip_h != 0) blit_nc2_frame_clipped(draw_x, draw_y, *fr, clip_h); // 5F4AF
             else blit_nc2_frame(draw_x, draw_y, *fr);                      // 5F3FD
             // loc_13123: MAP_EFFC overlay at the foot anchor, repeated entry[0] times in 24px
             // steps. The original only reaches it through the clipped branch.
             const int terr_idx = (tile_attr - 0x65) & 0xF;
             const TerrainOverlayFrame& ov =
                 terrain_overlay_[(size_t)(terr_idx * 2 + terrain_anim_frame_)];
-            if (clip_h > 0 && !ov.rle.empty()) {
+            if (clip_h != 0 && !ov.rle.empty()) {
                 // loc_13123 consumes the anchor set by the class branch: class 1/2 uses the fixed
                 // foot point (var_C = sx-12, var_10 = sy+4+depth+2), class 0 uses entry[7]/[8]
-                // (var_10 = sy+sil_y+12+depth+2).
+                // (var_10 = sy+sil_y+12+depth+2). loc_1315C repeats entry[0] times in a plain
+                // before-test loop, so entry[0] == 0 draws no decal.
                 const int decal_x = big ? sx - 12 : sx + fr->sil_x;
                 const int decal_y = big ? sy + 6 + depth : sy + fr->sil_y + 14 + depth;
-                const int reps = std::max(1, fr->tile_w);
-                for (int t = 0; t < reps; ++t)
+                for (int t = 0; t < fr->tile_w; ++t)
                     blit_sprite_rle(decal_x + t * TOWN_TILE_W, decal_y, ov.rle.data());
             }
             draw_stored_form(depth);                                       // loc_13165

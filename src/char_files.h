@@ -89,15 +89,28 @@ inline constexpr const char* const kRiderCharFiles[76] = {
 };
 
 // Type-code branches of sub_1198D.
+// sub_11575 indexes off_70024 / off_703A8 / off_705A4 without a bounds check, and the three
+// tables are contiguous in the EXE (0x70024 + 225*4 == 0x703A8, 0x703A8 + 127*4 == 0x705A4).
+// The original therefore reads the next table when the branch index overruns: 225..299 (normal
+// branch) lands in the big table, and 427..499 (big branch, which is where every 0xFFFF
+// word_706D4/word_70896 sentinel maps) lands in the rider table. Reproduce that alias; reads
+// beyond the aliased range hit unrelated pointer data in the original, so they stay unresolved.
 inline const char* char_file_name_for_type(int type) {
+    if (type < 0) return nullptr;
+    constexpr int kNormalCount = (int)(sizeof(kNormalCharFiles) / sizeof(kNormalCharFiles[0]));
+    constexpr int kBigCount = (int)(sizeof(kBigCharFiles) / sizeof(kBigCharFiles[0]));
+    constexpr int kRiderCount = (int)(sizeof(kRiderCharFiles) / sizeof(kRiderCharFiles[0]));
     if (type < 0x12C) {
-        return (type >= 0 && type < (int)(sizeof(kNormalCharFiles) / sizeof(kNormalCharFiles[0])))
-                   ? kNormalCharFiles[type] : nullptr;
+        if (type < kNormalCount) return kNormalCharFiles[type];
+        const int j = type - kNormalCount;
+        return (j < kBigCount) ? kBigCharFiles[j] : nullptr;
     }
     if (type < 0x1F4) {
         int i = type - 0x12C;
-        return (i < (int)(sizeof(kBigCharFiles) / sizeof(kBigCharFiles[0]))) ? kBigCharFiles[i] : nullptr;
+        if (i < kBigCount) return kBigCharFiles[i];
+        i -= kBigCount;
+        return (i < kRiderCount) ? kRiderCharFiles[i] : nullptr;
     }
     int i = type - 0x1F4;
-    return (i < (int)(sizeof(kRiderCharFiles) / sizeof(kRiderCharFiles[0]))) ? kRiderCharFiles[i] : nullptr;
+    return (i < kRiderCount) ? kRiderCharFiles[i] : nullptr;
 }

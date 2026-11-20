@@ -1014,10 +1014,11 @@ private:
     // D66A8 footprint (entry[0]/[1], facing pose 0). Falls back to 1x1 and false when missing.
     bool battle_d66a8_footprint(int type_code, int dir, int* w, int* h) const;
     // sub_11B77: image type loaded into the preserved record's slot ([+77h]+60h) for the live
-    // form ([+5Ch] 0..6). It maps the preserved record's [+61h] type through word_706D4 (forms
-    // 0..4) or word_70896 (forms 5/6) and adds 1F4h with the original's cwde wrap. Returns -1
-    // when there is no preserved record or the form is >6, and the preserved type unchanged
-    // when the type is outside 0..224 (the original reads past the 225-entry table there).
+    // form ([+5Ch] 0..6). It maps the preserved record's [+61h] type (signed 16-bit) through
+    // word_706D4 (forms 0..4) or word_70896 (forms 5/6) and adds 1F4h with the original's cwde
+    // wrap, so a 0FFFFh entry becomes 0x1F3 (499 -> DERICH.RCR through the name-table overrun).
+    // Returns -1 when there is no preserved record or the form is >6; an out-of-range type is
+    // skipped as well because the original reads the neighbouring pointer words there.
     int battle_rider_image_type(const CombatUnitPlacement& u) const;
     // Same lookup for a specific D66A8 pose (sub_11E04 uses the current [unit+64h]).
     bool battle_d66a8_footprint_pose(int type_code, int dir, int pose, int* w, int* h) const;
@@ -1057,8 +1058,11 @@ private:
     uint16_t sce_cam_x_ = 0, sce_cam_y_ = 0;
     uint8_t sce_map_kind_ = 0;
     // ---- Foot sink/clipping/foot effects (sub_12F2A + sub_10420/unk_70A58/unk_789AC) ----
+    // unk_70A58[16], read from COMBATII.EXE VA 0x70A58 (object 2, file 0x70E58). Only attrs
+    // 0x65..0x6E are valid; entries 10..15 are the first bytes of the following unk_70A62
+    // table, which the original also reads through the same masked index.
     static constexpr int TERRAIN_DEPTH[16] =
-        { 1, 2, 3, 2, 2, 2, 2, 2, 4, 4, 4, 4, 3, 3, 2, 2 }; // unk_70A58[16]
+        { 0, 8, 8, 4, 0, 0, 4, 0, 0, 0, 4, 16, 49, 81, 32, 1 }; // unk_70A58[16]
     TerrainOverlayFrame terrain_overlay_[32];  // unk_789AC: 16 terrain types x 2 frames
     // sub_44AB6: first 0x4C frames of battle.syb (projectiles etc.); sub_11BB8: wea_effc/chr_effc.
     // All three are standard SPR files; the port caches their 12-byte metadata and RLE streams.
@@ -1109,7 +1113,8 @@ private:
     // PACK blitters
     void blit_tile_24x16(int x, int y, const uint8_t* src_pixels);
     // NC2 strip blitter: outputs only the top scan_limit scanlines (sub_5F4AF, foot-burial
-    // clipping)
+    // clipping). 0 draws nothing; negative draws the whole sprite (the original's row counter
+    // wraps to 0FFFFh and the RLE segment count ends the decode).
     void blit_nc2_frame_clipped(int x, int y, const NC2Frame& fr, int scan_limit);
     void blit_sprite_rle(int x, int y, const uint8_t* rle_data);
     // sub_5EE51 equivalent: flat w/h + pixels (0xFF transparent) blit, used only for TIME_GRA.SYB
