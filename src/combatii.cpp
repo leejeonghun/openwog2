@@ -127,11 +127,13 @@ bool CombatII::battle_ring_dim_active() const {
 // ---- sub_454B3: map/FPM -> units -> weather ----
 // 454B3 = sub_10AEB (map) -> [sub_1547F] -> sub_12BEE (units) -> sub_4512E (weather).
 // render_battle_map finishes sub_10AEB + sub_12BEE (towers and units sorted by Y), so the
-// weather layer is drawn on top afterwards.
+// weather layer is drawn on top afterwards. sub_508E6 calls sub_50216 after sub_4559F, so
+// the collected spawn-drop sprites are flushed after weather as well.
 void CombatII::battle_fx_world() {
     video_.clear();
     render_battle_map();                                            // sub_10AEB + sub_12BEE
     render_weather_layer();                                         // sub_4512E
+    render_battle_drop_layer();                                     // sub_50216 (after sub_4559F)
 }
 
 // sub_454B3 + sub_12E01 + sub_454D5: draw the world, consume any pre-dim queue, then apply
@@ -181,6 +183,7 @@ void CombatII::battle_fx_world_keep() {
     render_battle_map();                                            // sub_10AEB + sub_12BEE (no clear)
     battle_keep_backbuffer_ = false;
     render_weather_layer();                                         // sub_4512E
+    render_battle_drop_layer();                                     // sub_50216 (after sub_4559F)
 }
 
 // ---- sub_12E01: flush queued sprites (magic effects included) ----
@@ -774,6 +777,7 @@ void CombatII::render_battle_viewer() {
     video_.clear();
     render_battle_map();
     render_weather_layer();   // sub_454B3: sub_10AEB -> sub_12BEE -> sub_4512E
+    render_battle_drop_layer(); // sub_50216: draw the spawn-drop sprites over the map+weather
     // sub_454D5 dim (FA8B6, row 0, 0x10,4-0x130,0xC4): applied while the ring is shown, after
     // weather and before markers/HUD. Same gate as render_battle_frame(); this inlined path
     // applies it directly.

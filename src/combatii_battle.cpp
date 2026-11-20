@@ -6770,6 +6770,7 @@ void CombatII::battle_reload_record_4e81f(CombatUnitPlacement& u) {
     u.walk_arrived = keep.walk_arrived;
     u.walk_off_x = keep.walk_off_x; u.walk_off_y = keep.walk_off_y;
     u.drop_step = keep.drop_step; u.drop_wait = keep.drop_wait; u.drop_sil = keep.drop_sil;
+    u.drop_in_cc998 = keep.drop_in_cc998;
     u.knock_dx = keep.knock_dx; u.knock_dy = keep.knock_dy; u.attacking = keep.attacking;
     u.frame_nt = keep.frame_nt; u.frame_mt = keep.frame_mt;
     u.sprite_id = (uint8_t)(u.sprite_type % 222);

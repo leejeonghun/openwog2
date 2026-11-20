@@ -2396,9 +2396,9 @@ int8_t CombatII::walk_facing_toward(int x, int y, int tx, int ty) {
 //         (2x4 base, yo=+12) through rec0 (pillar top, yo=-16) is drawn for dx=0..7, so the light
 //         pillar rises from bottom to top as the counter advances (the unit itself stays put)
 //     (5) dx > 7 draws nothing (cnt >= 8: landed, the normal path draws the unit)
-//     Counter unk_E5A50 increments on every even frame, emits sub_11F74 dust and refreshes state
-//     at 7, and on the next even frame (cnt 8) removes the unit from the dword_CC968 list, so
-//     normal drawing resumes.
+//     Counter unk_E5A50 increments on every even frame; at 7 the last drop frame is drawn,
+//     then sub_11F74 writes the base tile into CC998 so the normal map-pass path (including
+//     its status overlay) draws the unit from the next frame.
 void CombatII::play_spawn_fall(const VmEvent& ev) {
     if (ev.walk_units.empty()) { present_cutscene_frame(); return; }
     load_event_syb();
@@ -2442,6 +2442,7 @@ void CombatII::play_spawn_fall(const VmEvent& ev) {
         u->drop_wait = w.spawn_delay;         // E5A50 < 0 wait window (draws nothing)
         u->drop_step = w.spawn_delay > 0 ? -1 : 7;
         u->drop_sil = w.spawn_delay > 0 ? 0 : 9;
+        u->drop_in_cc998 = false;              // not in CC998 until sub_11F74 lands it
         u->walk_arrived = false;
     }
     const int frames = 2 * (max_var14 + 8) + 1;
@@ -2453,6 +2454,7 @@ void CombatII::play_spawn_fall(const VmEvent& ev) {
             u->drop_wait = 0;
             u->drop_step = -1;
             u->drop_sil = 0;
+            u->drop_in_cc998 = false;
             u->anim_frame = 3;
             u->walk_arrived = true;
         }
@@ -2469,8 +2471,8 @@ void CombatII::play_spawn_fall(const VmEvent& ev) {
                     u->drop_step = 7 - (int)u->anim_counter;
                     u->drop_sil = 9 - (int)u->anim_counter;   // 5F517 cl = 9 - dx
                 } else if (u->anim_counter == 7) {
-                    // loc_509B2: sub_11F74 dust and a one-tile landing; [64h] is not written (pose
-                    // 3 kept)
+                    // loc_509B2: sub_11F74 writes the base tile into CC998; [64h] is not
+                    // written (pose 3 kept)
                     u->anim_counter = 8;
                     u->anim_frame = 3;
                     u->drop_step = -1;
@@ -2488,12 +2490,13 @@ void CombatII::play_spawn_fall(const VmEvent& ev) {
         if (bump_input()) { land_all(); return; }
         wait_game_tick();
     }
-    // After landing the unit is gone from dword_CC968 (normal draw path), so clear the step offset.
+    // The spawn drop is over; return to the normal draw path and clear the step offset.
     for (auto& w : ev.walk_units) {
         CombatUnitPlacement* u = unit_at(w.unit_index);
         if (!u) continue;
         u->drop_step = -1;
         u->drop_sil = 0;
+        u->drop_in_cc998 = false;
         u->anim_frame = 3;         // keep activation pose 3 (the original leaves [64h] alone after landing too)
         u->walk_arrived = true;
     }
@@ -2723,6 +2726,7 @@ void CombatII::play_retreat_pillar_508e6(const VmEvent& ev, int edd74) {
         units_[(size_t)ui].drop_wait = 1;             // hidden until the counter reaches 7
         units_[(size_t)ui].drop_step = -1;
         units_[(size_t)ui].drop_sil = 0;
+        units_[(size_t)ui].drop_in_cc998 = true;      // mode-4 retreat stays in the grid
     }
     if (ps.empty()) { present_cutscene_frame(); return; }
 
@@ -2779,6 +2783,7 @@ void CombatII::play_retreat_pillar_508e6(const VmEvent& ev, int edd74) {
         u.drop_wait = 0;
         u.drop_step = -1;
         u.drop_sil = 0;
+        u.drop_in_cc998 = false;
     }
     camera_update_frame();
     present_cutscene_frame();

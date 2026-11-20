@@ -191,9 +191,13 @@ struct CombatUnitPlacement {
     // animation and re-occupies it with sub_11E04 in the tail. The NSP frames draw her casting
     // pose in place of the unit sprite, so the unit pass and the grid queries skip her meanwhile.
     bool fx_sprite_hidden = false;
-    // sub_50216+82: solid colour passed to sub_5F517 (cl = 9-dx = 2+counter); 0 means no
-    // silhouette (regular sprite). At dx <= 1 the unit itself is not drawn.
+    // sub_50216+82: solid colour is cl = 9-dx = 2+counter. This mirror is kept for
+    // state/trace output; the drop renderer computes the colour directly. 0 = no drop.
     int drop_sil = 0;
+    // True while the drop runs for a unit that is still in the CC998 grid (mode-4 retreat).
+    // Mode-1 spawn drops are not inserted into CC998 until landing (sub_11F74); their map pass
+    // therefore draws no normal sprite or status overlay.
+    bool drop_in_cc998 = false;
     // Pixel dissolve state for large-unit deaths (sub_46A11). While death_dissolve > 0 the
     // renderer draws the strip with the pixels marked in death_mask[] erased to 0xFF.
     // The original builds a W x H strip with sub_10083 (unk_F1BA8) and erases
@@ -907,6 +911,9 @@ private:
     //   directly and never calls sub_454B3).
     void render_battle_map(bool magic_pass = false, bool overlay_only = false,
                            bool skip_move_range = false);
+    // sub_50216: draw the spawn-drop sprites collected by render_battle_map after the
+    // map+weather pass, matching sub_4559F -> sub_50216.
+    void render_battle_drop_layer();
     // sub_18555: rebuild the 10-slot per-frame marker table from battle_tile_events_.
     void battle_map_effect_register_18555();
     // sub_18605: consume the markers of the current row and append item/field sprites into
@@ -2280,6 +2287,8 @@ private:
     std::vector<int> battle_highlight_units_;
     // Highlighted-unit draw entries produced by render_battle_map this frame, replayed by 44DCC.
     std::vector<DrawEntry> highlight_draws_;
+    // Spawn-drop sprites collected by render_battle_map and drawn after the weather pass.
+    std::vector<DrawEntry> drop_draws_;
     bool battle_nsp_load(const char* name);    // sub_1FEA4 (MAGICSPR\<name>)
     void battle_nsp_release();                 // sub_1FFCD (release the table)
     void battle_ssp_play(const char* name, int id);   // sub_4F460 (load into slot id+1)

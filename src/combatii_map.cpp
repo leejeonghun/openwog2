@@ -1955,6 +1955,9 @@ const uint8_t* CombatII::battle_move_shade_lut() {
 // queue; overlay_only skips the sub_10AEB FPM/base-tile part and redraws only the sub_12D65
 // top tiles/effects over an existing 454B3 frame.
 void CombatII::render_battle_map(bool magic_pass, bool overlay_only, bool skip_move_range){
+    // sub_50216's spawn-drop sprites are collected here but drawn only after the map+weather
+    // pass by render_battle_drop_layer().
+    drop_draws_.clear();
     // sub_1FFFE queued for the gap between sub_10AEB (base tiles) and sub_12BEE (tops + units).
     // 26B1F's confuse frame 0 belongs under the units, so it is drawn here rather than through
     // the battle_fx_blit queue (which the caller flushes after this pass).
@@ -2149,8 +2152,11 @@ void CombatII::render_battle_map(bool magic_pass, bool overlay_only, bool skip_m
             //       screen position plus the record xo/yo, as sub_5F3FD does: rec7 (floor, yo=+12)
             //       through rec0 (pillar top, yo=-16), so the light pillar rises as dx advances
             //   (5) dx > 7 (counter 8, landed): nothing here; the normal path draws the unit
-            //   Draw order matches the original map pass: status overlay first, then the
-            //   silhouette, with the pillar on top.
+            //   sub_4559F's map+weather pass runs before sub_50216, so the drop sprites are
+            //   collected separately and flushed after weather. A mode-1 spawn drop is not in
+            //   the CC998 grid until landing (sub_11F74), so sub_12567 draws neither the normal
+            //   sprite nor its status overlay. Mode-4 retreat units are still in the grid; their
+            //   status overlay stays in the map-pass draw list below the drop sprites.
             if (u.drop_step >= 0) {
                 load_event_syb();
                 const int dx = 7 - u.drop_step;          // dx = drop counter
@@ -2161,16 +2167,18 @@ void CombatII::render_battle_map(bool magic_pass, bool overlay_only, bool skip_m
                 // [65h]/[66h]; sx/sy already carry the walk offsets, so subtract them here.
                 const int drop_x = sx - u.walk_off_x;
                 const int drop_y = sy - u.walk_off_y;
-                // sub_4559F's map pass queues the status overlay before sub_50216 draws the
-                // drop sprites, so queue it first here and let the silhouette/pillar cover it.
-                status_overlay();
+                auto drop_push = [&](DrawEntry e) {
+                    if (hl) highlight_draws_.push_back(e);
+                    drop_draws_.push_back(e);
+                };
+                if (u.drop_in_cc998) status_overlay();
                 if (dx > 1) {                             // dx 0/1: silhouette skipped, pillar drawn
                     const NC2Frame* sf = nc2_frame_for(u.sprite_type, u.facing & 3, 0);
-                    if (sf) unit_push({drop_x, drop_y, foot_y, 3, 9 - dx, sf});
+                    if (sf) drop_push({drop_x, drop_y, foot_y, 3, 9 - dx, sf});
                 }
                 if ((size_t)u.drop_step < syb.size() && !syb[u.drop_step].pixels.empty()) {
                     const NC2Frame& ds = syb[u.drop_step];
-                    unit_push({drop_x, drop_y, foot_y, 2, 0, &ds});   // xo/yo are applied by the type-2 draw
+                    drop_push({drop_x, drop_y, foot_y, 2, 0, &ds});   // xo/yo are applied by the type-2 draw
                 }
                 continue;                                 // skip the normal NC2/CITIZEN path
             }
@@ -2559,6 +2567,12 @@ void CombatII::blit_draw_entry(const DrawEntry& e) {
         if (draw_x < -64 || draw_x >= SCREEN_W+64 || draw_y < -64 || draw_y >= SCREEN_H+64) return;
         blit_sprite_rle(draw_x, draw_y, spr->pixel_data);
     }
+}
+
+// ---- sub_50216: draw the collected spawn-drop sprites after the map+weather pass ----
+void CombatII::render_battle_drop_layer() {
+    for (const DrawEntry& e : drop_draws_) blit_draw_entry(e);
+    drop_draws_.clear();
 }
 
 // ---- sub_44DCC: redraw the units in the dword_F9F08 highlight list ----
