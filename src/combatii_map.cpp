@@ -2125,10 +2125,12 @@ void CombatII::render_battle_map(bool magic_pass, bool overlay_only, bool skip_m
                 if (hl) highlight_draws_.push_back(e);
                 draw_list.push_back(e);
             };
-            auto status_overlay = [&]() {
+            // loc_12B16 passes var_30 + depth; sub_123C1 itself adds [65h]/[66h], so the
+            // base argument stays walk-offset free.
+            auto status_overlay = [&](int depth = 0) {
                 const size_t before = draw_list.size();
                 unit_status_overlay_123c1(u, draw_list, sx - u.walk_off_x,
-                                          sy - u.walk_off_y, foot_y);
+                                          sy - u.walk_off_y + depth, foot_y);
                 for (size_t k = before; k < draw_list.size(); ++k) {
                     DrawEntry& e = draw_list[k];
                     e.order_row = (unit_list == 6) ? 0x7FFFFFFF : u.y;
@@ -2153,13 +2155,17 @@ void CombatII::render_battle_map(bool magic_pass, bool overlay_only, bool skip_m
                 if (dx <= 1) continue;                    // sub_50216: jl loc_50330 (not drawn)
                 static const std::vector<NC2Frame> kEmptySyb;
                 const std::vector<NC2Frame>& syb = event_syb_ ? *event_syb_ : kEmptySyb;
+                // sub_50216 anchors both sprites at sub_10971+0Ch / sub_10988-2 and never adds
+                // [65h]/[66h]; sx/sy already carry the walk offsets, so subtract them here.
+                const int drop_x = sx - u.walk_off_x;
+                const int drop_y = sy - u.walk_off_y;
                 if (u.drop_sil > 0) {
                     const NC2Frame* sf = nc2_frame_for(u.sprite_type, u.facing & 3, 9 - dx);
-                    if (sf) unit_push({sx, sy, foot_y, 3, u.drop_sil, sf});
+                    if (sf) unit_push({drop_x, drop_y, foot_y, 3, u.drop_sil, sf});
                 }
                 if ((size_t)u.drop_step < syb.size() && !syb[u.drop_step].pixels.empty()) {
                     const NC2Frame& ds = syb[u.drop_step];
-                    unit_push({sx, sy, foot_y, 2, 0, &ds});   // xo/yo are applied by the type-2 draw
+                    unit_push({drop_x, drop_y, foot_y, 2, 0, &ds});   // xo/yo are applied by the type-2 draw
                 }
                 status_overlay();
                 continue;                                 // skip the normal NC2/CITIZEN path
@@ -2359,7 +2365,7 @@ void CombatII::render_battle_map(bool magic_pass, bool overlay_only, bool skip_m
                                        foot_y, 5, 0, nullptr, 0, 0, &ov});
                     }
                     push_stored_form(depth);
-                    status_overlay();
+                    status_overlay(depth);   // loc_12B16: var_30 + var_34
                 }
                 continue;
             }
