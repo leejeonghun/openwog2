@@ -1606,6 +1606,43 @@ void CombatII::battle_restore_blackbox_party() {
         fprintf(stderr, "COMBAT: BLACKBOX party restored %d unit(s) (sub_4EA22)\n", restored);
 }
 
+// ==== G2MSG.SYB start/quick-load banners ====
+// sub_44C05 (dasm 70983): sub_5EB4A(0, ...) sets the span fill colour word_755D4 = 0, then
+// sub_5EDDE(0, 0, 0x140, 0xC8) fills the whole 320x200 screen with it (the span mode is 0,
+// sub_5EC44: sub_454D5 leaves it there after each battle frame, and 44C05 never selects
+// shade mode). Record 0 is then drawn at (0xA0+xo, 0x64+yo) and record 1 at
+// (0x70+xo, 0xB4+yo) through sub_5F3FD, and sub_5E9E8 presents. sub_4ED18 calls it after
+// sub_44F30; sub_4FD25 calls it before the qsv restore.
+void CombatII::battle_g2msg_scenario_banner() {
+    if (uint8_t* buf = video_.get_backbuffer())                   // sub_5EDDE fill mode 0
+        memset(buf, 0, (size_t)SCREEN_W * SCREEN_H);
+    const std::string g2msg_path = game_path("G2MSG.SYB");
+    const std::vector<G2MsgFrame>& frames = g2msg_frames(g2msg_path);
+    if (frames.size() > 0)                                       // word_FA6B0/FA6B2/FA6B4
+        blit_sprite_480(0xA0 + frames[0].xo, 0x64 + frames[0].yo, frames[0].rle.data());
+    if (frames.size() > 1)                                       // word_FA6BC/FA6BE/FA6C0
+        blit_sprite_480(0x70 + frames[1].xo, 0xB4 + frames[1].yo, frames[1].rle.data());
+    video_.present();                                            // sub_5E9E8
+    // word_75010 starts at 0 (BSS) and the original loads one scenario per process; the port
+    // chains scenarios in one process, so restart the ticker from the banner.
+    g2msg_progress_ = 0;
+}
+
+// sub_44C75 (dasm 70989): ++word_75010, then draw that many rec2 ticks at
+// x = 0xAB + 6*i + xo, y = 0xB4 + yo and present. sub_4ED18 calls it once before the unit
+// group loop, once per group and once after the script engine, giving six marks.
+void CombatII::battle_g2msg_progress_tick() {
+    ++g2msg_progress_;                                           // word_75010
+    const std::string g2msg_path = game_path("G2MSG.SYB");
+    const std::vector<G2MsgFrame>& frames = g2msg_frames(g2msg_path);
+    if (frames.size() > 2) {
+        const G2MsgFrame& fr = frames[2];                        // word_FA6C8/FA6CA/FA6CC
+        for (uint16_t i = 0; i < g2msg_progress_; ++i)
+            blit_sprite_480(0xAB + 6 * (int)i + fr.xo, 0xB4 + fr.yo, fr.rle.data());
+    }
+    video_.present();                                            // sub_5E9E8
+}
+
 bool CombatII::load_scenario(const std::string& sce_filename) {
     last_dialogue_unit_ = -1;                   // dword_1102B8: reset the previous speaker on a scenario change
     battle_deploy_enabled_ = false; sce_zone_grid_.clear();   // parse_sce_header refills the grid
@@ -1652,8 +1689,13 @@ bool CombatII::load_scenario(const std::string& sce_filename) {
     // sub_6106C(row 0) in sub_55B59 builds the dialogue dimming table from the weather-adjusted
     // unk_12824C produced by sub_44F30 above.
     snapshot_dialog_shade_palette();
+    // sub_4ED18: sub_44F30 is followed by sub_44C05, which clears the screen to index 0 and
+    // draws the g2msg start banner (rec0 + rec1) while the remaining data loads.
+    const bool show_start_banner = !suppress_start_banner_;
+    if (show_start_banner) battle_g2msg_scenario_banner();
     // ---- sub_10420: load MAP_EFFC.SYB (terrain foot overlays, unk_789AC[32]) ----
     load_terrain_overlays(map_info_.map_filename);
+    if (show_start_banner) battle_g2msg_progress_tick();          // sub_44C75
     //  SCE +0x00/+0x02 hold the initial camera tile (low/high word of dword_BA83C) and override the
     //  leader-centred value load_battle_map computed.
     //  1-1 uses (23,4); the cutscene shows the mountain range and then moves down to (23,18).
@@ -1727,6 +1769,7 @@ bool CombatII::load_scenario(const std::string& sce_filename) {
         if(cutscene_dialogues_[i].is_overlay) cutscene_dialogues_[i].portrait_id = -1;
         else cutscene_dialogues_[i].portrait_id = (int)(i % 8);
     }
+    if (show_start_banner) battle_g2msg_progress_tick();          // sub_44C75
     // sub_105AD derives the FPM filename from a name embedded in the .MAP's own
     // trailer (e.g. "IM05.PCX" -> "IM05.fpm"), not from the SCE/MAP filename.
     // Try that first (matches the original exactly), then fall back to the old
@@ -1741,6 +1784,7 @@ bool CombatII::load_scenario(const std::string& sce_filename) {
         std::string map_base=map_info_.map_filename; auto mdot=map_base.find('.'); if(mdot!=std::string::npos) map_base=map_base.substr(0,mdot);
         if(!load_fpm(fpm_cand)) load_fpm(map_base+".FPM");
     }
+    if (show_start_banner) battle_g2msg_progress_tick();          // sub_44C75
     // ---- Script engine load (sub_5306A) ----
     // Loads the 12 slots and the bytecode that follow the SCE body (four unit groups + n*12B
     // table).
@@ -1749,15 +1793,18 @@ bool CombatII::load_scenario(const std::string& sce_filename) {
     // before load_script_engine()->battle_tile_load_events().
     battle_load_fe04f();
     battle_restore_blackbox_party();   // sub_4EA22 (restore party slots with word_FDAF6[slot] == 1)
+    if (show_start_banner) battle_g2msg_progress_tick();          // sub_44C75
     if (load_script_engine()) {
         dump_script_engine();
     }
+    if (show_start_banner) battle_g2msg_progress_tick();          // sub_44C75
     // sub_4FD25 calls sub_19652 (battle state reset) before loading the scenario (sub_4F85C), so no
     // parser-only state is left behind afterwards.
     battle_reset();
     battle_load_time_of_day();
     // Ensure sprites available for cutscene overlay
     load_battle_sprites();
+    if (show_start_banner) battle_g2msg_progress_tick();          // sub_44C75
     return true;
 }
 

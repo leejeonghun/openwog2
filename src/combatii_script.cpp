@@ -2229,39 +2229,106 @@ void CombatII::dump_script_engine() {
     script_trace_ = keep_trace;
 }
 
-// ==== sub_44CCA: screen fade-out of the victory path ====
-//   1) sub_44D6E(1) / sub_44DEC(0): stop scrolling and overlays
-//   2) sub_454B3(camera X, Y, 0xC8): redraw the last frame
-//   3) the sub_5FD1C family drives g_palette to 0 (sub_6104A(0,0)/sub_5ECC7(1,0x130) = the whole
-//      range, sub_5EDDE(0x10) = step clamp), transmitting on every vertical retrace so the
-//      screen darkens.
-// The port takes g_palette to 0 in 10 steps and presents after each step.
-void CombatII::victory_fade_out() {
-    fprintf(stderr, "COMBAT: victory fade-out (sub_44CCA)\n");
-    // sub_44CCA+11..+21: sub_44D6E(1)/sub_44DEC(0) stop scrolling/overlays, then
-    // `sub_454B3(camX, camY, 0xC8)` redraws the world before the palette fade. The port needs
-    // that redraw: a dialogue box dismissed just before the stage clear lives only in the
-    // backbuffer (the port has no sub_4A210 background restore), and the loc_5305D empty drain
-    // now presents without a world pass.
-    render_battle_frame();
-    if (auto_advance_) {
-        // Auto-advance mode skips the fade frames so verification stays fast.
-        memset(g_palette, 0, sizeof(g_palette));
-        return;
-    }
-    for (int step = 1; step <= 10; ++step) {
-        for (int i = 0; i < 256; ++i) {
-            for (int ch = 0; ch < 3; ++ch) {
-                int v = g_palette[i][ch];
-                v = v - v * step / 10;   // converge to 0 in steps (sub_5FD1C's base+delta*i/100)
-                g_palette[i][ch] = (uint8_t)std::clamp(v, 0, 63);
+// ==== sub_44CCA: end-of-battle sequence for victory (mode 0) and choice (mode 1) ====
+// dasm 71019..71069, in order:
+//   1) sub_44D6E(1): dword_FA8B6 = 1 -> sub_454B3 falls through to sub_454D5, which dims
+//      x 0x10..0x12F, y 4..0xC3 with the row-0 LUT before drawing the HUD.
+//   2) sub_44DEC(0): dword_75008 = 0 -> no state/banner overlay on that redraw.
+//   3) sub_454B3(camera X, camera Y, 0xC8): redraw the last battle frame.
+//   4) sub_5ECC7(1) selects sub_5EE2B, sub_6104A(0,0) selects row 0, and
+//      sub_5EDDE(0x10, 0, 0x130, 0xC8) runs every backbuffer pixel in x 0x10..0x12F,
+//      y 0..0xC7 through that LUT once. This is a framebuffer index remap, not a DAC fade:
+//      the palette is never modified.
+//   5) sub_5F3FD draws g2msg.syb record (mode+3) at (0xA0+xo, 0x64+yo): 187x28 at (67,86)
+//      for victory, 156x28 at (82,86) for choice.
+//   6) sub_5E9E8 presents, then sub_499EF(0x4B0) waits ~6.8 s or any key/left click.
+// The record type lives in combatii_internal.h because the scenario-start/sub_44C05 banner in
+// combatii_map.cpp shares this bank.
+// sub_44BCE + sub_4F25F + sub_10031: load g2msg.syb lazily.
+//   count = u16 at 0x42; records start at 0x44 + 0x3C = 0x80.
+//   record: u32 size, u16 w, u16 h, s16 xo, s16 yo, size bytes of 320-stride RLE.
+//   sub_10031 rewrites each chunk's u16 skip with +0xA0 whenever the running x crosses
+//   0x140, converting the stream to the 480 px scratch-canvas stride that sub_5F3FD uses.
+const std::vector<G2MsgFrame>& g2msg_frames(const std::string& path) {
+    static std::vector<G2MsgFrame> frames;
+    static bool loaded = false;
+    if (loaded) return frames;
+    loaded = true;
+    FILE* fp = fopen(path.c_str(), "rb");
+    if (!fp) return frames;
+    fseek(fp, 0, SEEK_END);
+    const long fsz = ftell(fp);
+    fseek(fp, 0, SEEK_SET);
+    if (fsz <= 0 || fsz > (1 << 20)) { fclose(fp); return frames; }
+    std::vector<uint8_t> buf((size_t)fsz);
+    const size_t got = fread(buf.data(), 1, buf.size(), fp);
+    fclose(fp);
+    if (got != buf.size() || buf.size() < 0x84) return frames;
+
+    const uint16_t nrec = (uint16_t)(buf[0x42] | (buf[0x43] << 8));
+    size_t pos = 0x80;
+    for (uint16_t i = 0; i < nrec; ++i) {
+        if (buf.size() - pos < 12) break;
+        const uint8_t* p = buf.data() + pos;
+        const uint32_t dsize = (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
+                               ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+        G2MsgFrame fr;
+        fr.w  = (int)(uint16_t)(p[4] | (p[5] << 8));
+        fr.h  = (int)(uint16_t)(p[6] | (p[7] << 8));
+        fr.xo = (int16_t)(uint16_t)(p[8] | (p[9] << 8));
+        fr.yo = (int16_t)(uint16_t)(p[10] | (p[11] << 8));
+        const size_t start = pos + 12;
+        if (dsize < 2 || (size_t)dsize > buf.size() - start ||
+            fr.w <= 0 || fr.h <= 0 || fr.w > 480 || fr.h > 240) break;
+        fr.rle.assign(buf.begin() + (long)start, buf.begin() + (long)(start + dsize));
+
+        // sub_10031: chunk = {u16 skip, u8 n_dwords, u8 n_tail, n_dwords*4+n_tail bytes}.
+        const uint16_t chunks = (uint16_t)(fr.rle[0] | (fr.rle[1] << 8));
+        size_t off = 2;
+        int dx = 0;
+        bool ok = true;
+        for (uint16_t c = 0; c < chunks; ++c) {
+            if (off + 4 > fr.rle.size()) { ok = false; break; }
+            const size_t len = (size_t)fr.rle[off + 2] * 4 + fr.rle[off + 3];
+            if (len > fr.rle.size() - off - 4) { ok = false; break; }
+            const int skip = fr.rle[off] | (fr.rle[off + 1] << 8);
+            dx += skip;
+            if (dx >= 0x140) {
+                const uint16_t patched = (uint16_t)(skip + 0xA0);
+                fr.rle[off] = (uint8_t)(patched & 0xFF);
+                fr.rle[off + 1] = (uint8_t)(patched >> 8);
+                dx -= 0x140;
             }
+            dx += (int)len;
+            off += 4 + len;
         }
-        video_.present();
-        SDL_Delay(30);                    // approximation of sub_5E943 (vertical retrace)
+        if (!ok) break;
+        frames.push_back(std::move(fr));
+        pos = start + (size_t)dsize;
     }
-    memset(g_palette, 0, sizeof(g_palette));
-    video_.present();
+    return frames;
+}
+
+void CombatII::victory_fade_out(int mode) {
+    fprintf(stderr, "COMBAT: victory sequence (sub_44CCA(%d), g2msg rec %d)\n", mode, mode + 3);
+    battle_overlay_mode_ = 0;       // sub_44DEC(0): no state/banner overlay on the redraw
+    battle_dim_row0_ = true;        // sub_44D6E(1): sub_454D5 dims the world
+    render_battle_frame();          // sub_454B3(camX, camY, 0xC8)
+    battle_dim_row0_ = false;       // the dim is baked into the frame (same as show_scenario_condition)
+    // sub_5ECC7(1) + sub_6104A(0,0) + sub_5EDDE(0x10, 0, 0x130, 0xC8): one row-0 shade pass
+    // over the whole backbuffer (the map area was already dimmed by sub_454D5 above).
+    render_dialog_dimming(0x10, 0, 0x130 - 0x10, 0xC8);
+    // sub_5F3FD at dword_FA6B4[(mode+3)*12]: x = 0xA0 + xo, y = 0x64 + yo.
+    const std::vector<G2MsgFrame>& frames = g2msg_frames(game_path("G2MSG.SYB"));
+    // (the loader itself is a free function in this TU; combatii_map.cpp uses the same bank)
+    const int rec = mode + 3;
+    if (rec >= 0 && (size_t)rec < frames.size()) {
+        const G2MsgFrame& fr = frames[(size_t)rec];
+        blit_sprite_480(0xA0 + fr.xo, 0x64 + fr.yo, fr.rle.data());
+    }
+    video_.present();               // sub_5E9E8
+    // sub_499EF(0x4B0): key, left click or 1200 ticks (~6.84 s).
+    if (!auto_advance_) wait_info_dismiss(0x4B0);
 }
 
 // ==== sub_52D33 -> sub_55EBC: fade-out of the next-scenario switch ====
@@ -3206,10 +3273,13 @@ void CombatII::play_vm_events(const std::vector<VmEvent>& events) {
         if (should_exit_) return;
         // ESC skip is a port-only shortcut: it fast-forwards the playback, but the commands that
         // end the module must still run. 0x01 (sub_506F3) does the stage-clear fade/save/
-        // contmap.dat cleanup and 0x12 (sub_52D33) writes the next-scenario handoff; the original
-        // always executes them when the walk reaches them.
+        // contmap.dat cleanup, 0x12 (sub_52D33) writes the next-scenario handoff, and 0x65
+        // (sub_50751) runs the result table + sub_44CCA(1) and then exits through sub_61CFF
+        // (1 or 0FFh) from the system-menu result; the original always executes them when the
+        // walk reaches them.
         if (skip_cutscene_ && ev.type != VmEventType::Victory &&
-            ev.type != VmEventType::NextScenario)
+            ev.type != VmEventType::NextScenario &&
+            ev.type != VmEventType::Choice)
             continue;
         switch (ev.type) {
         case VmEventType::OccupancyStateUnknown:
@@ -3780,7 +3850,7 @@ void CombatII::play_vm_events(const std::vector<VmEvent>& events) {
                     play_vm_result(result);
                 if (should_exit_) return;
             }
-            victory_fade_out();                 // sub_44CCA(1)
+            victory_fade_out(1);                // sub_44CCA(1) -> g2msg rec 4
             for (;;) {
                 const int choice = battle_system_menu_4e0ee(1);   // sub_4E0EE(1)
                 if (should_exit_) return;
@@ -3826,7 +3896,7 @@ void CombatII::play_vm_events(const std::vector<VmEvent>& events) {
             // block that ended on 00 drains its message windows/camera scroll before the fade.
             // When no block ran (empty/failed condition) the original does not drain either.
             if (ev.value == 1 && !skip_cutscene_) drain_camera_scroll();
-            victory_fade_out();
+            victory_fade_out(0);                // sub_44CCA(0) -> g2msg rec 3
             fprintf(stderr, "COMBAT: stage-clear: save BLACKBOX, cleanup battle units, unlink contmap.dat, write '$'=' ', exit\n");
             battle_blackbox_save(2);               // sub_4E4C4(2)+sub_4E622
             battle_battle_cleanup_4ec51();         // sub_4EC51+sub_4EAF3 (write the 0x88 records)

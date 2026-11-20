@@ -2452,6 +2452,9 @@ bool CombatII::battle_quick_save_4f4ef() {
 }
 
 bool CombatII::battle_quick_load_4fd25() {
+    // sub_4FD25: sub_5AF1B -> sub_5CD0D -> sub_44C05 ... The banner is drawn over the frame
+    // that was on screen when quick load was chosen, before the qsv restore.
+    battle_g2msg_scenario_banner();
     std::string path = battle_qsv_path();
     FILE* f = path.empty() ? nullptr : fopen(path.c_str(), "rb");
     if (!f) {
@@ -2510,7 +2513,12 @@ bool CombatII::battle_quick_load_4fd25() {
     const bool same_scen = h.scen.empty() || h.scen == current_scenario_name_;
     if (!same_scen) {
         fclose(f);
-        if (!load_scenario(h.scen)) {
+        // sub_4FD25 already drew sub_44C05; the original's sub_4F85C restores the save data
+        // directly and never runs sub_4ED18's start banner a second time.
+        suppress_start_banner_ = true;
+        const bool scen_ok = load_scenario(h.scen);
+        suppress_start_banner_ = false;
+        if (!scen_ok) {
             fprintf(stderr, "COMBAT: warning: quick load scenario load failed (%s)\n", h.scen.c_str());
             return false;
         }

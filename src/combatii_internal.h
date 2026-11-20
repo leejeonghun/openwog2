@@ -28,6 +28,17 @@
 #include <limits>
 #include <SDL.h>
 
+// ---- G2MSG.SYB record bank (sub_44BCE + sub_4F25F + sub_10031) ----
+// Loaded once by g2msg_frames(); each record's RLE payload is already patched from the native
+// 320-stride layout to the 480 px scratch-canvas stride used by sub_5F3FD (blit_sprite_480).
+// game_path() is a CombatII member, so the caller passes the resolved path.
+struct G2MsgFrame {
+    int w = 0, h = 0;
+    int16_t xo = 0, yo = 0;
+    std::vector<uint8_t> rle;
+};
+const std::vector<G2MsgFrame>& g2msg_frames(const std::string& path);
+
 // State of the cone iterators (sub_1AF22/sub_1B00D) and diamond iterators (sub_1AC08/sub_1AC59),
 // shared by combatii_ai.cpp (WC5 chain) and combatii_aimage.cpp (mage AI).
 struct CombatII::Wc5Iter {

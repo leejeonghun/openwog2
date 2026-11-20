@@ -2617,6 +2617,12 @@ private:
     int  battle_system_menu_4e0ee(int no_saveload = 0); // sub_4E0EE (ESC menu; a non-zero argument disables QUICK SAVE/LOAD). 2 = quick load, 7 = restart, 8 = title, -1 = cancel
     bool battle_quick_save_4f4ef();       // sub_4F4EF: genesis.qsv
     bool battle_quick_load_4fd25();       // sub_4FD25: restore genesis.qsv
+    // G2MSG start/quick-load banners (sub_44C05 + sub_44C75, records 0-2). The record bank is
+    // g2msg_frames() from combatii_internal.h.
+    uint16_t g2msg_progress_ = 0;         // word_75010 (sub_44C75 ticker count)
+    bool suppress_start_banner_ = false;  // port only: quick load already showed sub_44C05
+    void battle_g2msg_scenario_banner();  // sub_44C05: black screen + rec0 + rec1
+    void battle_g2msg_progress_tick();    // sub_44C75: rec2 ticker, one mark per call
     // Time of day, taken from BLACKBOX.DAT or from byte +5 of the SCE header (sub_4E4DD /
     // sub_4ED18)
     uint8_t  tod_phase_ = 0;             // byte_FDF84: 0..15 (sub_197CA adds 1 and masks with 15)
@@ -2779,8 +2785,9 @@ private:
     //           dword_74134 = script_seq_).
     bool run_seq_trigger(uint32_t seq, VmResult& out);
     bool run_area_trigger(const CombatUnitPlacement& moved_unit, VmResult& out);
-    // sub_44CCA: screen fade-out for victory handling (called at the end of 0x01 playback).
-    void victory_fade_out();
+    // sub_44CCA: end-of-battle sequence for victory handling. mode 0 = victory (sub_506F3),
+    // mode 1 = choice (sub_50751); it also selects the g2msg.syb banner record (mode + 3).
+    void victory_fade_out(int mode);
     void next_scenario_fade_out();   // sub_52D33 -> sub_55EBC: fade-out for the scenario switch
     // sub_52D33 (VM 0x12): restore units, save BLACKBOX, fade out, write contmap.dat, then end the
     // module through sub_61CFF(1). MAIN.EXE restarts COMBATII from contmap.dat.
