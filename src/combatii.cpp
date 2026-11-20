@@ -341,11 +341,13 @@ void CombatII::render_message_window() {
 // sub_5046B's message head: draw the current text with sub_5E048(110250h, 20h, 24h), then
 // decrement word_11057C, switching to the next queued window or closing at 0. The draw must
 // precede the decrement so the last frame with timer == 1 stays visible for a full frame.
+// sub_5046B tests only dword_110250 and calls sub_5E048 unconditionally, so the text is drawn
+// even while a dialogue box is on screen; it has no counterpart to the port's ui_visible_ guard.
 // Called after sub_454D5 in render_battle_frame (sub_4559F order), not in sub_454B3.
 void CombatII::battle_fx_message_window() {
     if (!msg_frame_due_) return;
     if (msg_active_) {
-        if (!ui_visible_) render_message_window();                   // sub_5E048: draw first
+        render_message_window();                                     // sub_5E048: draw first
         advance_message_window();                                    // mov dx,word_11057C; sub edx,1; jg
     }
     msg_frame_due_ = false;
