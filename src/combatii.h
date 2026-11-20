@@ -623,11 +623,11 @@ private:
                      int speaker_tx = -1, int speaker_ty = -1, int speaker_unit = -1);
     void render_overlay();
     // Draws one frame as background (FPM + tiles) -> weather -> units -> UI, which is
-    // sub_454B3 + sub_454D5.
+    // sub_454B3 + sub_454D5, plus the cutscene message/drop layers in battle_fx_world().
     void render_battle_frame();
     void present_cutscene_frame();
     // ---- Original frame chain (the order the spell drivers call every frame) ----
-    void battle_fx_world();      // sub_454B3: sub_10AEB + sub_12BEE + sub_4512E (map/units/weather)
+    void battle_fx_world();      // sub_454B3 + sub_5046B message + sub_50216 drop (map/units/weather)
     void battle_fx_world_dim();  // sub_454B3 + sub_12E01 + sub_454D5 (dim before post-dim effects)
     void battle_fx_world_12d65();        // sub_10AEB + sub_12D65 (no unit pass, no weather)
     void battle_fx_world_454b3_12d65();  // sub_454B3 then sub_12D65 over it (276B9 step 2)
@@ -835,8 +835,10 @@ private:
     MessageWindow msg_cur_;
     std::deque<MessageWindow> msg_queue_;
     int msg_timer_ = 0;           // word_11057C
+    bool msg_frame_due_ = false;  // next world pass corresponds to sub_4559F (message frame)
     void message_window_set(const std::string& text, int frames); // sub_52B4F
     void render_message_window(); // sub_5E048(x=0x20, y=0x24, text) from the head of sub_5046B
+    void advance_message_window(); // sub_5046B: decrement/advance after the text has been drawn
     void show_dialogue_line(const std::string& text, int portrait_id,
                             const std::string& speaker_name = std::string(),
                             int speaker_tx = -1, int speaker_ty = -1, int speaker_unit = -1);

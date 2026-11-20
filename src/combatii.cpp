@@ -127,12 +127,23 @@ bool CombatII::battle_ring_dim_active() const {
 // ---- sub_454B3: map/FPM -> units -> weather ----
 // 454B3 = sub_10AEB (map) -> [sub_1547F] -> sub_12BEE (units) -> sub_4512E (weather).
 // render_battle_map finishes sub_10AEB + sub_12BEE (towers and units sorted by Y), so the
-// weather layer is drawn on top afterwards. sub_508E6 calls sub_50216 after sub_4559F, so
-// the collected spawn-drop sprites are flushed after weather as well.
+// weather layer is drawn on top afterwards. sub_4559F calls sub_5046B (the 0x73 message
+// window text) after sub_454B3, and sub_508E6 calls sub_50216 for the drop after that.
+// The text is therefore written before the drop layer, not after it.
 void CombatII::battle_fx_world() {
     video_.clear();
     render_battle_map();                                            // sub_10AEB + sub_12BEE
     render_weather_layer();                                         // sub_4512E
+    // sub_4559F: sub_454B3 -> sub_5046B, then sub_508E6 -> sub_50216.
+    // sub_5046B draws the current text first and only then decrements word_11057C, so the
+    // final timer value (1) must still produce a drawn frame. Advance here, after the draw.
+    if (msg_frame_due_) {
+        if (msg_active_) {
+            if (!ui_visible_) render_message_window();              // sub_5046B: draw first
+            advance_message_window();                               // then decrement/advance
+        }
+        msg_frame_due_ = false;
+    }
     render_battle_drop_layer();                                     // sub_50216 (after sub_4559F)
 }
 
@@ -241,10 +252,9 @@ void CombatII::render_overlay() {
         if (ui_is_overlay_) show_overlay_message(ui_text_);
         else show_dialogue_line(ui_text_, ui_portrait_, ui_speaker_, ui_speaker_tx_, ui_speaker_ty_, ui_speaker_unit_);
     }
-    // A message window opened by 0x73 is shown separately (the <<Bifrost>> caption in 1-1 etc.).
-    // The original redraws it every frame through sub_5E048 from sub_5046B, so it disappears
-    // when the window closes.
-    if (msg_active_ && !ui_visible_) render_message_window();
+    // sub_5046B's message window is not part of sub_454D5: battle_fx_world() writes it before
+    // the sub_50216 drop layer, matching sub_4559F -> sub_508E6. Do not redraw it here after
+    // the drop, which would put the text on top of the drop sprites.
 }
 
 void CombatII::present_cutscene_frame() {
@@ -314,6 +324,7 @@ void CombatII::message_window_set(const std::string& text, int frames) {
         msg_cur_ = w;
         msg_timer_ = w.frames;
         msg_active_ = true;
+        msg_frame_due_ = true;      // the next world pass is the sub_4559F message frame
         fprintf(stderr, "COMBAT: message window open: %d frames, %zu chars\n",
                 msg_timer_, w.text.size());
     } else {
@@ -329,33 +340,41 @@ void CombatII::render_message_window() {
     show_overlay_message(msg_cur_.text);
 }
 
-// ---- sub_5046B: one step of "advance message windows + scroll camera" per frame ----
+// sub_5046B's message head: the caller has already drawn the current text. Decrement the
+// remaining-frame counter, then switch to the next queued window or close when it reaches 0.
+// This is deliberately separate from camera_update_frame(): the original draws the text before
+// this decrement, so the last frame with timer == 1 must remain visible for one full frame.
+void CombatII::advance_message_window() {
+    if (!msg_active_) return;
+    if (--msg_timer_ <= 0) {
+        if (!msg_queue_.empty()) {
+            msg_cur_ = msg_queue_.front();
+            msg_queue_.pop_front();
+            msg_timer_ = msg_cur_.frames;
+            fprintf(stderr, "COMBAT: message window advance: %d frames, %zu chars\n",
+                    msg_timer_, msg_cur_.text.size());
+        } else {
+            msg_active_ = false;
+            msg_cur_.text.clear();
+            msg_timer_ = 0;
+            fprintf(stderr, "COMBAT: message window closed\n");
+        }
+    }
+}
+
+// ---- sub_5046B: one step of "scroll camera + consume waypoints" per frame ----
+// The message-window draw/decrement is performed by battle_fx_world() after sub_454B3, because
+// sub_5046B draws the text before changing word_11057C. This function only keeps the camera and
+// return-value semantics of the same routine.
 // Returns 0 = still busy (a window is open or frames remain -> loc_50695),
 //         1 = nothing to do (loc_50593: no scroll, no queue, no window),
 //         2 = popped the next waypoint and started a new scroll.
 int CombatII::camera_update_frame() {
-    // 1) Message window: the head of sub_5046B, run every frame regardless of scrolling.
-    //    `mov dx, word_11057C; sub edx, ebx(=1); mov word_11057C, dx`, then advance to the next
-    //    window or close when it reaches 0. bx = 1 on entry when a window was open, so this
-    //    frame still reports "busy" (0).
+    // bx on entry reports whether a window was open; the actual text draw/decrement is done in
+    // battle_fx_world(). This frame still reports "busy" (0) when it was open.
     bool msg_was_active = msg_active_;
-    if (msg_active_) {
-        if (--msg_timer_ <= 0) {
-            if (!msg_queue_.empty()) {
-                msg_cur_ = msg_queue_.front();
-                msg_queue_.pop_front();
-                msg_timer_ = msg_cur_.frames;
-                fprintf(stderr, "COMBAT: message window advance: %d frames, %zu chars\n",
-                        msg_timer_, msg_cur_.text.size());
-            } else {
-                msg_active_ = false;
-                msg_cur_.text.clear();
-                msg_timer_ = 0;
-                fprintf(stderr, "COMBAT: message window closed\n");
-            }
-        }
-    }
-    // 2) One scroll step while frames remain (loc_505B6).
+    if (msg_was_active) msg_frame_due_ = true;   // the next world pass is a sub_4559F frame
+    // 1) One scroll step while frames remain (loc_505B6).
     if (camera_scrolling()) {
         // loc_505B6: X - add the step to dword_7001C and keep fine in (-12, 12]: fine <= -12 ->
         // +24, camX++; fine > 12 -> -24, camX--.
@@ -375,14 +394,14 @@ int CombatII::camera_update_frame() {
         }
         return 0;
     }
-    // 3) loc_5050D: once scrolling ends, consume one waypoint (recalls sub_50339, returns 2).
+    // 2) loc_5050D: once scrolling ends, consume one waypoint (recalls sub_50339, returns 2).
     if (!cam_waypoints_.empty()) {
         CameraWaypoint wp = cam_waypoints_.front();
         cam_waypoints_.pop_front();
         camera_setup(wp.mode, wp.x, wp.y, wp.speed);
         return 2;
     }
-    // 4) loc_50593: `cmp bx,1; jz loc_50695` - return 0 when a window was open, even if it
+    // 3) loc_50593: `cmp bx,1; jz loc_50695` - return 0 when a window was open, even if it
     // just closed.
     return msg_was_active ? 0 : 1;
 }
