@@ -2324,14 +2324,19 @@ void CombatII::render_battle_map(bool magic_pass, bool overlay_only, bool skip_m
                                 (int)map_trailer_.mapeffc[(tile_attr_[(size_t)tile_idx] - 0x65) & 0xF],
                                 ncf->tile_w);
 
-                    // sub_12567 loc_12922/loc_12943: the clip height is written to the entry's
-                    // byte [+4] and the row pass reads it back unsigned (sub_12E5E), so truncate
-                    // it here; zero takes the full-sprite blit. (sub_12F2A keeps a word instead.)
-                    const int clip_byte = (int)(uint8_t)clip_h;
+                    // sub_12567 loc_12922: `cmp [var_34],0 / jnz loc_12943` - a zero depth forces
+                    // the entry's clip byte [+4] to 0 and jumps straight to the decal loop, so the
+                    // whole sprite is blitted; only a non-zero depth computes
+                    // 8-depth+(decal_y-entry_y) there. The row pass reads that byte back unsigned
+                    // (sub_12E5E). (sub_12F2A has no zero-depth arm and keeps a word instead.)
+                    const int clip_byte = (depth == 0) ? 0 : (int)(uint8_t)clip_h;
                     if (clip_byte != 0)
                         unit_push({draw_x, spr_y, foot_y, 4, 0, ncf, clip_byte, 0, nullptr});
                     else
-                        unit_push({draw_x, spr_y, foot_y, 2, 0, ncf, 0, 0, nullptr});
+                        // The row pass's full-sprite arm (sub_5F3FD) reuses the entry's own
+                        // coordinates; type 2 re-adds the frame offsets at draw time, so hand
+                        // it the un-offset anchor (the sink depth stays in y).
+                        unit_push({sx, sy + depth, foot_y, 2, 0, ncf, 0, 0, nullptr});
                     // Foot decal (loc_13123): loc_13016 (class 1/2) anchors at
                     // (sx - 12, sy + 4); loc_12FE4 (class 0) at
                     // (sx + sil_x, sy + sil_y + 12). The sink block adds depth+2 to y, so
