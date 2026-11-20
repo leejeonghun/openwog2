@@ -1875,7 +1875,7 @@ bool CombatII::run_unit_hp_trigger(int victim_index, int other_index, int mode) 
                     mode, rec, (unsigned)cond, units_[(size_t)victim_index].id,
                     other_index >= 0 ? units_[(size_t)other_index].id : -1);
         VmResult r = run_vm(vm_offset);                        // sub_4FFEF; sub_52E55; sub_5001F
-        if (!r.events.empty()) play_vm_events(r.events);
+        play_vm_result(r);
         ran = true;
         break;
     }
@@ -1979,7 +1979,7 @@ bool CombatII::run_contact_trigger(int unit_index, int target_index, int mode) {
             fprintf(stderr, "COMBAT: contact trigger table=%d mode=%d unit=%d target=%d\n",
                     table, mode, units_[(size_t)unit_index].id, units_[(size_t)target_index].id);
         VmResult r = run_vm(vm_offset);                        // sub_52E55 (+4FFEF/5001F)
-        if (!r.events.empty()) play_vm_events(r.events);
+        play_vm_result(r);
         ran = true;
         break;
     }
@@ -2045,7 +2045,7 @@ bool CombatII::run_region_count_trigger() {
             fprintf(stderr, "COMBAT: region trigger rec=%d rect=(%d,%d)-(%d,%d) army=%d count=%d/%d cmp=%d\n",
                     rec, x1, y1, x2, y2, army_id, count, want, compare);
         VmResult r = run_vm(vm_offset);
-        if (!r.events.empty()) play_vm_events(r.events);
+        play_vm_result(r);
         ran = true;
         break;
     }
@@ -2094,7 +2094,7 @@ bool CombatII::run_morale_trigger() {
             fprintf(stderr, "COMBAT: morale trigger rec=%d which=%u morale=%u cmp=%u value=%u\n",
                     rec, (unsigned)which, (unsigned)morale, (unsigned)compare, (unsigned)value);
         VmResult r = run_vm(vm_offset);
-        if (!r.events.empty()) play_vm_events(r.events);
+        play_vm_result(r);
         ran = true;
         break;
     }
@@ -2130,7 +2130,7 @@ bool CombatII::run_army_wiped_trigger(int group) {
         if (!satisfied || vm_offset == 0) continue;
         if (battle_trace_) fprintf(stderr, "COMBAT: army wiped trigger group=%d rec=%d\n", group, rec);
         VmResult r = run_vm(vm_offset);
-        if (!r.events.empty()) play_vm_events(r.events);
+        play_vm_result(r);
         ran = true;
     }
     script_forced_target_ = saved_target;
@@ -3146,6 +3146,30 @@ void CombatII::battle_spawn_queue_step() {
     battle_spawn_activate(merged);
 }
 
+// sub_52E55 loc_53026/loc_53030: after the block's last command the original runs
+// `sub_5046B; cmp ax,1; jz loc_5305D` until sub_5046B reports idle, drawing and ticking frames.
+// That loop is the only place an in-battle message window (0x73) or camera scroll is consumed
+// once the block itself has no wait left, so a block that ends on 00 must drain here before the
+// trigger returns to the battle viewer (which has no sub_5046B call, like the original 5580F).
+// Other end opcodes (0x12 sub_52D33, 0x01 sub_506F3) leave through sub_61CFF and never reach
+// loc_53026, so they must not drain.
+void CombatII::play_vm_result(const VmResult& r) {
+    if (!r.events.empty()) play_vm_events(r.events);
+    if (should_exit_) return;
+    if (skip_cutscene_) {
+        // ESC skip is port-only: the drain that would have closed the window never runs, and the
+        // battle viewer loop would leave the window open forever. Drop it instead. (run() also
+        // clears this after the opening cutscene.)
+        msg_active_ = false;
+        msg_cur_.text.clear();
+        msg_queue_.clear();
+        msg_timer_ = 0;
+        msg_frame_due_ = false;
+        return;
+    }
+    if (r.end_opcode == 0x00) drain_camera_scroll();
+}
+
 void CombatII::play_vm_events(const std::vector<VmEvent>& events) {
     // VM payloads are decoded ahead of playback, but ordinary unit-list selection is stateful:
     // earlier Spawn/Faction/Leave/HP events must affect later selector opcodes in this same event
@@ -3716,8 +3740,8 @@ void CombatII::play_vm_events(const std::vector<VmEvent>& events) {
             // return 8 fades and exits 0xFF; -1 reopens the menu.
             if (battle_deploy_enabled_) {
                 VmResult result;
-                if (run_victory_script(1, result) && !result.events.empty())
-                    play_vm_events(result.events);
+                if (run_victory_script(1, result))
+                    play_vm_result(result);
                 if (should_exit_) return;
             }
             victory_fade_out();                 // sub_44CCA(1)

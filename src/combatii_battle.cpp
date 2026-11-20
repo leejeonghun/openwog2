@@ -1957,7 +1957,7 @@ void CombatII::battle_after_move(int unit_index) {
                 units_[(size_t)unit_index].id, area.events.size());
         // The original runs the VM inline while handling the trigger, so a forced sel>=10
         // target is kept until playback finishes.
-        play_vm_events(area.events);
+        play_vm_result(area);
     }
     script_forced_target_ = saved_target;
     if (should_exit_ || !units_[(size_t)unit_index].active) return;
@@ -13003,7 +13003,7 @@ int CombatII::battle_update() {
             if (f && !r.events.empty()) {
                 fprintf(stderr, "COMBAT: battle update %u -> seq trigger(%d) %zu event(s)\n",
                         battle_time_, (int)script_seq_, r.events.size());
-                play_vm_events(r.events);
+                play_vm_result(r);
                 if (should_exit_) return 1;
             }
             // When the trigger ran VM 0x0E (sub_5283D) dword_74134 is already 0 and the
@@ -13025,7 +13025,7 @@ int CombatII::battle_update() {
             if (f && !r.events.empty()) {
                 fprintf(stderr, "COMBAT: battle update %u -> time trigger %zu event(s)\n",
                         battle_time_, r.events.size());
-                play_vm_events(r.events);
+                play_vm_result(r);
                 if (should_exit_) return 1;
             }
         }

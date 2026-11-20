@@ -2737,6 +2737,10 @@ private:
     uint32_t eval_condition(uint32_t offset, bool& satisfied) const;
     // sub_52E55: run the bytecode block starting at `offset`.
     VmResult run_vm(uint32_t offset);
+    // Playback of one run_vm() result plus sub_52E55's loc_53026 wrap-up: when the block ended on
+    // byte 00 the original drains camera scrolls and the message window before returning to the
+    // trigger caller, so every in-battle trigger site goes through this wrapper.
+    void play_vm_result(const VmResult& r);
     // Checks whether the position returned by a variable-length command (0x04/0x05/0x07/0x10)
     // looks sane. It keeps walking when the next byte is 0x00 (end of block) or an opcode present
     // in

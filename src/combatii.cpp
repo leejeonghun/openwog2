@@ -182,13 +182,13 @@ void CombatII::battle_fx_present_12d65() {
 // covers (16px left/right, 4px top/bottom) therefore keeps the previous frame's pixels. The
 // equip (sub_48BC1) and detail (sub_48863) screens never call sub_454D5 (HUD/ring/dim), so what
 // remains is the combat HUD of the previous ring frame: the status box's black frame and MORALE
-// bar.
+// bar. Neither screen calls sub_50216 either; the drop layer belongs to the spawn/move animation
+// frames (sub_508E6, sub_50BAF), not to sub_454B3, so there is nothing to draw here.
 void CombatII::battle_fx_world_keep() {
     battle_keep_backbuffer_ = true;
     render_battle_map();                                            // sub_10AEB + sub_12BEE (no clear)
     battle_keep_backbuffer_ = false;
     render_weather_layer();                                         // sub_4512E
-    render_battle_drop_layer();                                     // sub_50216 (after sub_4559F)
 }
 
 // ---- sub_12E01: flush queued sprites (magic effects included) ----
@@ -632,13 +632,10 @@ void CombatII::execute_cutscene(){
             }
             if (!r.events.empty()) {
                 // Replay the events in order: dialogue and captions wait for input, camera and
-                // movement animate.
-                play_vm_events(r.events);
+                // movement animate. play_vm_result also runs the loc_53026 drain when the block
+                // ended on 00, as sub_52E55 does before returning to its caller.
+                play_vm_result(r);
                 played_events = true;
-                // loc_53026: when a block ends on 00 the original VM drains all camera motion and
-                // windows before returning, so leftover camera state cannot disturb the next block.
-                if (r.end_opcode == 0x00 && !should_exit_ && !skip_cutscene_)
-                    drain_camera_scroll();
             } else {
                 // With no trigger script, or one that stopped at an unimplemented opcode
                 // (0x07/0x08 etc.), scan the body's display blocks to fill in the cutscene.
