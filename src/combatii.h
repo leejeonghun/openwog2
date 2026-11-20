@@ -626,7 +626,8 @@ private:
     // sub_454B3 + sub_454D5, then the sub_5046B message text and the sub_50216 drop (sub_4559F
     // -> sub_508E6 order).
     void render_battle_frame();
-    void present_cutscene_frame();
+    // capture_dump=false skips the G2_DUMP_FRAME slot (drain's no-op loc_5305D re-present).
+    void present_cutscene_frame(bool capture_dump = true);
     // ---- Original frame chain (the order the spell drivers call every frame) ----
     void battle_fx_world();      // sub_454B3 (map/units/weather; no message/drop; falls into 454D5)
     void battle_fx_world_dim();  // sub_454B3 + sub_12E01 + sub_454D5 (dim before post-dim effects)
@@ -637,7 +638,7 @@ private:
     void battle_fx_flush();      // sub_12E01: send queued spell sprites (5F570/5EE51/5F305)
     void battle_fx_overlay();    // sub_454D5: dim -> sub_12161 -> sub_44DCC -> sub_13546 -> sub_45431
     void battle_fx_message_window(); // sub_5046B message head, after sub_454D5 (sub_4559F order)
-    void battle_fx_commit();     // sub_5E9E8 (send including the dialogue box)
+    void battle_fx_commit(bool capture_dump = true); // sub_5E9E8 (send including the dialogue box)
     // ---- sub_44D89 / sub_44D81 / sub_44D75: dword_F9F08 highlight list (max 59h) ----
     // sub_44DCC in 454D5 redraws these units with sub_12F2A, above spell effects and dimming
     // but below the HUD.
@@ -2606,6 +2607,7 @@ private:
     bool battle_item_table_tried_ = false;
     uint16_t battle_pause_cooldown_ = 0; // word_789A4 (sub_1038B/sub_10392): decremented once per INT8
     bool     battle_loop_active_ = false;// port only: runs the pause ISR hook only inside the battle viewer loop
+    int      vm_play_depth_ = 0;        // port only: nesting of play_vm_result (trigger inside an event)
     // sub_4E0EE system menu and quick save/load (gameplay options stay in the port settings)
     std::string current_scenario_name_;   // last load_scenario filename (quick save header)
     bool battle_music_on_ = true;         // word_FDAE8

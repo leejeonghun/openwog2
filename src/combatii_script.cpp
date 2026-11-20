@@ -1431,10 +1431,13 @@ CombatII::VmResult CombatII::run_vm(uint32_t offset) {
             }
             // sub_44CCA(0): fade out -> unlink contmap.dat -> write " " to `$` -> exit.
             // 0x01 always ends the module, even when the table is empty or the condition fails.
+            // value carries "the victory block ran and ended on 00" so the Victory handler can
+            // run the loc_53026 drain that sub_52E55 does inside sub_53F2C(0) before sub_44CCA.
             {
                 VmEvent ev;
                 ev.type = VmEventType::Victory;
                 ev.offset = op_pos;
+                ev.value = (fired && vic.end_opcode == 0x00) ? 1 : 0;
                 r.events.push_back(ev);
             }
             break;
@@ -3154,6 +3157,14 @@ void CombatII::battle_spawn_queue_step() {
 // Other end opcodes (0x12 sub_52D33, 0x01 sub_506F3) leave through sub_61CFF and never reach
 // loc_53026, so they must not drain.
 void CombatII::play_vm_result(const VmResult& r) {
+    // Event handlers can fire another trigger (contact, HP, legion wipe) whose VM result is
+    // played from inside this one. Only the outermost playback may end the ESC skip; clearing it
+    // from an inner stream would resume the outer stream in the middle of the skip.
+    struct DepthGuard {
+        int& depth;
+        explicit DepthGuard(int& d) : depth(d) { ++depth; }
+        ~DepthGuard() { --depth; }
+    } depth_guard(vm_play_depth_);
     if (!r.events.empty()) play_vm_events(r.events);
     if (should_exit_) return;
     if (skip_cutscene_) {
@@ -3165,6 +3176,10 @@ void CombatII::play_vm_result(const VmResult& r) {
         msg_queue_.clear();
         msg_timer_ = 0;
         msg_frame_due_ = false;
+        // The original has no in-battle skip, so the flag must not outlive the playback it
+        // interrupted. battle_loop_active_ is false for the opening cutscene (run() clears the
+        // flag there), so this only resets an in-battle trigger skip.
+        if (vm_play_depth_ == 1 && battle_loop_active_) skip_cutscene_ = false;
         return;
     }
     if (r.end_opcode == 0x00) drain_camera_scroll();
@@ -3786,6 +3801,10 @@ void CombatII::play_vm_events(const std::vector<VmEvent>& events) {
             // `$`=" " -> exit(1).
             // The sub_55518 survivor placement screen runs at the start of the next process
             // (combatii_deploy.cpp). At victory there is no result tally and no wipe check.
+            // sub_53F2C returns only after sub_52E55's `test ah,ah; jz loc_53026`, so a victory
+            // block that ended on 00 drains its message windows/camera scroll before the fade.
+            // When no block ran (empty/failed condition) the original does not drain either.
+            if (ev.value == 1 && !skip_cutscene_) drain_camera_scroll();
             victory_fade_out();
             fprintf(stderr, "COMBAT: stage-clear: save BLACKBOX, cleanup battle units, unlink contmap.dat, write '$'=' ', exit\n");
             battle_blackbox_save(2);               // sub_4E4C4(2)+sub_4E622

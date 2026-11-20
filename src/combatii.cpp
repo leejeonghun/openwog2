@@ -214,10 +214,10 @@ void CombatII::battle_fx_overlay() {
 }
 
 // ---- sub_5E9E8: present the backbuffer (dialogue and message windows included) ----
-void CombatII::battle_fx_commit() {
+void CombatII::battle_fx_commit(bool capture_dump) {
     render_overlay();
     video_.present();
-    dump_frame_if_requested();
+    if (capture_dump) dump_frame_if_requested();
 }
 
 // sub_454B3 plus the fall-through sub_454D5: one whole frame. sub_4559F then calls sub_5046B
@@ -254,13 +254,13 @@ void CombatII::render_overlay() {
     // battle_fx_message_window() in render_battle_frame, after this overlay.
 }
 
-void CombatII::present_cutscene_frame() {
+void CombatII::present_cutscene_frame(bool capture_dump) {
     // The original cutscene/dialogue/message path also redraws the bottom gauge through
     // sub_45431 -> sub_44EB0 (sub_482A5+11D). The port draws the HUD every frame even while
     // running free, so it only syncs the display time here (see the battle_hud_time_ comment).
     battle_hud_time_ = battle_time_;
     render_battle_frame();
-    battle_fx_commit();                                             // sub_5E9E8
+    battle_fx_commit(capture_dump);                                 // sub_5E9E8
 }
 
 // ---- sub_50339: set up a camera scroll (non-blocking) ----
@@ -555,15 +555,22 @@ bool CombatII::half_tick_poll() { // sub_102FF - the 30-tick tick of the turn lo
 //   loc_53026: mov eax,9; call sub_1033B     -> game timer period 9
 //   loc_53030: call sub_5046B; cmp ax,1; jz loc_5305D
 //              sub_5E9E8 (present) + sub_499E4 (one tick) + sub_454B3 (redraw map) -> repeat
+//   loc_5305D: call sub_5E9E8                -> present the final frame
 // It drains any camera scroll and message window still pending when the script ends, which is
-// also where blocks such as 1-1 arrive after their last camera command.
+// also where blocks such as 1-1 arrive after their last camera command. loc_53026 runs before
+// the first sub_5046B call and loc_5305D presents even when nothing is pending (sub_5046B
+// returns 1 on that first call), so the empty case is one draw+present with no wait.
 void CombatII::drain_camera_scroll() {
-    if (!camera_scrolling() && cam_waypoints_.empty() && !msg_active_) return;
     game_timer_set(9);
+    // G2_DUMP_FRAME rule: with nothing pending the loop is only the loc_5305D re-present of the
+    // frame that is already on screen, so it must not consume a dump slot (the pre-loc_5305D
+    // port dumped nothing here). Drains that actually advance (camera waypoints/scroll or a
+    // message window) keep dumping every frame, as before.
+    const bool drain_advances = camera_scrolling() || !cam_waypoints_.empty() || msg_active_;
     int frames = 0;
     for (;;) {
         int r = camera_update_frame();
-        present_cutscene_frame();
+        present_cutscene_frame(drain_advances);
         frames++;
         if (r == 1) break;                 // cmp ax,1; jz loc_5305D
         if (should_exit_ || skip_cutscene_) break;
