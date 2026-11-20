@@ -2142,32 +2142,36 @@ void CombatII::render_battle_map(bool magic_pass, bool overlay_only, bool skip_m
             };
             // ---- mode-1 spawn drop (sub_508E6 -> sub_50216) ----
             //   dx = 7 - unk_E5A50 (counter). sub_50216 in full:
-            //   (1) dx <= 1: skip the unit sprite (sub_50216+7D: cmp dx,1; jle loc_50319)
-            //   (2) fill the NC2 frame (facing, pose 9-dx) with solid color 2+cnt (sub_5F517)
-            //   (3) draw the EVENT.SYB sprite of stage table unk_10059C[dx] at the unit tile's
+            //   (1) dx < 0 or dx > 7: draw nothing (test dx,dx / jl; cmp dx,7 / jg)
+            //   (2) dx <= 1: skip only the unit silhouette (cmp dx,1; jle loc_50319)
+            //   (3) silhouette: pose 0 frame of the facing block, filled with color 9-dx
+            //   (4) draw the EVENT.SYB sprite of stage table unk_10059C[dx] at the unit tile's
             //       screen position plus the record xo/yo, as sub_5F3FD does: rec7 (floor, yo=+12)
             //       through rec0 (pillar top, yo=-16), so the light pillar rises as dx advances
-            //   (4) dx > 7 (counter 8, landed): both are skipped and the normal path draws
-            //   Draw order matches the original: unit silhouette first, pillar on top.
+            //   (5) dx > 7 (counter 8, landed): nothing here; the normal path draws the unit
+            //   Draw order matches the original map pass: status overlay first, then the
+            //   silhouette, with the pillar on top.
             if (u.drop_step >= 0) {
                 load_event_syb();
                 const int dx = 7 - u.drop_step;          // dx = drop counter
-                if (dx <= 1) continue;                    // sub_50216: jl loc_50330 (not drawn)
+                if (dx < 0 || dx > 7) continue;          // sub_50216: only out-of-range skips all
                 static const std::vector<NC2Frame> kEmptySyb;
                 const std::vector<NC2Frame>& syb = event_syb_ ? *event_syb_ : kEmptySyb;
                 // sub_50216 anchors both sprites at sub_10971+0Ch / sub_10988-2 and never adds
                 // [65h]/[66h]; sx/sy already carry the walk offsets, so subtract them here.
                 const int drop_x = sx - u.walk_off_x;
                 const int drop_y = sy - u.walk_off_y;
-                if (u.drop_sil > 0) {
-                    const NC2Frame* sf = nc2_frame_for(u.sprite_type, u.facing & 3, 9 - dx);
-                    if (sf) unit_push({drop_x, drop_y, foot_y, 3, u.drop_sil, sf});
+                // sub_4559F's map pass queues the status overlay before sub_50216 draws the
+                // drop sprites, so queue it first here and let the silhouette/pillar cover it.
+                status_overlay();
+                if (dx > 1) {                             // dx 0/1: silhouette skipped, pillar drawn
+                    const NC2Frame* sf = nc2_frame_for(u.sprite_type, u.facing & 3, 0);
+                    if (sf) unit_push({drop_x, drop_y, foot_y, 3, 9 - dx, sf});
                 }
                 if ((size_t)u.drop_step < syb.size() && !syb[u.drop_step].pixels.empty()) {
                     const NC2Frame& ds = syb[u.drop_step];
                     unit_push({drop_x, drop_y, foot_y, 2, 0, &ds});   // xo/yo are applied by the type-2 draw
                 }
-                status_overlay();
                 continue;                                 // skip the normal NC2/CITIZEN path
             }
             // ---- sub_12567 (dasm 3751..3796): map_kind 6 flips facing from the unit tile
