@@ -1880,39 +1880,69 @@ void CombatII::battle_fx_367ee_anim(int unit_index) {
         auto& T = units_[(size_t)ti];
         T.anim_frame = (T.sprite_type < 0x12C) ? (uint8_t)0x0A : (uint8_t)0x00;
     }
-    // Spawn: x/y come from the caller, velocity = -(3+rand(3)) / +(3+rand(3)) x flt_77ADA
-    // (0.25) or / dbl_77AEA (1.2), life = 0Fh + rand(0Fh).
-    const float kSlope = 0.25f;                                           // flt_77ADA
-    const float kSlopeLate = 1.0f / 1.2f;                                 // dbl_77AEA
+    // Spawn: x/y come from the caller (x rand first, then y rand), then one velocity rand and
+    // life = 0Fh + rand(0Fh). The velocity depends on the slot/5 group (C-020):
+    //   0..4   x = -(3+rand(3)), y = -x*0.25            (fmul flt_77ADA)
+    //   5..9   x = -(3+rand(3)), y = -x/1.2             (fdiv dbl_77AEA)
+    //   10..14 y = +(3+rand(4)), x = -y/1.75            (fdiv dbl_77ADE)
+    //   15..19 y = +(3+rand(4)), x = -y/7.0             (fdiv flt_77AE6)
+    //   25..29 y = +(3+rand(4)), x = +y/1.75
+    //   20..24 y = +(3+rand(4)), x = +y/7.0
+    //   35..39 x = +(3-rand(3)), y = +x*0.25
+    //   30..34 x = +(3-rand(3)), y = +x/1.2
     auto rnd = [&](int n) { return (int)combat_rand(n); };                // 499BD(n)
-    auto spawn = [&](int i, int x, int y, bool late) {
+    auto spawn = [&](int i, int xbase, int xrange, int ybase, int yrange) {
         if (i < 0 || i >= 40) return;
         PS& s = p[(size_t)i];
-        const float v = (float)(-3 - rnd(3));                             // fchs + (3 - rand(3))
+        const int px = xbase + rnd(xrange);
+        const int py = ybase + rnd(yrange);
+        const int g = i / 5;
+        float vx = 0.0f, vy = 0.0f;
+        if (g == 0) {
+            vx = (float)(-3 - rnd(3));                                    // fild -(3+rand(3))
+            vy = -vx * 0.25f;
+        } else if (g == 1) {
+            vx = (float)(-3 - rnd(3));
+            vy = (float)(-(double)vx / 1.2);
+        } else if (g == 2 || g == 3) {
+            const int r = 3 + rnd(4);
+            vy = (float)r;
+            vx = (g == 2) ? (float)(-(double)r / 1.75) : (float)(-(double)r / 7.0);
+        } else if (g == 4 || g == 5) {
+            const int r = 3 + rnd(4);
+            vy = (float)r;
+            vx = (g == 5) ? (float)((double)r / 1.75) : (float)((double)r / 7.0);
+        } else if (g == 6) {
+            vx = (float)(3 - rnd(3));
+            vy = (float)((double)vx / 1.2);
+        } else {
+            vx = (float)(3 - rnd(3));
+            vy = vx * 0.25f;
+        }
         s.alive = true;
-        s.x = (float)x;
-        s.y = (float)y;
-        s.dx = v;
-        s.dy = -v * (late ? kSlopeLate : kSlope);
+        s.x = (float)px;
+        s.y = (float)py;
+        s.dx = vx;
+        s.dy = vy;
         s.life = 0x0F + rnd(0x0F);                                        // var_AC
     };
     // (5) three phases
     for (int phase = 0; phase <= 2 && !should_exit_; ++phase) {
         if (phase == 0) {
             for (int i = 0; i <= 4; ++i)                                   // 0..4
-                spawn(i, si - 0x2D + rnd(0x28), di + rnd(0x14), false);
+                spawn(i, si - 0x2D, 0x28, di, 0x14);
             for (int i = 5; i <= 9; ++i)                                   // 5..9
-                spawn(i, si - 0x23 + rnd(0x23), di + 5 + rnd(0x14), false);
+                spawn(i, si - 0x23, 0x23, di + 5, 0x14);
         } else if (phase == 1) {
             for (int i = 0x0A; i <= 0x0E; ++i)                             // 10..14
-                spawn(i, si - 0x19 + rnd(0x1E), di + 0x0A + rnd(0x1E), true);
+                spawn(i, si - 0x19, 0x1E, di + 0x0A, 0x1E);
             for (int i = 0x0F; i <= 0x13; ++i)                             // 15..19
-                spawn(i, si - 0x14 + rnd(0x1E), di + 0x0F + rnd(0x23), true);
+                spawn(i, si - 0x14, 0x1E, di + 0x0F, 0x23);
         } else {
             for (int i = 0x19; i <= 0x1D; ++i)                             // 25..29
-                spawn(i, si - 5 + rnd(0x1E), di + 0x0A + rnd(0x1E), true);
+                spawn(i, si - 5, 0x1E, di + 0x0A, 0x1E);
             for (int i = 0x14; i <= 0x18; ++i)                             // 20..24
-                spawn(i, si + rnd(0x1E), di + 0x0F + rnd(0x23), true);
+                spawn(i, si, 0x1E, di + 0x0F, 0x23);
         }
         game_timer_set(5);                                                // 1033B(5)
         sfx(0x33);                                                        // 4F4CD(33h)
@@ -1928,10 +1958,10 @@ void CombatII::battle_fx_367ee_anim(int unit_index) {
     }
     // (6) last wave and wait for the particles to die
     for (int i = 0x23; i <= 0x27; ++i)                                     // 35..39
-        spawn(i, si + 0x19 + rnd(0x19), di + 0x0A + rnd(0x19), true);
+        spawn(i, si + 0x19, 0x19, di + 0x0A, 0x19);
     sfx(0x33);                                                            // 4F4CD(33h)
     for (int i = 0x1E; i <= 0x22; ++i)                                     // 30..34
-        spawn(i, si + 5 + rnd(0x1E), di + 0x0F + rnd(0x1E), true);
+        spawn(i, si + 5, 0x1E, di + 0x0F, 0x1E);
     for (int k = 0; k < 0x1E && !should_exit_; ++k) {
         bool any = false;
         for (const auto& s : p) if (s.alive) any = true;

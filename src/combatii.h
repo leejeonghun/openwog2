@@ -378,9 +378,9 @@ struct VmEvent {
     int hp_delta = 0;                     // 0 = instant death (sub_1DB1D), 0x7FFF = full heal, negative = damage
     int hp_dir = 0;                       // tail byte = knockback direction (sub_45ED2 dl)
     int hp_killer = -1;                   // sub_1DB1D killer (units_ index, -1 = none); the other side of the death event at HP<=0
-    // Item (0x06 sub_5196F): [kind][item] and the receiver resolved at parse time (forced
-    // target, otherwise the sub_499BD(3) random walk of the CC968 list).
-    int item_unit = -1;
+    // Item (0x06 sub_5196F): [kind][item]. The receiver is resolved when the event plays
+    // (forced target, otherwise the sub_499BD(3) random walk of the CC968 list), so
+    // forced_target_context carries the parse-time dword_11024C value.
     uint8_t item_kind = 0;
     uint8_t item_id = 0;
 };

@@ -12778,7 +12778,8 @@ int CombatII::battle_weapon_34c48(int unit_index) {
     const std::vector<int> targets = battle_target_list_;
     auto& A = units_[(size_t)unit_index];
     if (battle_trace_) fprintf(stderr, "COMBAT: 34c48 unit=%d targets=%zu\n", A.id, targets.size());
-    camera_center_on(A.x, A.y);
+    // sub_34C48 does not call sub_1124A: after the 1A1DE/1A452/1A552 sweep it goes straight
+    // to 1FEA4("shak2.nsp")/103A8/1033B(5), so the effect starts on the current camera (C-017).
     A.anim_frame = 5;
     // 49681..50380 presentation: 106 shak2.nsp frames (3 waves x 24 plus a 33-frame tail).
     // Damage follows the presentation.

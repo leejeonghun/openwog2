@@ -646,40 +646,19 @@ CombatII::VmResult CombatII::run_vm(uint32_t offset) {
             uint8_t kind = c.u8();
             uint8_t item = c.u8();
             if (!c.ok) { abort_range(); break; }
-            // sub_5196F resolves the receiver while the command runs: dword_11024C when a
-            // unit is forced, otherwise the dword_CC968 list walk keeps the first node and
-            // replaces it at every following node only when sub_499BD(3) == 0 (probability
-            // 1/3; loc_51A32 `mov ebp, edx` is reached on zero, loc_51A34 skips otherwise).
-            int target = script_forced_target_;
-            if (target < 0 || (size_t)target >= units_.size()) {
-                std::vector<int> list;
-                for (size_t i = 0; i < units_.size(); ++i) {
-                    const CombatUnitPlacement& lu = units_[i];
-                    if (!lu.active) continue;
-                    // dword_CC968 is the head of the army-1 list (word_F0424[0]); the walk at
-                    // sub_5196F+0xB5 follows only that list, not the four army lists.
-                    if (battle_effective_army(lu) != 1) continue;
-                    list.push_back((int)i);
-                }
-                std::sort(list.begin(), list.end(), [&](int a, int b) {
-                    const uint32_t sa = units_[(size_t)a].list_seq, sb = units_[(size_t)b].list_seq;
-                    return sa != sb ? sa < sb : a < b;             // sub_1134F tail insert order
-                });
-                target = -1;
-                if (!list.empty()) {
-                    target = list[0];
-                    for (size_t k = 1; k < list.size(); ++k)
-                        if (combat_rand(3) == 0) target = list[k];
-                }
-            }
+            // sub_5196F resolves the receiver while the command runs, after every preceding
+            // command of the block has played: dword_11024C when a unit is forced, otherwise
+            // the dword_CC968 list walk keeps the first node and replaces it at every
+            // following node only when sub_499BD(3) == 0 (loc_51A32 is reached on zero,
+            // loc_51A34 skips otherwise). Resolving it here would use the parse-time list and
+            // consume combat_rand(3) before the block runs (C-016), so the Item playback
+            // below selects the receiver.
             VmEvent ev;
             ev.type = VmEventType::Item;
             ev.offset = op_pos;
             ev.item_kind = kind;
             ev.item_id = item;
-            ev.item_unit = target;
-            if (script_trace_)
-                fprintf(stderr, "COMBAT: vm item kind=%u id=%u unit=%d\n", kind, item, target);
+            ev.forced_target_context = script_forced_target_;
             r.events.push_back(std::move(ev));
             break;
         }
@@ -3824,7 +3803,35 @@ void CombatII::play_vm_events(const std::vector<VmEvent>& events) {
             // accessory). A failed equip goes to the first free backpack slot; when both are
             // occupied the old [5Fh] item is moved to the stash and replaced. The routine then
             // shows the item name plus its suffix through sub_482A5.
-            const int ui = ev.item_unit;
+            // Receiver (loc_51A08..loc_51A3B) is chosen now, not at parse time: forced
+            // dword_11024C, otherwise the dword_CC968 army-1 walk with one sub_499BD(3) draw
+            // per node after the first (C-016). Earlier commands of the same block have
+            // already changed the list and consumed their own randomness.
+            int ui = ev.forced_target_context;
+            if (ui < 0 || (size_t)ui >= units_.size()) {
+                std::vector<int> list;
+                for (size_t i = 0; i < units_.size(); ++i) {
+                    const CombatUnitPlacement& lu = units_[i];
+                    if (!lu.active) continue;
+                    // dword_CC968 is the head of the army-1 list (word_F0424[0]); the walk at
+                    // sub_5196F+0xB5 follows only that list, not the four army lists.
+                    if (battle_effective_army(lu) != 1) continue;
+                    list.push_back((int)i);
+                }
+                std::sort(list.begin(), list.end(), [&](int a, int b) {
+                    const uint32_t sa = units_[(size_t)a].list_seq, sb = units_[(size_t)b].list_seq;
+                    return sa != sb ? sa < sb : a < b;             // sub_1134F tail insert order
+                });
+                ui = -1;
+                if (!list.empty()) {
+                    ui = list[0];
+                    for (size_t k = 1; k < list.size(); ++k)
+                        if (combat_rand(3) == 0) ui = list[k];
+                }
+            }
+            if (script_trace_)
+                fprintf(stderr, "COMBAT: vm item kind=%u id=%u unit=%d\n",
+                        ev.item_kind, ev.item_id, ui);
             if (ui >= 0 && (size_t)ui < units_.size()) {
                 battle_load_item_table();
                 std::string name;
