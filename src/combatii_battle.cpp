@@ -8497,7 +8497,7 @@ void CombatII::battle_spell_paint_area(int unit_index, int r_code, int cx, int c
         int radius = -1;
         switch (q1) {
             case 2: case 9: case 16: radius = k + 3; break;             // 28A97
-            case 22: radius = base + k + 2; break;                      // 2AF53/2AFE0
+            case 22: radius = k + 2; break;                             // 2AF53/2AFE0 (2B031 arg0)
             case 23: case 42: radius = k; break;                        // 28A97 (28B24 push k)
             case 28: case 29: case 30: case 31: case 32: case 34:
                 radius = k; break;                                      // 28A97 (28B24 push k)
@@ -8820,7 +8820,7 @@ int CombatII::battle_spell_2b9c8(int unit_index, int k, int tx, int ty) {
 // sub_2BA8E (row 3 d1 Wide Heal): 2B031 manual centre -> 2AF53 heals allies
 //   ([0Dh] != 2) with dword_2840A[k] = 5000/8000/12000, p1 = 30, then 2AFE0 damages
 //   undead ([0Dh] == 2) with dword_2840A[k+2] = 12000/15000/18000, p1 = 30.
-//   Radius = 184A4(5B, 0x36) + k + 2.
+//   Reach = 184A4(5B, 0x36) + 5; the 2AF53/2AFE0 area radius is the pushed k+2.
 int CombatII::battle_spell_2ba8e(int unit_index, int k, int tx, int ty) {
     static constexpr int kWide[3] = {5000, 8000, 12000};   // dword_2840A (only 3 dwords copied)
     const int wk = (k < 0) ? 0 : (k > 2 ? 2 : k);
@@ -8837,7 +8837,10 @@ int CombatII::battle_spell_2ba8e(int unit_index, int k, int tx, int ty) {
     } else if (std::abs(tx - (int)(int8_t)u.x) + std::abs(ty - (int)(int8_t)u.y) > base_range + 5) {
         return 3;
     }
-    const int radius = base_range + k + 2;
+    // 2B031 stores sub_28465(5) for the 4A483 reach, but the value it passes to
+    // 2AF53/2AFE0 is its pushed arg0 (k+2), not the reach. 2BA8E's later 2AFE0
+    // pass also adds 2 to the saved k, so the area never includes 184A4.
+    const int radius = wk + 2;
     std::vector<int> friends = battle_spell_diamond(unit_index, tx, ty, radius, 0);
     friends.erase(std::remove_if(friends.begin(), friends.end(), [&](int i) {
         return units_[(size_t)i].unit_kind_0d == 2;              // 2AF53: skip undead
