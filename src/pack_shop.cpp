@@ -562,7 +562,8 @@ bool Pack::warp_to_town(int new_town_id) {
     player_anim_counter_ = 0;
     pending_interact_x_ = pending_interact_y_ = -1;
     if (!load_town_and_tec(new_town_id)) return false;
-    load_citizen_sprites(cstldata_path(town_id_ % 2 == 0 ? "citizen1.spr" : "citizen2.spr"));
+    // sub_213A6 rebuilds the chest top tiles but leaves the citizen bank untouched; the
+    // bank was chosen once from the initial town id in sub_18B2A.
     place_chest_top_tiles();
     return true;
 }

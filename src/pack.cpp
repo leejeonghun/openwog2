@@ -3034,14 +3034,10 @@ void Pack::update_player_movement() {
                 player_anim_counter_ = 0;
                 pending_interact_x_ = pending_interact_y_ = -1;
                 if (load_town_and_tec(new_town_id)) {
-                    // Same as steps 7b/7c in run(): reload citizen sprites for the town's
-                    // parity and replace the chest top tiles. Item, itembox and frame
-                    // overlays do not depend on the town and are kept.
-                    if (town_id_ % 2 == 0) {
-                        load_citizen_sprites(cstldata_path("citizen1.spr"));
-                    } else {
-                        load_citizen_sprites(cstldata_path("citizen2.spr"));
-                    }
+                    // sub_213A6 replaces the chest top tiles as part of the town load. The
+                    // citizen bank is not reloaded: sub_18B2A chooses citizen1/2.spr once
+                    // from the initial byte_15BA23, and sub_20EB0 -> sub_213A6 only frees the
+                    // map layers/top-tile buffers and reloads the map.
                     place_chest_top_tiles();
                 }
                 return; // layers, player and camera were all reset for the new town
@@ -4056,8 +4052,8 @@ void Pack::eve_op_warp(int new_town_id, int cam_x, int cam_y) {
         palette_get_entry((uint8_t)i, saved_pal[i][0], saved_pal[i][1], saved_pal[i][2]);
     eve_fade_out_to_black();
     if (load_town_and_tec(new_town_id)) {
-        if (town_id_ % 2 == 0) load_citizen_sprites(cstldata_path("citizen1.spr"));
-        else load_citizen_sprites(cstldata_path("citizen2.spr"));
+        // The town load rebuilds the chest top tiles as sub_213A6 does. The citizen bank
+        // stays as loaded by sub_18B2A for the initial town id; it is not re-chosen per warp.
         place_chest_top_tiles();
         // Op18 [fire, 18, dst, camX, camY]: right after the sub_20EB0 town reload the same
         // command overwrites the camera from +6/+8 (near loc_12E2E, after the sub_20EB0 call:
@@ -4650,8 +4646,10 @@ int Pack::run(const std::string& mode, const std::string& town_param) {
         bgm_play_track(bgm_town_track_);
     }
 
-    // 7b. Load citizen animation sprites AFTER town load (ASM 0x18B2A)
-    // free_town_data() inside load_town_and_tec clears sprites, so must load after
+    // 7b. sub_18B2A: choose the citizen bank once from the starting town id
+    // (byte_15BA23). Later town transitions only free the map layers and call
+    // sub_213A6; they do not reload this bank, so the same set stays active in
+    // every interior. free_town_data() deliberately keeps citizen_sprites_.
     if (town_id_ % 2 == 0) {
         load_citizen_sprites(cstldata_path("citizen1.spr"));
     } else {
