@@ -2039,7 +2039,8 @@ void CombatII::render_battle_map(bool magic_pass, bool overlay_only, bool skip_m
         }
         // Fill background first
         if (has_fpm) render_fpm_as_background();
-        else if (!battle_keep_backbuffer_) video_.clear();  // sub_10AEB never clears (battle_fx_world_keep)
+        // sub_10AEB never clears: without FPM the previous backbuffer stays, so the border strip
+        // the 13x13 tile pass does not cover keeps the prior frame's pixels (C-024).
         // sub_10AEB (loc_10BE7/loc_10BEE): outer loop dx = 0..0Ch, inner loop si = 0..0Ch, so exactly
         // 13 columns x 13 rows with cam_tile as the first column/row; columns/rows before cam_tile-1
         // are not drawn (at rest with fine=(12,0) the leftmost 16px and top 4px show FPM/background).

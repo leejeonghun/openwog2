@@ -15,8 +15,9 @@
 //   sub_4DE0A: TURN interval slider (byte_74138, 2..30, step 2).
 //
 // Deviation: uses the SDL hardware cursor, so the software cursor (sub_5D41E/5D570) is not drawn.
-// Deviation: the music/SFX toggles (sub_4F369/4F3AE/4F427/4F450) only flip flags; the port has no
-// BGM.
+// Music/SFX toggles: cases 3/4 call the sub_4F369/4F3AE/4F427/4F450 equivalents after
+// flipping the flag, as the original does. The CD/SB layer behind them is state-only in this
+// port (there is no CD audio engine).
 // Deviation: cases 7 (restart battle) and 8 (to TITLE) end the process in the original
 //   (sub_61CFF/sub_4FE28), so the port returns 7/8 for the caller to handle.
 #include "combatii.h"
@@ -273,10 +274,14 @@ int CombatII::battle_system_menu_4e0ee(int no_saveload) {
                         break;
                     case 3:                             // music (sub_4F369 / sub_4F3AE)
                         battle_music_on_ = !battle_music_on_;
+                        if (battle_music_on_) battle_music_start_4f369();
+                        else                  battle_music_stop_4f3ae();
                         fprintf(stderr, "COMBAT: music %s (word_FDAE8, sub_4E0EE)\n", battle_music_on_ ? "on" : "off");
                         break;
                     case 4:                             // sfx (sub_4F427 / sub_4F450)
                         battle_sfx_on_ = !battle_sfx_on_;
+                        if (battle_sfx_on_) battle_sfx_preview_4f427();
+                        else                battle_sfx_stop_4f450();
                         fprintf(stderr, "COMBAT: sfx %s (word_FDAE6, sub_4E0EE)\n", battle_sfx_on_ ? "on" : "off");
                         break;
                     case 5:                             // sub_4DE0A TURN interval

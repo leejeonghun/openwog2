@@ -323,10 +323,10 @@ int CombatII::battle_fx_31283_anim(int unit_index) {
             }
             counter[(size_t)i] = (int16_t)(counter[(size_t)i] - speed[(size_t)i]);
         }
-        battle_fx_commit();                                // sub_5E9E8
-        wait_game_tick();                                  // sub_499E4
         // loc_317F7..loc_31850: after frame > 0x64 the loop ends only when the scan finds
-        // no active slot at all (`cmp var_D0[i],1; jz found`, exit if var_64 == 32h).
+        // no active slot at all (`cmp var_D0[i],1; jz found`, exit if var_64 == 32h). That
+        // path jumps straight to loc_318A0, skipping loc_31861's sub_5E9E8/sub_499E4, so the
+        // frame in which the last particle disappeared is not presented (C-019).
         if (frame > 0x64) {
             bool any_active = false;
             for (int i = 0; i < kAsuraSlots; ++i) {
@@ -334,7 +334,9 @@ int CombatII::battle_fx_31283_anim(int unit_index) {
             }
             if (!any_active) break;
         }
-        ++frame;
+        ++frame;                                            // loc_31861 inc var_C
+        battle_fx_commit();                                // sub_5E9E8
+        wait_game_tick();                                  // sub_499E4
         if (!should_exit_ && (frame % 0x0A) == 0) sfx(0x34);   // 4F4CD(34h)
     }
     // ---- (5) restore tile coordinates, palette fade down and up (loc_318A0) ----

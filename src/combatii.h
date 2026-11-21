@@ -378,9 +378,9 @@ struct VmEvent {
     int hp_delta = 0;                     // 0 = instant death (sub_1DB1D), 0x7FFF = full heal, negative = damage
     int hp_dir = 0;                       // tail byte = knockback direction (sub_45ED2 dl)
     int hp_killer = -1;                   // sub_1DB1D killer (units_ index, -1 = none); the other side of the death event at HP<=0
-    // Item (0x06 sub_5196F): [kind][item] and the receiver resolved at parse time (forced
-    // target, otherwise the sub_499BD(3) random walk of the CC968 list).
-    int item_unit = -1;
+    // Item (0x06 sub_5196F): [kind][item]. The receiver is resolved when the event plays
+    // (forced target, otherwise the sub_499BD(3) random walk of the CC968 list), so
+    // forced_target_context carries the parse-time dword_11024C value.
     uint8_t item_kind = 0;
     uint8_t item_id = 0;
 };
@@ -1175,11 +1175,20 @@ private:
     int  battle_unit_index_at(int x, int y) const;                // sub_11DB2 guarded CC998 footprint lookup
     // sub_11DB2/sub_11E04 cell lookup over the modeled CC998 occupancy. apply_guard=false is for
     // direct grid scans (sub_530F1/sub_53C12) that do not apply the (x-2)/(y-4) filter.
-    int  battle_cc998_occupant(int x, int y, bool apply_guard) const;
+    // ignore: transient CC998 model for sub_516D0, where sub_11EE4 has already cleared those units.
+    int  battle_cc998_occupant(int x, int y, bool apply_guard,
+                               const std::vector<uint8_t>* ignore = nullptr) const;
     // Compatibility name for callers that need the guarded sub_11DB2 lookup.
     int  battle_unit_index_at_footprint(int x, int y) const;
     bool battle_wc1_static_occupancy_unambiguous() const;          // complete static SCE, ordinary armies, unique D66A8 footprints
     bool battle_wc1_group0_move_preserves_occupancy(const VmEvent& ev, const char** reject_reason = nullptr) const;
+    // sub_50D3A(x*, y*): first tile of the increasing sub_1AC08/sub_1AC59 diamond (r = 1..0x31)
+    // whose sub_13CBD value is -1. The accepted coordinates are written back as signed bytes.
+    bool battle_move_50d3a(int& x, int& y, const std::vector<int>& grid) const;
+    // sub_516D0 loc_51877 (group == 1): sub_169D7 seeds E8 from the first record's unit, an
+    // occupied destination is relocated through sub_50D3A, and the final destination is written
+    // back to the record's unk_E5210 slot and marked with sub_13D02(x, y, -2).
+    void battle_vm_move_group1_relocate(VmEvent& ev) const;
     void battle_wc1_occupancy_unknown(const char* reason, uint32_t offset = 0xFFFFFFFFu); // fail-closed latch; reopened only by next complete SCE snapshot
     // Keeps the latch when the gate still passes after a verified 1x1 add/remove/move; closes it as
     // unknown otherwise.
@@ -1232,7 +1241,8 @@ private:
     // sub_3E18B: -1 = watch target not found or distance <= 1, 0 = +71h (FFh) equals the home x,
     // 1 = target distance > 1, 2 = signed x/y differ from both home coordinates. AI selectors 0..6
     // resolve through the CC960/CC968..CC990 lists (effective armies 0..5 and the global
-    // roster); 7..254 are outside the list array and return the port-only -2 diagnostic.
+    // roster). Selectors 7..254 index past the array in the original; the port models those list
+    // heads as empty, so they return -1 like a missing target (no port-only -2 value).
     int battle_ai_watch_state(int unit_index) const;
     // sub_1379A(sel,id): walk dword_CC960[sel*8] and return the first active unit with
     // [+0Fh]==id. Selectors 0..5 select effective-army lists 0..5, selector 6 the CC990 global
@@ -1405,7 +1415,8 @@ private:
     int battle_ai_wc5_1ad2e(const Wc5Dia& it) const;
     // sub_169D7: resets E8F46 to -1 on cells that are unoccupied and have terrain cost > 0 for
     // the actor's move selector, and to -2 everywhere else (the reset that precedes 3F0E4/3F247).
-    void battle_ai_169d7_reset(int unit_index, std::vector<int>& grid) const;
+    void battle_ai_169d7_reset(int unit_index, std::vector<int>& grid,
+                               const std::vector<uint8_t>* ignore = nullptr) const;
     // sub_3F0E4(actor, edx=radius, ebx=band): after the 169D7 reset it walks the 1AC08/1AC59
     // diamond (r=radius) and writes the band value on every cell with E8 == -1. The value is the
     // low 16 bits of (EDD72 & 0xFFFF) + 1 - ebx (accumulated), where ebx is updated from the 1AD2E
@@ -1816,6 +1827,7 @@ private:
     bool run_army_wiped_trigger(int group);                   // sub_53F94
     void battle_after_move(int unit_index);                   // sub_5401B (contact triggers excluded)
     int battle_terrain_17310(int unit_index);                 // sub_17310 (terrain damage/heal: 0 = death, -2 equivalent, 1 = survived)
+    void battle_terrain_damage_46359(int unit_index, int dmg); // sub_46359 (terrain damage digits/knockback, 25 frames)
     void battle_remove_from_ready_queue(int unit_index);      // sub_197AD
     int  battle_unit_group(const CombatUnitPlacement& u) const;     // modeled effective [+0x0E]-1; unknown remaps fall back to raw+1
     int  battle_group_alive_count(int group) const;                 // active-vector count fallback; CC968 membership is not stored
@@ -1867,12 +1879,8 @@ private:
     // ---- Battle tick state initialised by sub_19652 ----
     uint8_t  battle_state_ = 0;          // byte_F042E: 0 = running, 1 = waiting for player input, 2 = pause requested, 3 = paused
     bool battle_dim_row0_ = false;       // dword_FA8B6 equivalent: sub_454D5 dim over (0x10,4)-(0x130,0xC4), row 0; true only while the scenario condition is shown.
-    // The original sub_10AEB never clears the backbuffer, it only covers the 13x13 tiles. When
-    // true, render_battle_map skips its clear so the border strip the map does not cover (16 px on
-    // the sides, 4 px top and bottom) keeps the previous frame's pixels. The equipment screen
-    // (sub_48BC1) and detail screen (sub_48863) never call 454D5, so that strip is the previous
-    // battle HUD.
-    bool battle_keep_backbuffer_ = false;
+    // sub_10AEB never clears the backbuffer, so render_battle_map does not clear either (C-024).
+    // The border strip the 13x13 tile pass does not cover keeps the previous frame's pixels.
     bool battle_ring_dim_active() const; // dim while the ring/sub-ring is up (FA8B6 equivalent, in sub_454D5 order); used by render_battle_frame.
     uint16_t battle_overlay_mode_ = 0;   // word ptr dword_75008 (sub_44DEC): 1 makes sub_454D5 draw the state icons
     // ---- All-unit HP, TP gauge and clock (sub_13546/sub_45BBF family) ----
@@ -2501,10 +2509,10 @@ private:
     // 35FC2 (stormaxe), 377A6 (shu) and 39A49 (rain) in combatii_wbody_*.cpp (the latter six own
     // collection, damage and the tail inside their anim functions).
     // battle_weapon_302e6 plays the SSP (4F460) according to the sub_302E6 dispatch table.
-    // Screen sweep, diamond, front and nearest collection approximate 1A1F8/1A452/1AC08/49ABC;
-    // the 4A483 cursor selection is approximated automatically.
-    int battle_weapon_collect_screen(int unit_index, int cap, int x_shift = 0); // 1A1F8 screen 12x12 sweep (F0648 approximation)
-    int battle_weapon_collect_diamond(int unit_index, int radius); // 1AC08/1AC59 diamond (manhattan)
+    // Screen sweep/diamond/front go through the g2range iterators (1A1F8/1AC08/49ABC); the
+    // 4A483 cursor selection is the port's click-based battle_pick_tx_/ty_ path.
+    int battle_weapon_collect_screen(int unit_index, int cap); // 1A1F8 12x12 sweep from the camera tile
+    int battle_weapon_collect_diamond(int unit_index, int radius); // 1AC08/1AC59 + 1A1F8
     // F1474 idx 13..24 (2F80B..30049): Range-module collectors (1A452/1AC08/1A1F8), the 2E896
     // knockback, 2ED9A centre selection and the 2EF4A body.
     int battle_weapon_2cbfb(int unit_index, int delta);              // sub_2CBFB (16-bit)
@@ -2625,11 +2633,21 @@ private:
     std::string current_scenario_name_;   // last load_scenario filename (quick save header)
     bool battle_music_on_ = true;         // word_FDAE8
     bool battle_sfx_on_ = true;           // word_FDAE6
+    int  battle_bgm_id_ = 0;              // byte_FF0B7 (VM 0x13); sub_4F369 skips values >= 0x12
+    int  battle_sfx_id_ = 0;              // byte_FF0B8 (VM 0x77); sub_4F427/4F450 gate on > 0
+    bool battle_bgm_active_ = false;      // port state for sub_5AEB5/sub_5AF1B (CD layer is state-only)
+    int  battle_bgm_current_track_ = 0;   // track selected by sub_4F369 (byte_FF0B7 + 2)
     int  battle_scroll_speed_ = 4;        // word_FDAEA: 0 -> 4, 1 -> 8
     int  battle_turn_interval_ = 10;      // sub_4DE0A TURN interval (2..30); byte_74138 initial value is 0x0A
     int  battle_system_menu_4e0ee(int no_saveload = 0); // sub_4E0EE (ESC menu; a non-zero argument disables QUICK SAVE/LOAD). 2 = quick load, 7 = restart, 8 = title, -1 = cancel
+    void battle_music_start_4f369();      // sub_4F369: restart BGM (state-only CD layer)
+    void battle_music_stop_4f3ae();       // sub_4F3AE: stop BGM
+    void battle_sfx_preview_4f427();      // sub_4F427: start the preview SFX
+    void battle_sfx_stop_4f450();         // sub_4F450: stop SFX channel 0
     bool battle_quick_save_4f4ef();       // sub_4F4EF: genesis.qsv
     bool battle_quick_load_4fd25();       // sub_4FD25: restore genesis.qsv
+    bool battle_verify_qsv_4fcd9();       // sub_4FCD9: verify genesis.qsv and rewrite it when it differs
+    void battle_write_game_cfg_4ff8e();   // sub_4FF8E: game.cfg 4-byte tail (scroll/music/sfx/turn)
     // G2MSG start/quick-load banners (sub_44C05 + sub_44C75, records 0-2). The record bank is
     // g2msg_frames() from combatii_internal.h.
     uint16_t g2msg_progress_ = 0;         // word_75010 (sub_44C75 ticker count)
@@ -2828,6 +2846,7 @@ private:
     //   with [56h] != 0 (540CB).
     void battle_deploy_zone_parse(const uint8_t* data, size_t size);   // sub_4ED18: load E8F46+2 and the flag
     int  battle_deploy_55518();                                        // sub_55518
+    void battle_roster_reset_137d1();                                  // sub_137D1 (post-deploy CC990 [56h]/[5Ch] clear)
     bool battle_deploy_551e5(size_t roster_index, std::vector<int>& slot);  // sub_551E5
     void battle_deploy_54a82(const std::vector<size_t>& party, std::vector<int>& slot);  // sub_54A82 automatic placement
     int  battle_deploy_list(const std::vector<size_t>& party, std::vector<int>& slot, int& scroll, int& sel);  // sub_54C2C list screen (1 = selected, 0 = exit)

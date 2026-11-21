@@ -495,6 +495,45 @@ int CombatII::combat_rand(int n) {
     return (int)((combat_rng_ >> 16) % (uint32_t)n);
 }
 
+// ---- sub_4F369 / sub_4F3AE / sub_4F427 / sub_4F450 (system-menu music/SFX toggles) ----
+//   sub_4F369: word_FDAE8 == 1 and byte_FF0B7 < 0x12 -> track = byte_FF0B7 + 2 (the byte is
+//              the high byte of dword unk_FF0B4), sub_5AEB5(track, 1), sub_5AA81 x3, then
+//              clears word ptr dword_BA834. That word is the FPM animation frame counter
+//              incremented by sub_10AEB (0..0x5A); the port's FPM view is static, so there
+//              is no equivalent counter state to clear.
+//   sub_4F3AE: word_FDAE8 == 0 -> sub_5AF1B (stop the CD).
+//   sub_4F427: byte_FF0B8 > 0 and word_FDAE6 == 1 -> sub_5CC20(0Ah, 0, 3E7h).
+//   sub_4F450: byte_FF0B8 > 0 -> sub_5CD0D(0) (stop SFX channel 0).
+// The port has no CD player and no sound-bank sample 0, so the guards, state transitions and
+// call order are reproduced here and the audio side is state-only (as Pack::bgm_play_track).
+void CombatII::battle_music_start_4f369() {
+    if (!battle_music_on_) return;                        // cmp word_FDAE8,1 / jnz
+    if ((int8_t)battle_bgm_id_ >= 0x12) return;           // cmp byte_FF0B7,12h / jge
+    const int track = (int8_t)battle_bgm_id_ + 2;         // mov eax,[unk_FF0B4]; sar 18h; add 2
+    battle_bgm_active_ = true;                            // sub_5AEB5 + 3x sub_5AA81
+    battle_bgm_current_track_ = track;
+    if (battle_trace_)
+        fprintf(stderr, "COMBAT: music start track=%d (sub_4F369, state-only CD)\n", track);
+}
+
+void CombatII::battle_music_stop_4f3ae() {
+    if (battle_music_on_) return;                         // cmp word_FDAE8,0 / jnz
+    battle_bgm_active_ = false;                           // sub_5AF1B
+    if (battle_trace_) fprintf(stderr, "COMBAT: music stop (sub_4F3AE, state-only CD)\n");
+}
+
+void CombatII::battle_sfx_preview_4f427() {
+    if ((int8_t)battle_sfx_id_ <= 0) return;              // cmp byte_FF0B8,0 / jle (signed)
+    if (!battle_sfx_on_) return;                          // cmp word_FDAE6,1 / jnz
+    if (battle_trace_)
+        fprintf(stderr, "COMBAT: sfx start sample=0 channel=10 (sub_4F427, no sample bank)\n");
+}
+
+void CombatII::battle_sfx_stop_4f450() {
+    if ((int8_t)battle_sfx_id_ <= 0) return;              // cmp byte_FF0B8,0 / jle (signed)
+    if (battle_trace_) fprintf(stderr, "COMBAT: sfx stop channel=0 (sub_4F450)\n");
+}
+
 // sub_4F4CD(id) -> sub_5CB97(0x0A, id+1, 1): starts the sample that 4F460 loaded into slot
 // id+1. Only word_FDAE6 == 1 (system-menu SFX on) produces sound.
 void CombatII::sfx(int id) {
@@ -791,7 +830,8 @@ void CombatII::battle_wc1_occupancy_preserve_or_close(const char* reason, uint32
 // scanning active units: each base tile must pass the sub_11E04 guard, then the unit occupies
 // its current facing/pose D66A8 footprint (x..x+w-1, y-h+1..y). frame_nt/frame_mt are render
 // frames and do not replace this occupancy descriptor.
-int CombatII::battle_cc998_occupant(int x, int y, bool apply_guard) const {
+int CombatII::battle_cc998_occupant(int x, int y, bool apply_guard,
+                                    const std::vector<uint8_t>* ignore) const {
     if (map_w_ <= 0 || map_h_ <= 0) return -1;
     if (apply_guard) {
         // sub_11DB2: (x-2) and (y-4) are zero-extended 16-bit values compared against W-4
@@ -810,6 +850,7 @@ int CombatII::battle_cc998_occupant(int x, int y, bool apply_guard) const {
     int found = -1;
     for (size_t i = 0; i < units_.size(); ++i) {
         const auto& u = units_[i];
+        if (ignore && i < ignore->size() && (*ignore)[i]) continue;   // sub_11EE4 already cleared this unit
         if (!u.active || u.hp <= 0 || u.fx_sprite_hidden) continue;   // sub_11EE4 cleared the cell
         const int ux = (int)(int8_t)u.x, uy = (int)(int8_t)u.y;
         if (ux < 2 || ux >= (int)map_w_ - 2 || uy < 4 || uy >= (int)map_h_ - 4) continue;
@@ -1981,6 +2022,74 @@ void CombatII::battle_after_move(int unit_index) {
     run_region_count_trigger();
 }
 
+// sub_46359(unit, edx=raw damage): the terrain-damage presentation. HP was already subtracted
+// by sub_17310. sub_45BFB prepares the slot-0 digit buffer from dmg/100 (truncated) and clears
+// the walk offset, sub_45ED2 sets the knockback from the unit's own facing ([+60h]>>24), then
+// 25 frames draw the digits (sub_45CCB) and shake (sub_45F29), each presenting (sub_5E9E8) and
+// waiting one timer tick (sub_499E4). sub_499DA(0x20) sets the next timer period and sub_12124
+// resets the pose.
+void CombatII::battle_terrain_damage_46359(int unit_index, int dmg) {
+    if (unit_index < 0 || (size_t)unit_index >= units_.size()) return;
+    auto& u = units_[(size_t)unit_index];
+    u.walk_off_x = u.walk_off_y = 0;                            // sub_45BFB: [65h]=[66h]=0
+    char digits[8] = {};
+    int ndig = 0;
+    if (dmg > 0) {
+        const int shown = dmg / 100;                            // idiv 100 (truncates)
+        ndig = snprintf(digits, sizeof(digits), "%d", shown);
+        if (ndig > 4) ndig = 4;                                 // sub_45CCB draws four cells
+    }
+    const int sx0 = (u.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X;   // sub_10971
+    const int sy0 = (u.y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y;   // sub_10988
+    int digit_y[5];
+    for (int k = 0; k < 5; k++) digit_y[k] = sy0 + 0x0A;        // word_F9708 = sub_10988+0Ah
+    setup_knockback_hit(u, u.facing & 3);                       // sub_45ED2([+60h]>>24)
+    static constexpr uint8_t kDmgColor[8] = {0x04, 0x10, 0x31, 0x51, 0x20, 0x01, 0x00, 0x00};
+    const int army = std::min(std::max(battle_effective_army(u), 0), 7);
+    const uint8_t color = kDmgColor[(size_t)army];
+    if (!small_font_tried_) load_small_font();
+    game_timer_set(3);                                          // mov eax,3; sub_1033B
+    for (int f = 0; f < 0x19 && !should_exit_ && !skip_cutscene_; f++) {
+        if ((size_t)unit_index >= units_.size()) break;
+        // sub_45F29(edx=slot 0): shake and hit pose. Apply it before the world pass so this
+        // frame's offsets are visible; the original redraws the unit after sub_45CCB.
+        apply_knockback_hit(units_[(size_t)unit_index], 0, f);
+        // sub_45CCB moves the cells before drawing them (same animation as the status numbers).
+        if (f < 5) digit_y[0] -= 2;
+        else if (f >= 0x14) digit_y[3] += 2;
+        else {
+            const int k = (f - 5) / 5;
+            if (k < 3) { digit_y[k] += 2; digit_y[k + 1] -= 2; }
+        }
+        render_battle_frame();
+        uint8_t* bb = video_.get_backbuffer();
+        // sub_45CCB tests cell 0 once for the vertical clip, then draws the four cells.
+        const int y0 = digit_y[0];
+        if (sx0 - 16 >= 0 && sx0 - 16 < 0x120 && y0 - 5 >= 0 && y0 - 5 < 0xB2) {
+            const int first = 4 - ndig;                         // right-aligned 4-cell field
+            for (int k = 0; k < ndig; k++) {
+                const int x = sx0 + 6 * (first + k), y = digit_y[first + k];
+                char one[2] = { digits[k], 0 };
+                if (small_font_loaded_) {
+                    draw_small_text(x + 1, y + 1, one, 0, 1);
+                    draw_small_text(x, y, one, color, 1);
+                } else if (bb && font_.is_loaded()) {
+                    font_.set_text_mode(4, 0x0000, 0xFF);
+                    font_.draw_string(bb, SCREEN_W, SCREEN_H, x + 1, y + 1, one);
+                    font_.set_text_mode(4, (uint16_t)(color << 8), 0xFF);
+                    font_.draw_string(bb, SCREEN_W, SCREEN_H, x, y, one);
+                }
+            }
+        }
+        render_overlay();
+        video_.present();                                       // sub_5E9E8
+        wait_game_tick();                                       // sub_499E4
+    }
+    game_timer_set(0x20);                                       // sub_499DA(20h): next period, no wait
+    if ((size_t)unit_index < units_.size())
+        reset_unit_pose(units_[(size_t)unit_index]);            // sub_12124
+}
+
 // sub_17310 (terrain damage/healing): called after a move by sub_16834+188, sub_40295 and
 // friends, right after sub_5401B.
 //   Returns 1 (no effect) for [15h]&80h, [14h]&1 and classes 4C/5C/5D. bx is derived from the
@@ -1988,11 +2097,10 @@ void CombatII::battle_after_move(int unit_index) {
 //   bx 0..5 is valid.
 //   div = 0x14 for bx 0/3/4 and 0x0A otherwise; esi = [4Ch]/div. For bx>1, sub_1762C(bx-2)
 //   scales esi by adjust/10.
-//   [48h] -= esi, then sub_53797 (mode 1); the sub_46359/sub_462A7 animation plays only inside
-//   the 12x12 viewport. [48h] <= 0 runs sub_1DB1D with no killer and returns 0, else 1.
-//   Deviation: the sub_46359/sub_462A7 presentation (timer, knockback, digits) is replaced by
-//   logging; HP accounting, triggers and death match. Healing clamps at max HP (loc_462BE) and
-//   the viewport is approximated by the 12x12 camera window.
+//   [48h] -= esi, then sub_53797 (mode 1); sub_46359 (damage digits/knockback) or sub_462A7
+//   (healing steps) plays only inside the 12x12 viewport. [48h] <= 0 runs sub_1DB1D with no
+//   killer and returns 0, else 1. Healing clamps at max HP (loc_462BE) and the viewport is
+//   approximated by the 12x12 camera window.
 int CombatII::battle_terrain_17310(int unit_index) {
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return 1;
     CombatUnitPlacement& u = units_[(size_t)unit_index];
@@ -2030,25 +2138,38 @@ int CombatII::battle_terrain_17310(int unit_index) {
         if (u.hp > u.max_hp) { u.hp = u.max_hp; u.hp_deficit = u.max_hp * 100 - new_raw; }
     }
     run_unit_hp_trigger(unit_index, -1, 1);                       // sub_53797(ebx=1)
-    if (should_exit_ || !units_[(size_t)unit_index].active) return 0;
+    if (should_exit_ || (size_t)unit_index >= units_.size() ||
+        !units_[(size_t)unit_index].active) return 0;
+    // The HP trigger can run a script and resize units_, so re-index instead of reusing u.
+    const CombatUnitPlacement& cur = units_[(size_t)unit_index];
     // Viewport (dword_BA83C/BA838, 12 cells) approximated by a 12x12 camera window; the
     // animation is skipped outside it.
-    const bool inside = (u.x >= cam_tile_x_ && u.x < cam_tile_x_ + 12 &&
-                         u.y >= cam_tile_y_ && u.y < cam_tile_y_ + 12);
+    const bool inside = (cur.x >= cam_tile_x_ && cur.x < cam_tile_x_ + 12 &&
+                         cur.y >= cam_tile_y_ && cur.y < cam_tile_y_ + 12);
     if (battle_trace_) {
         if (esi > 0) {
             fprintf(stderr, "COMBAT: terrain unit=%d (%d,%d) attr=%02X bx=%d div=%d dmg=%d hp_raw %d->%d%s\n",
-                    u.id, u.x, u.y, (unsigned)(raw & 0xFF), bx, div, esi,
+                    cur.id, cur.x, cur.y, (unsigned)(raw & 0xFF), bx, div, esi,
                     old_raw, battle_hp_raw(units_[(size_t)unit_index]),
-                    inside ? "" : " (outside viewport, sub_46359 skipped)");
+                    inside ? " (sub_46359)" : " (outside viewport, sub_46359 skipped)");
         } else if (esi < 0) {
             fprintf(stderr, "COMBAT: terrain unit=%d (%d,%d) attr=%02X bx=%d div=%d heal=%d hp_raw %d->%d%s\n",
-                    u.id, u.x, u.y, (unsigned)(raw & 0xFF), bx, div, -esi,
+                    cur.id, cur.x, cur.y, (unsigned)(raw & 0xFF), bx, div, -esi,
                     old_raw, battle_hp_raw(units_[(size_t)unit_index]),
-                    inside ? "" : " (outside viewport, sub_462A7 skipped)");
+                    inside ? " (sub_462A7)" : " (outside viewport, sub_462A7 skipped)");
         }
     }
-    // sub_46359/sub_462A7 presentation is replaced by logging (no timer, knockback or digits).
+    // loc_1743F/loc_17467: the viewport-gated presentation runs after the HP trigger and
+    // before the death check (damage), or after the HP update (healing, which tops up to max).
+    if (inside) {
+        if (esi > 0) {
+            battle_terrain_damage_46359(unit_index, esi);          // sub_46359
+            if (should_exit_ || !units_[(size_t)unit_index].active) return 0;
+        } else if (esi < 0) {
+            battle_heal_462a7(unit_index, -esi);                   // sub_462A7
+            if (should_exit_) return 0;
+        }
+    }
     if (battle_hp_raw(units_[(size_t)unit_index]) <= 0) {
         play_unit_death(unit_index, -1);                           // sub_1DB1D(eax=0)
         return 0;
@@ -2449,6 +2570,39 @@ bool CombatII::battle_quick_save_4f4ef() {
     fprintf(stderr, "COMBAT: quick save complete %s units=%zu scen=%s (sub_4F4EF)\n",
             path.c_str(), units_.size(), scen.c_str());
     return true;
+}
+
+// sub_4FCD9 (main_+DB): open genesis.qsv read-only, read 16 bytes and strcmp them against
+// unk_FDF68 (the current scenario name). Equal -> leave the file alone; missing/different ->
+// sub_4F4EF rewrites it. The port's qsv starts with "G2QSV2" + version + name length + name, so
+// the comparison reads that header instead of a fixed 16-byte field.
+bool CombatII::battle_verify_qsv_4fcd9() {
+    std::string path = battle_qsv_path();
+    if (path.empty()) path = std::string(GAME_DATA_DIR) + "/genesis.qsv";
+    bool match = false;
+    if (FILE* f = fopen(path.c_str(), "rb")) {
+        char magic[8] = {};
+        uint32_t version = 0, len = 0;
+        if (fread(magic, 1, sizeof(magic), f) == sizeof(magic) &&
+            memcmp(magic, "G2QSV2", 6) == 0 &&
+            qsv_read_u32(f, version) &&
+            qsv_read_u32(f, len) && len < 256) {
+            std::string name(len, '\0');
+            if (len == 0 || fread(&name[0], 1, len, f) == len)
+                match = (name == current_scenario_name_);           // strcmp_(unk_FDF68, buffer)
+        }
+        fclose(f);
+    }
+    if (match) {
+        if (battle_trace_)
+            fprintf(stderr, "COMBAT: sub_4FCD9 genesis.qsv matches '%s', keep\n",
+                    current_scenario_name_.c_str());
+        return true;
+    }
+    fprintf(stderr, "COMBAT: sub_4FCD9 genesis.qsv %s -> sub_4F4EF (%s)\n",
+            file_exists(path.c_str()) ? "differs" : "missing", path.c_str());
+    battle_quick_save_4f4ef();                                   // sub_4F4EF
+    return false;
 }
 
 bool CombatII::battle_quick_load_4fd25() {
@@ -3412,7 +3566,9 @@ void CombatII::battle_reset() {
     battle_player_diffusion_.clear();
     battle_player_diffusion_valid_ = false;
     battle_range_e8_.clear();
-    battle_ai_gauge_baseline_ = 0;
+    // sub_19652 clears only `word ptr dword_F0426` (the ready-queue count). The queue clear
+    // above is that store; `dword_F0426+2` (the TP baseline) is deliberately left untouched
+    // by the original reset, so battle_ai_gauge_baseline_ is not zeroed here.
     battle_hostility_inverted_ = false;
     for (CombatUnitPlacement& u : units_) u.battle_gauge = 0;
     battle_time_ = 0;
@@ -3454,9 +3610,10 @@ void CombatII::battle_reset() {
             const size_t got = fread(b, 1, sizeof(b), fp);
             // Each field is a 1-byte read (a word read of the first two bytes misreads FDAEA).
             if (got >= 1) battle_instant_camera_ = b[0] != 0;                 // word_FDAEA
-            // word_FDAE8 (music) / word_FDAE6 (sfx) keep the system-menu state: the
-            // original assigns the cfg values here, but sub_4FF8E (game.cfg write) is not
-            // ported, so applying them would reset the user's menu toggles every battle.
+            // sub_4FE74 reads music/sfx here too. sub_4FF8E now writes game.cfg on module
+            // exit, so apply them to keep the system-menu toggles across battles.
+            if (got >= 2) battle_music_on_ = b[1] != 0;                      // word_FDAE8
+            if (got >= 3) battle_sfx_on_ = b[2] != 0;                        // word_FDAE6
             if (got >= 4) cfg_speed = b[3];                                  // speed
             fclose(fp);
         }
@@ -3467,8 +3624,35 @@ void CombatII::battle_reset() {
         battle_turn_interval_ = cfg_speed;
     }
     if (battle_trace_)
-        fprintf(stderr, "COMBAT: reset (sub_19652) time=0 seq=-1 divisor=%d state=0 instant_cam=%d\n",
-                (int)hud_time_divisor_, battle_instant_camera_ ? 1 : 0);
+        fprintf(stderr, "COMBAT: reset (sub_19652) time=0 seq=-1 divisor=%d state=0 instant_cam=%d music=%d sfx=%d\n",
+                (int)hud_time_divisor_, battle_instant_camera_ ? 1 : 0,
+                battle_music_on_ ? 1 : 0, battle_sfx_on_ ? 1 : 0);
+}
+
+// sub_4FF8E (sub_55EBC+93): open game.cfg with mode 0x202 (O_RDWR|O_CREAT, no truncate) and
+// write four bytes from the file start: word_FDAEA (instant camera), word_FDAE8 (music),
+// word_FDAE6 (sfx), then sub_1A11C -> byte_74138 (turn interval / time-gauge divisor).
+void CombatII::battle_write_game_cfg_4ff8e() {
+    std::string path = game_path("game.cfg");
+    if (path.empty()) path = std::string(GAME_DATA_DIR) + "/game.cfg";
+    FILE* f = fopen(path.c_str(), "r+b");                 // 0x202 keeps the remaining 6 bytes
+    if (!f) f = fopen(path.c_str(), "w+b");                // missing file: O_CREAT
+    if (!f) {
+        fprintf(stderr, "COMBAT: warning: cannot write game.cfg (%s)\n", path.c_str());
+        return;
+    }
+    const uint8_t b[4] = {
+        (uint8_t)(battle_instant_camera_ ? 1 : 0),           // word_FDAEA low byte
+        (uint8_t)(battle_music_on_ ? 1 : 0),                 // word_FDAE8
+        (uint8_t)(battle_sfx_on_ ? 1 : 0),                   // word_FDAE6
+        (uint8_t)hud_time_divisor_                           // sub_1A11C (byte_74138)
+    };
+    const bool ok = fwrite(b, 1, sizeof(b), f) == sizeof(b);
+    fclose(f);
+    if (!ok) fprintf(stderr, "COMBAT: warning: game.cfg write failed (%s)\n", path.c_str());
+    else if (battle_trace_)
+        fprintf(stderr, "COMBAT: game.cfg write (sub_4FF8E) instant=%d music=%d sfx=%d turn=%d\n",
+                (int)b[0], (int)b[1], (int)b[2], (int)b[3]);
 }
 
 // sub_18115: reads the first 0x1FF8 bytes of ITEM.DAT into unk_EDD88 (124 records of
@@ -3614,7 +3798,10 @@ int CombatII::battle_status_ailment_1992d(int unit_index, int slot, int* out_dam
                 inside ? "" : " (outside viewport)");
     }
     if (!inside) return -1;
-    // sub_45ED2: hit direction comes from [+63h] (facing).
+    // sub_45BFB prologue: clear the walk offset ([65h]/[66h]). The five-byte digit buffer is
+    // rebuilt for the F0648 slot by battle_status_damage_anim, which runs the same dmg/100 and
+    // right-alignment rules. sub_45ED2: hit direction comes from [+63h] (facing).
+    u.walk_off_x = u.walk_off_y = 0;
     setup_knockback_hit(u, u.facing & 3);
     return 1;
 }
@@ -3628,6 +3815,7 @@ void CombatII::battle_status_damage_anim(const std::vector<std::pair<int,int>>& 
     static constexpr uint8_t kDmgColor[8] = {0x04, 0x10, 0x31, 0x51, 0x20, 0x01, 0x00, 0x00};
     struct Popup {
         int idx;
+        int slot;                       // F0648 index passed to sub_45F29
         int x0, y0;
         char digits[8];
         int ndig;
@@ -3635,18 +3823,23 @@ void CombatII::battle_status_damage_anim(const std::vector<std::pair<int,int>>& 
         uint8_t color;
     };
     std::vector<Popup> pops;
+    int slot = 0;
     for (const auto& t : targets) {
         const int ti = t.first;
         if (ti < 0 || (size_t)ti >= units_.size()) continue;
         const auto& u = units_[(size_t)ti];
         Popup p{};
         p.idx = ti;
-        // sub_45BFB draws [48h] x100 damage in displayed HP units (rounded up).
-        const int shown = std::max(1, (t.second + 99) / 100);
-        p.x0 = (u.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X + 12;
-        p.y0 = (u.y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y + 10;
+        p.slot = slot++;
+        // sub_45BFB: `idiv 100` truncates, so raw 150 becomes "1" (not 2) and raw < 100
+        // becomes the single digit "0" (not "miss"). The five-byte buffer starts zeroed, so
+        // the written digits sit right-aligned in the four cells sub_45CCB draws.
+        const int shown = t.second / 100;
+        p.x0 = (u.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X;         // sub_10971
+        p.y0 = (u.y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y + 0x0A;  // sub_10988+0Ah
         snprintf(p.digits, sizeof(p.digits), "%d", shown);
         p.ndig = (int)strlen(p.digits);
+        if (p.ndig > 4) p.ndig = 4;                  // sub_45CCB: `cmp cx,4; jge`
         for (int j = 0; j < 5; ++j) p.digit_y[j] = p.y0;
         const int army = std::min(std::max(battle_effective_army(u), 0), 7);
         p.color = kDmgColor[(size_t)army];
@@ -3654,29 +3847,41 @@ void CombatII::battle_status_damage_anim(const std::vector<std::pair<int,int>>& 
     }
     game_timer_set(3);
     for (int f = 0; f < 0x19 && !should_exit_ && !skip_cutscene_; ++f) {
+        // sub_45F29(unit, edx = F0648 slot, bx = frame): shake and hit pose before the digits.
         for (auto& p : pops) {
             if ((size_t)p.idx >= units_.size()) continue;
-            auto& u = units_[(size_t)p.idx];
-            apply_knockback_hit(u, 0, f);                 // sub_45F29
-            if (f < 5) for (int j = 0; j < 5; ++j) p.digit_y[j] -= 2;
-            else if (f >= 0x14) for (int j = 0; j < 5; ++j) p.digit_y[j] += 2;
-            else { const int j = (f - 5) / 5; if (j < 5) p.digit_y[j] += 2; }
+            apply_knockback_hit(units_[(size_t)p.idx], p.slot, f);
         }
         render_battle_frame();
         uint8_t* bb = video_.get_backbuffer();
-        for (const auto& p : pops) {
+        for (auto& p : pops) {
+            // sub_45CCB updates digit_y before the clip tests:
+            //   f < 5  : cell 0 down by 2
+            //   5..19  : cell k up by 2 and cell k+1 down by 2, k = (f-5)/5
+            //   f >= 20: cell 3 up by 2
+            if (f < 5) p.digit_y[0] -= 2;
+            else if (f >= 0x14) p.digit_y[3] += 2;
+            else {
+                const int k = (f - 5) / 5;
+                if (k < 3) { p.digit_y[k] += 2; p.digit_y[k + 1] -= 2; }
+            }
+            // sub_45CCB clips the whole slot on cell 0 (x and y), then draws all four cells.
             if (p.x0 - 16 < 0 || p.x0 - 16 >= 0x120) continue;
-            char one[2] = { p.digits[0], 0 };
-            const int y = p.digit_y[0];
-            if (y - 5 < 0 || y - 5 >= 0xB2) continue;
-            if (small_font_loaded_) {
-                draw_small_text(p.x0 + 1, y + 1, one, 0, 1);
-                draw_small_text(p.x0, y, one, p.color, 1);
-            } else if (bb && font_.is_loaded()) {
-                font_.set_text_mode(4, 0x0000, 0xFF);
-                font_.draw_string(bb, SCREEN_W, SCREEN_H, p.x0 + 1, y + 1, one);
-                font_.set_text_mode(4, (uint16_t)(p.color << 8), 0xFF);
-                font_.draw_string(bb, SCREEN_W, SCREEN_H, p.x0, y, one);
+            const int y0 = p.digit_y[0];
+            if (y0 - 5 < 0 || y0 - 5 >= 0xB2) continue;
+            const int first = 4 - p.ndig;             // right-aligned 4-cell field
+            for (int k = 0; k < p.ndig; ++k) {
+                const int x = p.x0 + 6 * (first + k), y = p.digit_y[first + k];
+                char one[2] = { p.digits[k], 0 };
+                if (small_font_loaded_) {
+                    draw_small_text(x + 1, y + 1, one, 0, 1);
+                    draw_small_text(x, y, one, p.color, 1);
+                } else if (bb && font_.is_loaded()) {
+                    font_.set_text_mode(4, 0x0000, 0xFF);
+                    font_.draw_string(bb, SCREEN_W, SCREEN_H, x + 1, y + 1, one);
+                    font_.set_text_mode(4, (uint16_t)(p.color << 8), 0xFF);
+                    font_.draw_string(bb, SCREEN_W, SCREEN_H, x, y, one);
+                }
             }
         }
         render_overlay();
@@ -9918,8 +10123,10 @@ bool CombatII::battle_fx_driver(int r_code, int unit_index, int tx, int ty) {
     }
 }
 
-// sub_2C8A4 (spell >= 0x64 of VM 0x08/0x6C): damages EVERY unit inside the 12x12 screen
-//   box by (100 - (def + ([15h]&20h ? 20 : 0))) * 10000 / 100 raw HP, friend or foe.
+// sub_2C8A4 (spell >= 0x64 of VM 0x08/0x6C): damages EVERY unit by
+//   (100 - (def + ([15h]&20h ? 20 : 0))) * 10000 / 100 raw HP, friend or foe. The 12x12
+//   camera box only gates the 45BFB/45ED2 presentation and the F0648 entry; HP is subtracted
+//   on the common path (loc_2C9B6), so off-screen units also take damage.
 //   ASM 39400..39510: walks the four CC968 lists and, for units inside the camera box
 //   [camX,camX+0Ch) x [camY,camY+0Ch), calls 45BFB (damage digit), 45ED2 (knockback) and
 //   then `sub [ecx+48h], esi`.
@@ -9941,7 +10148,9 @@ void CombatII::battle_spell_2c8a4(int effect) {
             wait_game_tick();                                // sub_499E4
         }
         cam_fine_y_ = CAM_FINE_Y_REST;
+        present_cutscene_frame();                            // sub_45559 after restoring 0
     }
+    battle_target_list_.clear();   // loc_2C8D8: mov word ptr dword_F0B9C+2, 0
     const int left = cam_tile_x_, top = cam_tile_y_;
     const int right = left + 12, bottom = top + 12;
     // ASM 39419..39490: walk the four CC968 army chains in list order (no caster skip),
@@ -9964,22 +10173,36 @@ void CombatII::battle_spell_2c8a4(int effect) {
     for (int ti : order) {
         CombatUnitPlacement& t = units_[(size_t)ti];
         const int tx = (int)(int8_t)t.x, ty = (int)(int8_t)t.y;
-        if (tx < left || tx >= right || ty < top || ty >= bottom) continue;
         int def = (int)t.combat_def59;
         if (t.combat_flags_15 & 0x20) def += 20;             // `test dl,20h; add eax,14h`
         const int dmg = (100 - def) * 10000 / 100;           // imul 2710h; idiv 64h
+        if (tx < left || tx >= right || ty < top || ty >= bottom) {
+            // loc_2C9B6: the camera box gates only 45BFB (digits) / 45ED2 (knockback) and
+            // the F0648 registration. `sub [ecx+48h], esi` is on the common path, so an
+            // off-screen unit still loses HP (and 1ED90 settles deaths below).
+            const int old_raw = battle_hp_raw(t);
+            const int new_raw = old_raw - dmg;
+            t.hp = new_raw <= 0 ? 0 : (new_raw + 99) / 100;
+            t.hp_deficit = t.hp > 0 ? t.hp * 100 - new_raw : 0;
+            if (battle_trace_)
+                fprintf(stderr, "COMBAT: 2C8A4 meteor offscreen unit=%d def=%d dmg=%d hp_raw %d->%d (%d,%d)\n",
+                        t.id, def, dmg, old_raw, new_raw, tx, ty);
+            continue;
+        }
         const size_t before = fx.size();
         // 45BFB + 45ED2: the ASM passes the target's own [+63h] facing as the knockback
         // direction, so the target itself doubles as the "caster" here.
         battle_damage_fx_prepare(ti, ti, (int)fx.size(), dmg, fx);
         if (fx.size() == before) continue;
         targets.push_back(ti);
+        battle_target_list_.push_back(ti);            // in-box unit enters F0648 (45BFB block)
         if (battle_trace_)
             fprintf(stderr, "COMBAT: 2C8A4 meteor unit=%d def=%d dmg=%d hp=%d (%d,%d)\n",
                     t.id, def, dmg, t.hp, tx, ty);
     }
     // 287AF (45F29/45CCB, period 3) -> 12124 on the F0648 list -> 1ED90 (eax=0).
-    if (!fx.empty()) battle_damage_fx_play(fx, targets);
+    // The original calls 287AF even when F0648 is empty (24 present/wait frames).
+    battle_damage_fx_play(fx, targets);
     battle_spell_1ed90_settle(-1);
     if (battle_trace_)
         fprintf(stderr, "COMBAT: 2C8A4 effect=%d targets=%zu camera=(%d,%d)\n",
@@ -11226,38 +11449,23 @@ int CombatII::battle_weapon_f1474(int unit_index, int idx, int dx) {
     return -1;
 }
 
-// Shared collector for the 13 sub_302E6 routines (approximates 1A1F8/1A452/1AC08/49ABC; the
-// 4A483 cursor is approximated automatically).
-// The original screen sweep covers 12x12 tiles from dword_BA83C/BA838 with 1A1F8
-// (11DB2 + 1201D + dedup); the port sweeps the same 12x12 from cam_tile_. The F14D8 == 1
-// automatic and 4A483 cursor branches are both handled by automatic collection here.
-// The X start is caller-specific: sub_341C7 (edi 4), sub_32BCB (edi 3), sub_367EE (edi 8)
-// and sub_3AEE8 (edi 12) increment the column before the 1A1F8 call, so their columns are
-// camX+1..camX+12, while sub_31283 increments after the call and starts at camX. Y always
-// starts at camY (the outer loop's first check is before the first loc_3420F row). x_shift
-// reproduces that difference without changing other callers.
-int CombatII::battle_weapon_collect_screen(int unit_index, int cap, int x_shift) {
+// sub_1A1F8 12x12 screen sweep shared by sub_31283/32BCB/341C7/367EE/3AEE8. The x argument
+// is EAX, set by the compare (`movsx eax,cx/si/di`) before the call, so the loop's `inc`
+// (before or after the call) does not move the tested column: the sweep is camX..camX+11,
+// camY..camY+11. x86emu 1A1F8 call logs for 341C7/32BCB with cam=(0,0) show x/y = 0..11.
+// sub_32BCB checks its 0x32 cap after each row (`cmp [F0B9C+2],32h; jge`), not per cell.
+int CombatII::battle_weapon_collect_screen(int unit_index, int cap) {
     battle_target_list_.clear();
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return 0;
-    const auto& A = units_[(size_t)unit_index];
-    if (!A.active || A.hp <= 0) return 0;
-    const int ax_eff = battle_effective_army(A);
-    for (int dy = 0; dy < 12; ++dy) {
-        for (int dx = 0; dx < 12; ++dx) {
-            const int tx = cam_tile_x_ + x_shift + dx, ty = cam_tile_y_ + dy;
-            const int oi = battle_unit_index_at(tx, ty);
-            if (oi < 0 || oi == unit_index) continue;
-            if ((size_t)oi >= units_.size()) continue;
-            const auto& o = units_[(size_t)oi];
-            if (!o.active || o.hp <= 0) continue;
-            if (!battle_armies_hostile(ax_eff, battle_effective_army(o), battle_hostility_inverted_)) continue;
-            bool dup = false;
-            for (int v : battle_target_list_) if (v == oi) { dup = true; break; }
-            if (dup) continue;
-            battle_target_list_.push_back(oi);
-            if (cap > 0 && (int)battle_target_list_.size() >= cap) return (int)battle_target_list_.size();
-        }
+    const g2range::Env env = battle_range_env_make();
+    g2range::Range rg(env);
+    const g2range::Unit au = battle_range_unit(unit_index);
+    for (int row = 0; row < 12; ++row) {
+        for (int col = 0; col < 12; ++col)
+            rg.add_by_army(cam_tile_x_ + col, cam_tile_y_ + row, au.army); // sub_1A1F8
+        if (cap > 0 && (int)rg.list.size() >= cap) break;                      // sub_32BCB
     }
+    battle_target_list_ = rg.list;
     return (int)battle_target_list_.size();
 }
 
@@ -11334,47 +11542,36 @@ int CombatII::battle_weapon_collect_39a49_auto(int unit_index, int* cell_x, int*
     return n;
 }
 
-// sub_1AC08/1AC59 diamond approximation: collect hostiles within the Manhattan radius of
-// the attacker, excluding itself.
+// sub_1AC08/sub_1AC59 diamond around the unit, inserted through 1A1F8 in iterator order
+// (row by row), not in units_ order.
 int CombatII::battle_weapon_collect_diamond(int unit_index, int radius) {
     battle_target_list_.clear();
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return 0;
     const auto& A = units_[(size_t)unit_index];
     if (!A.active || A.hp <= 0) return 0;
-    const int ax_eff = battle_effective_army(A);
-    for (size_t i = 0; i < units_.size(); ++i) {
-        if ((int)i == unit_index) continue;
-        const auto& o = units_[i];
-        if (!o.active || o.hp <= 0) continue;
-        if (!battle_armies_hostile(ax_eff, battle_effective_army(o), battle_hostility_inverted_)) continue;
-        const int d = std::abs(o.x - A.x) + std::abs(o.y - A.y);
-        if (d < 1 || d > radius) continue;
-        battle_target_list_.push_back((int)i);
-    }
-    return (int)battle_target_list_.size();
+    return battle_weapon_collect_dia_at(unit_index, (int)(int8_t)A.x, (int)(int8_t)A.y, radius);
 }
 
-// sub_49ABC+1A1F8 front single tile (32589): put only the hostile on the front tile in
-// F0648[0].
+// sub_49ABC + 1A1F8 front single tile (32589): step one tile along [+63h] and let 1A1F8
+// add the hostile occupant (11DB2 + 1201D + duplicate check).
 int CombatII::battle_weapon_collect_front(int unit_index) {
     battle_target_list_.clear();
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return 0;
-    const auto& A = units_[(size_t)unit_index];
-    if (!A.active || A.hp <= 0) return 0;
-    int fx = A.x, fy = A.y;
-    switch (A.facing & 3) {
+    const g2range::Env env = battle_range_env_make();
+    g2range::Range rg(env);
+    const g2range::Unit au = battle_range_unit(unit_index);
+    int fx = au.x, fy = au.y;
+    // sub_49ABC: `cmp bl,3; ja` leaves the tile unchanged for a raw [+63h] outside 0..3.
+    switch ((int)units_[(size_t)unit_index].facing) {
         case 0: fy += 1; break; // south y+1 (49ABC dir 0)
         case 1: fx -= 1; break; // west x-1
         case 2: fy -= 1; break; // north y-1
-        default: fx += 1; break; // east x+1
+        case 3: fx += 1; break; // east x+1
+        default: break;
     }
-    const int oi = battle_unit_index_at(fx, fy);
-    if (oi < 0 || (size_t)oi >= units_.size()) return 0;
-    const auto& o = units_[(size_t)oi];
-    if (!o.active || o.hp <= 0) return 0;
-    if (!battle_armies_hostile(battle_effective_army(A), battle_effective_army(o), battle_hostility_inverted_)) return 0;
-    battle_target_list_.push_back(oi);
-    return 1;
+    rg.add_by_army(fx, fy, au.army);                            // sub_1A1F8
+    battle_target_list_ = rg.list;
+    return (int)battle_target_list_.size();
 }
 
 // F1474 handlers that use the 4A483/1F19C target cursor - 2EB61 (idx3/9/21),
@@ -12535,7 +12732,7 @@ int CombatII::battle_weapon_32589(int unit_index) {
 // sub_32BCB (edi 3, i-star2+slash+ice+icer.nsp): screen sweep (cap 50) + 2CAF7(4,0).
 int CombatII::battle_weapon_32bcb(int unit_index) {
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return -1;
-    const int n = battle_weapon_collect_screen(unit_index, 50, 1); // inc ecx before 1A1F8
+    const int n = battle_weapon_collect_screen(unit_index, 50); // 0x32 cap checked per row
     if (n <= 0) {
         if (battle_trace_) fprintf(stderr, "COMBAT: 32bcb unit=%d empty -> -1\n", units_[(size_t)unit_index].id);
         return -1;
@@ -12553,8 +12750,8 @@ int CombatII::battle_weapon_32bcb(int unit_index) {
 // presentation + 2CAF7(2,20000).
 int CombatII::battle_weapon_341c7(int unit_index) {
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return -1;
-    // sub_341C7's inner loop increments esi before sub_1A1F8, so it tests camX+1..camX+12.
-    const int n = battle_weapon_collect_screen(unit_index, 0, 1);
+    // sub_341C7 sweeps camX..camX+11 (the call's x is the pre-increment EAX).
+    const int n = battle_weapon_collect_screen(unit_index, 0);
     if (n <= 0) {
         if (battle_trace_) fprintf(stderr, "COMBAT: 341c7 unit=%d empty -> -1\n", units_[(size_t)unit_index].id);
         return -1;
@@ -12581,7 +12778,8 @@ int CombatII::battle_weapon_34c48(int unit_index) {
     const std::vector<int> targets = battle_target_list_;
     auto& A = units_[(size_t)unit_index];
     if (battle_trace_) fprintf(stderr, "COMBAT: 34c48 unit=%d targets=%zu\n", A.id, targets.size());
-    camera_center_on(A.x, A.y);
+    // sub_34C48 does not call sub_1124A: after the 1A1DE/1A452/1A552 sweep it goes straight
+    // to 1FEA4("shak2.nsp")/103A8/1033B(5), so the effect starts on the current camera (C-017).
     A.anim_frame = 5;
     // 49681..50380 presentation: 106 shak2.nsp frames (3 waves x 24 plus a 33-frame tail).
     // Damage follows the presentation.
@@ -12631,7 +12829,7 @@ int CombatII::battle_weapon_35fc2(int unit_index) {
 // (40-shot wave) + 2CAF7(4,6000).
 int CombatII::battle_weapon_367ee(int unit_index) {
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return -1;
-    const int n = battle_weapon_collect_screen(unit_index, 0, 1); // inc edi before 1A1F8
+    const int n = battle_weapon_collect_screen(unit_index, 0); // camX..camX+11
     if (n <= 0) {
         if (battle_trace_) fprintf(stderr, "COMBAT: 367ee unit=%d empty -> -1\n", units_[(size_t)unit_index].id);
         return -1;
@@ -12780,8 +12978,8 @@ int CombatII::battle_weapon_39a49(int unit_index) {
 // 2CAF7(3,7000).
 int CombatII::battle_weapon_3aee8(int unit_index) {
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return -1;
-    // sub_3AEE8's inner loop increments ecx before sub_1A1F8, so it tests camX+1..camX+12.
-    const int n = battle_weapon_collect_screen(unit_index, 0, 1);
+    // sub_3AEE8 sweeps camX..camX+11 (the call's x is the pre-increment EAX).
+    const int n = battle_weapon_collect_screen(unit_index, 0);
     if (n <= 0) {
         if (battle_trace_) fprintf(stderr, "COMBAT: 3aee8 unit=%d empty -> -1\n", units_[(size_t)unit_index].id);
         return -1;

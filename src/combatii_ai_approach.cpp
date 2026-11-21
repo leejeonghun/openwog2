@@ -706,7 +706,7 @@ bool CombatII::battle_ai_40295_body(int unit_index, int wc) {
                 if (!battle_ai_3e251_dest(unit_index, dest_x, dest_y, rx, ry, dest_grid)) have_dest = false;
                 ref_x = rx; ref_y = ry;
             } else {
-                if (ws == -1 || ws == -2) return finish(kExitTurnEnd);       // loc_40664
+                if (ws == -1) return finish(kExitTurnEnd);                   // loc_40664
                 if (k6c == 5 || k6c == 6) return finish(kExitTurnEnd);
                 int hx = -1, hy = -1;
                 if (!battle_ai_3df3b_dest(unit_index, 0x1E, dest_x, dest_y, hx, hy, dest_grid)) have_dest = false;

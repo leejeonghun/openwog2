@@ -1313,8 +1313,7 @@ bool CombatII::battle_ai_mage_turn(int ui, int type) {
         } else {
             S = (tp - T) / 10;
             const int budget = S * 4;
-            int w = battle_ai_watch_state(ui);
-            if (w == -2) w = 0;                                   // unmodelled selector: treated as no watch target
+            const int w = battle_ai_watch_state(ui);               // sub_3E18B (only 1/-1/2/0)
             const bool use_5ab = (type == 0) ? (w > 0) : (w != 0);
             if (use_5ab) {
                 if (battle_ai_3e5ab(ui, budget, dx, dy, face)) {
@@ -1363,8 +1362,7 @@ bool CombatII::battle_ai_mage_turn(int ui, int type) {
                 if (m == Mv::Stay) di = -2;
             } else if (di == -1) {
                 // loc_436A6 / loc_43A0B: home/group move when no target was found.
-                int w2 = battle_ai_watch_state(ui);
-                if (w2 == -2) w2 = 0;
+                const int w2 = battle_ai_watch_state(ui);
                 int cx = -1, cy = -1, rx = -1, ry = -1, cf = -1;
                 bool to_ref = true;
                 std::vector<int> dest_e8 = battle_ai_build_diffusion(ui, budget);

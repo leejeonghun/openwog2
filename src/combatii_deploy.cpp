@@ -763,3 +763,16 @@ int CombatII::battle_deploy_55518() {
     fprintf(stderr, "COMBAT: deploy phase done: placed=%d/%zu\n", placed, party.size());
     return placed;
 }
+
+// sub_137D1 (main_ loc_56032, right after sub_55518): walk the CC990 roster list and clear
+// [+56h] (deploy marker / ATB gauge) and [+5Ch] (mount form) on every record. The port's
+// linked list is battle_roster_cc990_; deployment leaves 80h/FFh in [56h], so without this the
+// roster keeps the deploy state into any later CC990 consumer (save, redeploy, debug paths).
+void CombatII::battle_roster_reset_137d1() {
+    for (CombatUnitPlacement& r : battle_roster_cc990_) {
+        r.battle_gauge = 0;                                      // mov byte ptr [eax+56h],0
+        r.code_b = 0;                                            // mov byte ptr [eax+5Ch],0
+    }
+    if (battle_trace_)
+        fprintf(stderr, "COMBAT: roster reset (sub_137D1) records=%zu\n", battle_roster_cc990_.size());
+}

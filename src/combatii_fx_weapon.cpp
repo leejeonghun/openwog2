@@ -1775,9 +1775,11 @@ bool CombatII::battle_fx_32bcb_anim(int unit_index) {
 //   life 4..1 draw F0DAA[54..57] (F1032/F103E/F104A/F1056), each with its own payload and
 //   xo/yo (NANG.NSP records 54..57 are 43x53, 33x59, 18x66 and 6x74).
 //
-// Three equivalences:
-//   - The word dword_BA838 +-1 toggle only changes the 16.16 camera fraction (1/65536 px),
-//     which the integer-pixel port ignores: equivalent, not approximate.
+// Notes:
+//   - At life 4 sub_36531 toggles the low word of dword_BA838 between 1 and -1. That word is
+//     the camera fine Y that sub_10988 adds in pixels (`add eax, ebx` after `shl eax,4`), so
+//     the port toggles cam_fine_y_ the same way (C-021). The tail then stores si=0 into the
+//     same word (ASM 52816), so the 8+4 frame sequence starts from fine Y 0 again.
 //   - F1064/F1066/F106A and F0E16/F0E22/F0DAC are aliases of F0DAA entries, not separate
 //     tables (0xF0E16 = F0DAA + 9*12, 0xF0E22 = +10*12, 0xF106A = +58*12+8), so the port
 //     uses F0DAA[58] (last frame), [10], [9] and [0].
@@ -1834,6 +1836,7 @@ void CombatII::battle_fx_367ee_anim(int unit_index) {
             if (--s.life <= 0) { s.alive = false; continue; }
             if (s.life <= 4) {                                             // F1032/F103E/F104A/F1056
                 if (s.life == 4) {                                         // the fragment bursts
+                    cam_fine_y_ = (cam_fine_y_ == 1) ? -1 : 1;             // dword_BA838 toggle
                     s.x += kAx[g]; s.y += kAy[g];
                     sfx(0x34);                                             // 4F4CD(34h)
                 }
@@ -1880,39 +1883,69 @@ void CombatII::battle_fx_367ee_anim(int unit_index) {
         auto& T = units_[(size_t)ti];
         T.anim_frame = (T.sprite_type < 0x12C) ? (uint8_t)0x0A : (uint8_t)0x00;
     }
-    // Spawn: x/y come from the caller, velocity = -(3+rand(3)) / +(3+rand(3)) x flt_77ADA
-    // (0.25) or / dbl_77AEA (1.2), life = 0Fh + rand(0Fh).
-    const float kSlope = 0.25f;                                           // flt_77ADA
-    const float kSlopeLate = 1.0f / 1.2f;                                 // dbl_77AEA
+    // Spawn: x/y come from the caller (x rand first, then y rand), then one velocity rand and
+    // life = 0Fh + rand(0Fh). The velocity depends on the slot/5 group (C-020):
+    //   0..4   x = -(3+rand(3)), y = -x*0.25            (fmul flt_77ADA)
+    //   5..9   x = -(3+rand(3)), y = -x/1.2             (fdiv dbl_77AEA)
+    //   10..14 y = +(3+rand(4)), x = -y/1.75            (fdiv dbl_77ADE)
+    //   15..19 y = +(3+rand(4)), x = -y/7.0             (fdiv flt_77AE6)
+    //   25..29 y = +(3+rand(4)), x = +y/1.75
+    //   20..24 y = +(3+rand(4)), x = +y/7.0
+    //   35..39 x = +(3-rand(3)), y = +x*0.25
+    //   30..34 x = +(3-rand(3)), y = +x/1.2
     auto rnd = [&](int n) { return (int)combat_rand(n); };                // 499BD(n)
-    auto spawn = [&](int i, int x, int y, bool late) {
+    auto spawn = [&](int i, int xbase, int xrange, int ybase, int yrange) {
         if (i < 0 || i >= 40) return;
         PS& s = p[(size_t)i];
-        const float v = (float)(-3 - rnd(3));                             // fchs + (3 - rand(3))
+        const int px = xbase + rnd(xrange);
+        const int py = ybase + rnd(yrange);
+        const int g = i / 5;
+        float vx = 0.0f, vy = 0.0f;
+        if (g == 0) {
+            vx = (float)(-3 - rnd(3));                                    // fild -(3+rand(3))
+            vy = -vx * 0.25f;
+        } else if (g == 1) {
+            vx = (float)(-3 - rnd(3));
+            vy = (float)(-(double)vx / 1.2);
+        } else if (g == 2 || g == 3) {
+            const int r = 3 + rnd(4);
+            vy = (float)r;
+            vx = (g == 2) ? (float)(-(double)r / 1.75) : (float)(-(double)r / 7.0);
+        } else if (g == 4 || g == 5) {
+            const int r = 3 + rnd(4);
+            vy = (float)r;
+            vx = (g == 5) ? (float)((double)r / 1.75) : (float)((double)r / 7.0);
+        } else if (g == 6) {
+            vx = (float)(3 - rnd(3));
+            vy = (float)((double)vx / 1.2);
+        } else {
+            vx = (float)(3 - rnd(3));
+            vy = vx * 0.25f;
+        }
         s.alive = true;
-        s.x = (float)x;
-        s.y = (float)y;
-        s.dx = v;
-        s.dy = -v * (late ? kSlopeLate : kSlope);
+        s.x = (float)px;
+        s.y = (float)py;
+        s.dx = vx;
+        s.dy = vy;
         s.life = 0x0F + rnd(0x0F);                                        // var_AC
     };
     // (5) three phases
     for (int phase = 0; phase <= 2 && !should_exit_; ++phase) {
         if (phase == 0) {
             for (int i = 0; i <= 4; ++i)                                   // 0..4
-                spawn(i, si - 0x2D + rnd(0x28), di + rnd(0x14), false);
+                spawn(i, si - 0x2D, 0x28, di, 0x14);
             for (int i = 5; i <= 9; ++i)                                   // 5..9
-                spawn(i, si - 0x23 + rnd(0x23), di + 5 + rnd(0x14), false);
+                spawn(i, si - 0x23, 0x23, di + 5, 0x14);
         } else if (phase == 1) {
             for (int i = 0x0A; i <= 0x0E; ++i)                             // 10..14
-                spawn(i, si - 0x19 + rnd(0x1E), di + 0x0A + rnd(0x1E), true);
+                spawn(i, si - 0x19, 0x1E, di + 0x0A, 0x1E);
             for (int i = 0x0F; i <= 0x13; ++i)                             // 15..19
-                spawn(i, si - 0x14 + rnd(0x1E), di + 0x0F + rnd(0x23), true);
+                spawn(i, si - 0x14, 0x1E, di + 0x0F, 0x23);
         } else {
             for (int i = 0x19; i <= 0x1D; ++i)                             // 25..29
-                spawn(i, si - 5 + rnd(0x1E), di + 0x0A + rnd(0x1E), true);
+                spawn(i, si - 5, 0x1E, di + 0x0A, 0x1E);
             for (int i = 0x14; i <= 0x18; ++i)                             // 20..24
-                spawn(i, si + rnd(0x1E), di + 0x0F + rnd(0x23), true);
+                spawn(i, si, 0x1E, di + 0x0F, 0x23);
         }
         game_timer_set(5);                                                // 1033B(5)
         sfx(0x33);                                                        // 4F4CD(33h)
@@ -1928,10 +1961,10 @@ void CombatII::battle_fx_367ee_anim(int unit_index) {
     }
     // (6) last wave and wait for the particles to die
     for (int i = 0x23; i <= 0x27; ++i)                                     // 35..39
-        spawn(i, si + 0x19 + rnd(0x19), di + 0x0A + rnd(0x19), true);
+        spawn(i, si + 0x19, 0x19, di + 0x0A, 0x19);
     sfx(0x33);                                                            // 4F4CD(33h)
     for (int i = 0x1E; i <= 0x22; ++i)                                     // 30..34
-        spawn(i, si + 5 + rnd(0x1E), di + 0x0F + rnd(0x1E), true);
+        spawn(i, si + 5, 0x1E, di + 0x0F, 0x1E);
     for (int k = 0; k < 0x1E && !should_exit_; ++k) {
         bool any = false;
         for (const auto& s : p) if (s.alive) any = true;
@@ -1948,6 +1981,7 @@ void CombatII::battle_fx_367ee_anim(int unit_index) {
     }
     battle_dim_row0_ = false;                                              // 44D6E(0, 100h)
     pal_load_range(0, 256, &battle_master_palette_[0][0]);                 // 5F9AE(0, unk_12824C)
+    cam_fine_y_ = 0;                                                       // mov word ptr dword_BA838, si (si=0)
     // (8) 8 frames (cx=7..0, F0DAA[cx] only when cx>=4), then 4 frames (cx=3..0)
     for (int cx = 7; cx >= 0 && !should_exit_; --cx) {
         frame(); gblit();
