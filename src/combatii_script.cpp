@@ -2970,6 +2970,7 @@ void CombatII::play_retreat_pillar_508e6(const VmEvent& ev, int edd74) {
                     // the dword_F0648 pointer, so the drop sprite continues, but the normal map
                     // pass must stop drawing the unit and its status overlay from here on.
                     battle_remove_from_ready_queue(p.ui); // sub_197AD
+                    battle_roster_copy_113e4(units_[(size_t)p.ui]); // sub_113E4
                     units_[(size_t)p.ui].drop_in_cc998 = false; // sub_11F74(x,y,0)
                     p.removed = true;
                 }
@@ -2982,11 +2983,15 @@ void CombatII::play_retreat_pillar_508e6(const VmEvent& ev, int edd74) {
         wait_game_tick();                             // sub_499E4
     }
     // Mode 4 tail: 119B6 image-slot release for every listed unit without [1E]&40h (no-op in
-    // the port), then 4559F + 5E9E8.
+    // the port), then 4559F + 5E9E8. Units that did not reach counter 6 are still in the army
+    // list in the original; the port removes them here, so copy them first just as sub_113E4
+    // would before their eventual removal.
     for (auto& p : ps) {
         if (p.ui < 0 || (size_t)p.ui >= units_.size()) continue;
         auto& u = units_[(size_t)p.ui];
-        u.active = false;                             // 113E4/113CC
+        if (!p.removed)
+            battle_roster_copy_113e4(u);              // sub_113E4
+        u.active = false;                             // sub_113CC
         u.drop_wait = 0;
         u.drop_step = -1;
         u.drop_sil = 0;
@@ -3020,7 +3025,8 @@ void CombatII::battle_force_retreat_50aa7(const VmEvent& ev) {
             }
         }
         if (should_exit_ || (size_t)ui >= units_.size()) continue;
-        units_[(size_t)ui].active = false;            // sub_113E4 / sub_113CC
+        battle_roster_copy_113e4(units_[(size_t)ui]); // sub_113E4
+        units_[(size_t)ui].active = false;            // sub_113CC
         units_[(size_t)ui].death_dissolve = 0;
         battle_remove_from_ready_queue(ui);           // sub_197AD
     }

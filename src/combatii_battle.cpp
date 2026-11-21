@@ -3105,12 +3105,17 @@ void CombatII::battle_tile_18b2e(int unit_index, int event_index) {
 //   whose [+12h] == id+10).
 void CombatII::play_unit_death(int unit_index, int killer_index) {
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return;
-    if (!units_[(size_t)unit_index].active) { units_[(size_t)unit_index].hp = 0; return; }
+    if (!units_[(size_t)unit_index].active) {
+        units_[(size_t)unit_index].hp = 0;
+        units_[(size_t)unit_index].hp_deficit = 0;
+        return;
+    }
     const int group = battle_unit_group(units_[(size_t)unit_index]);
     const bool is_summon = units_[(size_t)unit_index].item_use_12 >= 0x0A; // cmp byte [ecx+12h],0Ah
 
     battle_remove_from_ready_queue(unit_index);                 // sub_197AD
     units_[(size_t)unit_index].hp = 0;                          // mov dword ptr [edx+48h], 0
+    units_[(size_t)unit_index].hp_deficit = 0;                  // [48h]=0 -> raw HP 0
     run_unit_hp_trigger(unit_index, killer_index, 1);           // sub_53797(victim, killer, 1)
     if (should_exit_) return;
 
@@ -3123,41 +3128,61 @@ void CombatII::play_unit_death(int unit_index, int killer_index) {
         if (killer_index >= 0 && (size_t)killer_index < units_.size() && killer_index != unit_index)
             battle_gain_exp(killer_index, unit_index);          // sub_17A20(killer, victim)
         if (should_exit_) return;
-        // sub_1DAEE: clear [+73h] on every unit that targets this one. The port models it as a
-        // units_ index.
-        for (auto& o : units_)
-            if (o.ai_target_unit == unit_index) o.ai_target_unit = -1;
         if (is_summon) {
             // sub_1DB1D loc_1DBE3 -> loc_1DDE8: summons are removed from the army list only.
+            // sub_1DAEE: clear [+73h] references before sub_113CC.
+            for (auto& o : units_)
+                if (o.ai_target_unit == unit_index) o.ai_target_unit = -1;
         } else {
             battle_apply_death_morale(units_[(size_t)unit_index]);
+            // sub_1DB1D loc_1DCF7: a [77h] stored record (transform/mount) is restored with
+            // sub_1808A first, regardless of the map kind.
+            //   map kind < 4: sub_11F74 re-occupies the current tile, only [60h] = 1198D([61h])
+            //     is refreshed and the code jumps to loc_1DDAD. The unit survives in its base
+            //     form and is never copied into the army/death lists.
+            //   map kind >= 4: loc_1DD35 clears [1E]/[15], sub_113E4 copies the restored base
+            //     form into CC990 and sub_113CC/1137A removes the battle unit.
+            // Units without [77h] go straight to loc_1DD65 and are copied with the current
+            // (dead) record before removal.
+            const bool has_stored_77 = units_[(size_t)unit_index].stored_77 != nullptr;
+            const bool revived_from_stored_77 = has_stored_77 && sce_map_kind_ < 4;
+            if (revived_from_stored_77) {
+                // sub_1DB1D has not removed the unit from the army list at this point. The port's
+                // death animation already cleared `active`, so re-enter the list before 1808A
+                // (whose restore preserves the current membership).
+                units_[(size_t)unit_index].active = true;            // sub_11F74 (re-occupy)
+                units_[(size_t)unit_index].death_dissolve = 0;
+            }
+            if (has_stored_77)
+                battle_restore_stored_1808a(unit_index, false, false);   // sub_1808A
+            if ((size_t)unit_index < units_.size()) {
+                if (revived_from_stored_77) {
+                    units_[(size_t)unit_index].slot_hint =
+                        battle_image_slot(units_[(size_t)unit_index].sprite_type); // [60h] = 1198D([61h])
+                    reset_unit_pose(units_[(size_t)unit_index]);
+                    battle_wc1_occupancy_preserve_or_close("death revive (sub_11F74)");
+                    if (battle_trace_)
+                        fprintf(stderr, "COMBAT: death revive unit=%d -> class=%u type=%d hp=%d (sub_1DB1D loc_1DCF7)\n",
+                                units_[(size_t)unit_index].id, (unsigned)units_[(size_t)unit_index].combat_class,
+                                units_[(size_t)unit_index].sprite_type, units_[(size_t)unit_index].hp);
+                } else {
+                    // sub_1DB1D loc_1DD35 / loc_1DD65: clear the status flags, then sub_113E4
+                    // copies the record into its CC990 entry before sub_113CC/1137A removes the
+                    // unit from the army list.
+                    units_[(size_t)unit_index].combat_flags_1e = 0; // mov byte [ecx+1Eh],0
+                    units_[(size_t)unit_index].combat_flags_15 = 0; // mov [ecx+15h],al
+                    // sub_1DAEE: clear [+73h] on every unit that targets this one. The revive
+                    // branch above jumps straight to loc_1DDAD and skips this.
+                    for (auto& o : units_)
+                        if (o.ai_target_unit == unit_index) o.ai_target_unit = -1;
+                    battle_roster_copy_113e4(units_[(size_t)unit_index]); // sub_113E4
+                }
+            }
+            // sub_1DB1D loc_1DDAD: morale/region triggers run after the copy/removal above.
             run_morale_trigger();                               // sub_53E0F
             if (should_exit_) return;
             run_region_count_trigger();                         // sub_53C12
             if (should_exit_) return;
-            // sub_1DB1D loc_1DCF7: when a [77h] stored record (transform/mount) exists and
-            // byte_BA84E (map kind) < 4, sub_1808A restores that record, sub_11F74 re-occupies
-            // the current tile, only [60h] = sub_1198D([61h]) is refreshed and the code jumps to
-            // loc_1DDAD. The unit is never added to the army/death lists, so it survives in its
-            // original form. Map kind >= 4 uses the normal death path.
-            const bool revived_from_stored_77 = units_[(size_t)unit_index].stored_77 && sce_map_kind_ < 4;
-            if (revived_from_stored_77) {
-                battle_restore_stored_1808a(unit_index, false, false);   // sub_1808A
-                if ((size_t)unit_index < units_.size()) {
-                    units_[(size_t)unit_index].slot_hint =
-                        battle_image_slot(units_[(size_t)unit_index].sprite_type); // [60h] = 1198D([61h])
-                    reset_unit_pose(units_[(size_t)unit_index]);
-                }
-                battle_wc1_occupancy_preserve_or_close("death revive (sub_11F74)");
-                if (battle_trace_)
-                    fprintf(stderr, "COMBAT: death revive unit=%d -> class=%u type=%d hp=%d (sub_1DB1D loc_1DCF7)\n",
-                            units_[(size_t)unit_index].id, (unsigned)units_[(size_t)unit_index].combat_class,
-                            units_[(size_t)unit_index].sprite_type, units_[(size_t)unit_index].hp);
-            } else {
-            // sub_1DB1D loc_1DD65: clear the dead unit's status/timed flags.
-            units_[(size_t)unit_index].combat_flags_1e = 0;     // mov byte [ecx+1Eh],0
-            units_[(size_t)unit_index].combat_flags_15 = 0;     // mov [ecx+15h],al
-            }
             // sub_29EE4: remove the dead unit's summons ([+12h] == id+0Ah) from the same army list.
             // The original also runs the camera/death animation (sub_463FB) for each summon.
             const uint8_t tag = (uint8_t)((unsigned)units_[(size_t)unit_index].id + 10u);
@@ -3415,6 +3440,7 @@ void CombatII::play_unit_death_anim(int unit_index) {
     if (unit_index < 0 || unit_index >= (int)units_.size()) return;
     auto& U = units_[(size_t)unit_index];
     U.hp = 0;
+    U.hp_deficit = 0;
     if (!U.active) return;
     if (U.sprite_type >= 0x12C) {
         // sub_1DB1D loc_1DBA8: among large units, classes 0x86..0x91 use sub_46B2C.
@@ -8204,6 +8230,8 @@ void CombatII::battle_restore_stored_1808a(int unit_index, bool preserve_facing,
         return;
     }
     const int8_t saved_facing = cur.facing;                                 // 3C70C var_4 = [63h]
+    const bool was_active = cur.active;                                     // list membership is outside the 0x88 record
+    const bool was_membership_modeled = cur.battle_list_membership_modeled;
     CombatUnitPlacement restored = *cur.stored_77;
     restored.x = cur.x; restored.y = cur.y;                                 // [esi]=[ecx], [esi+1]=[ecx+1]
     restored.ai_home_x = cur.ai_home_x; restored.ai_home_y = cur.ai_home_y; // [6Fh]/[70h]
@@ -8217,6 +8245,9 @@ void CombatII::battle_restore_stored_1808a(int unit_index, bool preserve_facing,
     restored.linked_class = -1;                                             // [77h]==0 -> [[77h]+11h] projection released too
     if (preserve_facing) restored.facing = saved_facing;                    // [63h]=var_4
     cur = restored;
+    cur.active = was_active;                                                // 1808A never changes CC968 membership
+    cur.battle_list_membership_modeled = was_membership_modeled;
+    cur.occupancy_hp_known = battle_hp_raw(cur) > 0;                        // restored HP is explicit
     battle_wc1_occupancy_preserve_or_close(present ? "recall revert" : "dismount revert");
     reset_unit_pose(cur);                                                   // sub_12124
     if (present) present_cutscene_frame();                                  // sub_45559
