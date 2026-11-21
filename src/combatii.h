@@ -2232,6 +2232,11 @@ private:
     int  battle_spell_pick_single(int unit_index, int tx, int ty, int range_add, int mode); // 28982/2AE44
     std::vector<int> battle_spell_diamond(int unit_index, int cx, int cy, int radius,
                                           int mode, bool undead_only = false);    // 28A97/2AF53/2AFE0
+    // AI target-tile collectors: sub_4258C (Cure) and sub_42743 (buff/status/DNA Change).
+    // Both paint the 1B7FA cone, score the sub_1AC08 diamond around every cone tile and return
+    // the best tile and score (0 when nothing was found or sub_49ADF rejects the distance).
+    int battle_spell_ai_pick_4258c(int unit_index, int k, int& ox, int& oy);           // sub_4258C
+    int battle_spell_ai_pick_42743(int unit_index, int bit, int k, int& ox, int& oy);  // sub_42743
     // sub_28540: 1B7BF(1,1,0) + 13F8A + 1B7FA from the caster's front tile, plus 13D02 on
     // the caster's own tile when the handler's expectation byte is 0. Returns the E8F46 grid.
     std::vector<int16_t> battle_spell_range_grid(int unit_index, int range_add, bool mark_self);

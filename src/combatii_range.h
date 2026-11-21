@@ -103,6 +103,9 @@ public:
     bool rect_next(int& x, int& y);                               // sub_1A552
     void dia_init(int x, int y, int r);                           // sub_1AC08
     bool dia_next(int& x, int& y);                                // sub_1AC59
+    // cone iterator (sub_1AF22/1B00D), public for the AI target collectors 4258C/42743.
+    void cone_init(int x, int y, int cx, int facing, int range);
+    bool cone_next(int& x, int& y);
     bool add_by_army(int x, int y, int army);                     // sub_1A1F8
     bool add_by_actor(int x, int y, const Unit& actor);           // sub_1A25F
     int occupant_at(int x, int y) const { return occupant(x, y); } // sub_11DB2 (guard included)
@@ -119,8 +122,6 @@ private:
     int occupant(int x, int y) const;                             // sub_11DB2 (guard included)
     void tri3_init(int x, int y, int facing);
     bool tri3_next(int& x, int& y);
-    void cone_init(int x, int y, int cx, int facing, int range);
-    bool cone_next(int& x, int& y);
     void bucket_base(int x, int y);
     bool bucket_ok(int x, int y) const;
     void line_scan(int x, int y, int facing, int count, int range);

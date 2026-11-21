@@ -622,82 +622,29 @@ bool CombatII::battle_ai_spell_pick_target(int unit_index, int hq1, int kind, in
     };
 
     // sub_4258C(cx, radius): Cure (2BBB7 -> 2B1D0 kind 0). The radius is k (the stack word of
-    // 2B1D0).
-    //   Centre (caster tile first) with the most allies whose [+1Eh] != 0.
-    auto pick_4258c = [&](int cx, int radius) -> bool {
-        const int rows = r28465(cx);
-        int best = 0, bx = -1, by = -1;
-        los_mark(rows);                                         // 1B7BF(1,1,0) + 13F8A + 1B7FA
-        center_scan(rows, true, [&](int ccx, int ccy) {
-            int acc = 0;
-            diamond(ccx, ccy, radius, [&](int x, int y) {
-                const CombatUnitPlacement* o = occ(x, y);
-                if (!o || !gate(*o)) return;
-                if (hostile(*o)) return;                                // 1201D != 0 -> skip
-                if (o->combat_flags_1e == 0) return;                    // cmp byte [1Eh],0
-                ++acc;
-            });
-            if (s16(acc) > s16(best)) { best = acc; bx = ccx; by = ccy; }
-        });
-        return center_finish(best, bx, by);
+    // 2B1D0). Delegates to the shared collector in combatii_battle.cpp so the AI gate, the FX tile
+    // and the handler's own target choice all use the same original body.
+    auto pick_4258c = [&](int /*cx*/, int radius) -> bool {
+        int bx = 0, by = 0;
+        if (battle_spell_ai_pick_4258c(unit_index, radius, bx, by) <= 0) return false;
+        tx = bx; ty = by;
+        return true;
     };
 
     // sub_42743(cx, radius, mask): centre selector shared by 2B1D0 (Confuse), 2B391 (buff/debuff)
-    //   and 2C468 (DNA Change). rows = (mask == 4000h) ? cx : 28465(cx). When mask < 0FFh the
+    //   and 2C468 (DNA Change). Delegates to the shared collector in combatii_battle.cpp.
+    //   rows = (mask == 4000h) ? 5 : 28465(cx). When mask < 0FFh the
     //   expected side is 0 (ally) and the caster tile is the first candidate; otherwise it is 1
     //   (hostile) and the walk starts at the second cone tile. Either way the cone walk runs to the
     //   end. A unit in range qualifies when [15h]&80==0, [5Ch]<7, 1201D==expected side, [61h]<12Ch
     //   and it does not already carry the mask's state. Value per mask: 40h = +2 when [1Eh]&7 /
     //   800h = +1 for a caster with MP and a known spell / 8h = skip weapon class 2 / 4000h = skip
     //   [1Eh]&20 / otherwise +1. The strictly largest sum wins.
-    auto pick_42743 = [&](int cx, int radius, int mask) -> bool {
-        const int rows = (mask == 0x4000) ? s16(cx) : r28465(cx);
-        const bool want_hostile = (mask >= 0xFF);                       // var_8
-        int best = 0, bx = -1, by = -1;
-        los_mark(rows);                                         // 1B7BF(1,1,0) + 13F8A + 1B7FA
-        center_scan(rows, !want_hostile, [&](int ccx, int ccy) {
-            int score = 0;
-            diamond(ccx, ccy, radius, [&](int x, int y) {
-                const CombatUnitPlacement* o = occ(x, y);
-                if (!o) return;
-                if (o->combat_flags_15 & 0x80) return;                  // test [15h],80h
-                if (o->code_b >= 7) return;                             // cmp [5Ch],7
-                if (hostile(*o) != want_hostile) return;                // cmp 1201D, var_8
-                if (s16(o->sprite_type) >= 0x12C) return;               // cmp [61h],12Ch
-                if (mask < 0xFF) {
-                    if (o->combat_flags_15 & (uint8_t)(mask & 0xFF)) return;      // [15h]&mask
-                } else {
-                    if (o->combat_flags_1e & (uint8_t)((mask >> 8) & 0xFF)) return; // [1Eh]&mask>>8
-                }
-                if (mask == 0x40) {                                     // loc_42952
-                    if (!(o->combat_flags_1e & 0x07)) return;
-                    score += 2;
-                    return;
-                }
-                if (mask == 0x800) {                                    // loc_4295F
-                    if ((uint16_t)o->combat_mp_50 == 0) return;
-                    bool can_cast = false;
-                    for (int gI = 0; gI < 7 && !can_cast; ++gI)
-                        if (battle_spell_kind(*o, gI) >= 0) can_cast = true;       // sub_28429
-                    if (!can_cast) return;
-                    ++score;
-                    return;
-                }
-                if (mask == 0x8) {                                      // loc_4293B
-                    if (weapon_class(*o) == 2) return;
-                    ++score;
-                    return;
-                }
-                if (mask == 0x4000) {                                   // loc_42982
-                    if (o->combat_flags_1e & 0x20) return;
-                    ++score;
-                    return;
-                }
-                ++score;                                                // loc_42988
-            });
-            if (s16(score) > s16(best)) { best = score; bx = ccx; by = ccy; }
-        });
-        return center_finish(best, bx, by);
+    auto pick_42743 = [&](int /*cx*/, int radius, int mask) -> bool {
+        int bx = 0, by = 0;
+        if (battle_spell_ai_pick_42743(unit_index, mask, radius, bx, by) <= 0) return false;
+        tx = bx; ty = by;
+        return true;
     };
 
     // sub_41E41(k): AI collector of 29722 (wave spells). The origin is the 1A146 front tile (k==2
@@ -833,16 +780,16 @@ bool CombatII::battle_ai_spell_pick_target(int unit_index, int hq1, int kind, in
         case 23: return pick_4258c(5, kind);                      // 2BBB7 Cure -> 2B1D0(kind 0) -> 4258C
         // 2B391 wrapper (2BE3B..2BF2F): mask and radius (the value loaded into ecx before the SSP
         // call)
-        case 28: return pick_42743(5, 1, 0x0008);                 // Power UP
-        case 29: return pick_42743(5, 2, 0x0010);                 // Speed UP
-        case 30: return pick_42743(5, 3, 0x0020);                 // Magic Armor
-        case 31: return pick_42743(5, 3, 0x0040);                 // Bless
-        case 32: return pick_42743(5, 1, 0x0800);                 // Silence
-        case 34: return pick_42743(5, 3, 0x2000);                 // Curse
+        case 28: return pick_42743(5, kind, 0x0008);              // Power UP
+        case 29: return pick_42743(5, kind, 0x0010);              // Speed UP
+        case 30: return pick_42743(5, kind, 0x0020);              // Magic Armor
+        case 31: return pick_42743(5, kind, 0x0040);              // Bless
+        case 32: return pick_42743(5, kind, 0x0800);              // Silence
+        case 34: return pick_42743(5, kind, 0x2000);              // Curse
         case 42: return pick_42743(5, kind, 0x1000);              // 2BFEA Confuse -> 2B1D0 (kind 1): radius k
         case 43: return pick_42a1d(5, true);                      // 2C00E Melt Item(arg5=0)
         case 44: return pick_42a1d(5, false);                     // 2C28F Death(arg5=1)
-        case 46: return pick_42743(5, 0, 0x4000);                 // 2C468 DNA Change: radius 0, rows = cx
+        case 46: return pick_42743(5, 0, 0x4000);                 // 2C468 DNA Change: radius 0, rows = 5
         case 47: return pick_419f1(5, kind + 3);                  // 2C566 -> 28B24 -> 419F1
         default: break;
     }

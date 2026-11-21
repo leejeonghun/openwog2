@@ -8334,7 +8334,7 @@ void CombatII::battle_item_3c12d(int unit_index) {
 }
 
 // ==== F13B0 spell handlers (dword_F13B0[q1], q1 = g*7+d) ====
-// Target collection (28982/28A97/28B24/2AE44/2B031) and the bodies
+// Target collection (28982/28A97/28B24/2AE44/2B031/4258C/42743) and the bodies
 // (28ED6/29273/2A1C6/2B1D0/2B391/2B9C8/2BA8E/2BC3B/2C00E/2C28F/2C36A/2C468/2C566) are
 // ported. SSP/NSP/camera/wait presentation is skipped as elsewhere, and the gameplay
 // (targets, damage, healing, status, summon, death) matches the original.
@@ -8409,6 +8409,152 @@ std::vector<int> CombatII::battle_spell_diamond(int unit_index, int cx, int cy, 
         }
     }
     return out;
+}
+
+// sub_4258C (Cure AI): paint the 1B7FA reach cone from the caster's front tile with the
+// sub_28465(5) range, mark the caster's tile (13D02) and score it first, then walk the cone.
+// Every candidate tile is the centre of a sub_1AC08 diamond of radius k; the tile with the
+// most allies (non-hostile, [15h]&80 == 0, [5C] < 7, [1Eh] != 0) wins. A winning tile farther
+// than 16 tiles (sub_49ADF) is rejected.
+int CombatII::battle_spell_ai_pick_4258c(int unit_index, int k, int& ox, int& oy) {
+    ox = oy = 0;
+    if (unit_index < 0 || (size_t)unit_index >= units_.size()) return 0;
+    if (map_w_ == 0 || map_h_ == 0) return 0;
+    const auto& u = units_[(size_t)unit_index];
+    const int radius = k < 0 ? 0 : k;
+    const int range = (int)(int8_t)battle_lookup_184a4(u.combat_type_5b, 0x36) + 5; // sub_28465(ecx=5)
+    const g2range::Env env = battle_range_env_make();
+    g2range::Range r(env);
+    const g2range::Unit au = battle_range_unit(unit_index);
+    r.los_from_actor(au, 1, 0, range);              // 1B7BF(1,1,0) + 13F8A + 1B7FA
+    const g2range::Range::Pt ft = r.front_tile(au, au.facing);         // sub_1A1DE
+    r.cone_init(ft.x, ft.y, 1, au.facing, range);                       // sub_1AF22(cx=1)
+    const int caster_eff = battle_effective_army(u);
+    int tx = 0, ty = 0;
+    if (!r.cone_next(tx, ty)) return 0;                                 // sub_1B00D (front tile)
+    // 4258C overwrites the first cone tile with the caster's tile and marks it with 13D02, so
+    // the caster tile is the first candidate and the front tile is skipped.
+    tx = (int)(int8_t)u.x;
+    ty = (int)(int8_t)u.y;
+    r.grid_write(tx, ty, 1);                                            // sub_13D02(caster,1)
+    int best = 0, bx = 0, by = 0;
+    do {
+        if (r.grid_read(tx, ty) < 0) continue;                          // sub_13CBD < 0
+        const g2range::Range::IterState st = r.save_iter();             // sub_1A31D
+        int count = 0;
+        r.dia_init(tx, ty, radius);                                     // sub_1AC08
+        int dx, dy;
+        while (r.dia_next(dx, dy)) {                                    // sub_1AC59
+            const int oi = r.occupant_at(dx, dy);                       // sub_11DB2
+            if (oi < 0 || (size_t)oi >= units_.size()) continue;
+            const auto& o = units_[(size_t)oi];
+            if (o.combat_flags_15 & 0x80) continue;
+            if (o.code_b >= 7) continue;
+            if (battle_armies_hostile(caster_eff, battle_effective_army(o),
+                                      battle_hostility_inverted_)) continue; // sub_1201D
+            if (o.combat_flags_1e == 0) continue;
+            ++count;
+        }
+        r.restore_iter(st);                                             // sub_1A3AE
+        if (count > best) { best = count; bx = tx; by = ty; }
+    } while (r.cone_next(tx, ty));
+    if (best <= 0) return 0;
+    const int dist = std::abs((int)(int8_t)u.x - bx) + std::abs((int)(int8_t)u.y - by); // sub_49ADF
+    if (dist > 0x10) return 0;
+    ox = bx;
+    oy = by;
+    return best;
+}
+
+// sub_42743 (buff/status AI): the same cone walk with a score per diamond:
+//   bit < 0xFF (0x08/0x10/0x20/0x40): allies without the bit on [15h]; 0x08 skips weapon
+//     class 2, 0x40 scores 2 for units with [1Eh]&7 and 0 otherwise.
+//   bit >= 0xFF: hostiles without the bit on [1Eh]; 0x800 needs MP != 0 and a castable spell,
+//     0x4000 needs no [1Eh]&0x20. The caster's tile is marked and scored for the buff family;
+//     the debuff family starts at the second cone tile.
+int CombatII::battle_spell_ai_pick_42743(int unit_index, int bit, int k, int& ox, int& oy) {
+    ox = oy = 0;
+    if (unit_index < 0 || (size_t)unit_index >= units_.size()) return 0;
+    if (map_w_ == 0 || map_h_ == 0) return 0;
+    const auto& u = units_[(size_t)unit_index];
+    const int radius = k < 0 ? 0 : k;
+    const bool want_hostile = (bit >= 0xFF);
+    // sub_42743 skips the sub_28465 call for 0x4000, leaving the caller's ecx (5).
+    const int range = (bit == 0x4000)
+        ? 5
+        : (int)(int8_t)battle_lookup_184a4(u.combat_type_5b, 0x36) + 5;  // sub_28465(ecx=5)
+    const g2range::Env env = battle_range_env_make();
+    g2range::Range r(env);
+    const g2range::Unit au = battle_range_unit(unit_index);
+    r.los_from_actor(au, 1, 0, range);              // 1B7BF(1,1,0) + 13F8A + 1B7FA
+    const g2range::Range::Pt ft = r.front_tile(au, au.facing);         // sub_1A1DE
+    r.cone_init(ft.x, ft.y, 1, au.facing, range);                       // sub_1AF22(cx=1)
+    int tx = 0, ty = 0;
+    if (!r.cone_next(ox, oy)) return 0;                                 // first cone tile
+    if (!want_hostile) {
+        ox = tx = (int)(int8_t)u.x;                                      // loc_42841: caster tile
+        oy = ty = (int)(int8_t)u.y;
+        r.grid_write(tx, ty, 1);                                        // sub_13D02
+    } else if (!r.cone_next(tx, ty)) {
+        return 0;                                                       // loc_4282B: second tile
+    } else {
+        ox = tx; oy = ty;                                               // out vars start at tile 2
+    }
+    const int caster_eff = battle_effective_army(u);
+    int best = 0, bx = 0, by = 0;
+    do {
+        if (r.grid_read(tx, ty) < 0) continue;                          // sub_13CBD < 0
+        const g2range::Range::IterState st = r.save_iter();             // sub_1A31D
+        int score = 0;
+        r.dia_init(tx, ty, radius);                                     // sub_1AC08
+        int dx, dy;
+        while (r.dia_next(dx, dy)) {                                    // sub_1AC59
+            const int oi = r.occupant_at(dx, dy);                       // sub_11DB2
+            if (oi < 0 || (size_t)oi >= units_.size()) continue;
+            const auto& o = units_[(size_t)oi];
+            if (o.combat_flags_15 & 0x80) continue;
+            if (o.code_b >= 7) continue;
+            if (battle_armies_hostile(caster_eff, battle_effective_army(o),
+                                      battle_hostility_inverted_) != want_hostile) continue; // 1201D
+            if (o.sprite_type >= 0x12C) continue;
+            if (!want_hostile) {
+                if (o.combat_flags_15 & bit) continue;                  // [15h] & bit
+            } else if (o.combat_flags_1e & (bit >> 8)) {
+                continue;                                               // [1Eh] & (bit >> 8)
+            }
+            bool scored = false;
+            if (bit < 0x40) {
+                scored = (bit != 0x08) || (weapon_class(o) != 2);       // sub_174CF
+            } else if (bit == 0x40) {
+                if (o.combat_flags_1e & 0x07) score += 2;               // loc_42952: no +1
+            } else if (bit < 0x800) {
+                scored = true;
+            } else if (bit == 0x800) {                                  // loc_4295F Silence
+                if (o.combat_mp_50 != 0) {
+                    for (int g = 0; g < 7 && !scored; ++g)
+                        scored = battle_spell_kind(o, g) >= 0;          // sub_28429
+                }
+            } else if (bit == 0x4000) {                                 // loc_42982 DNA Change
+                scored = (o.combat_flags_1e & 0x20) == 0;
+            } else {
+                scored = true;                                          // 0x2000 Curse
+            }
+            if (scored) ++score;
+        }
+        r.restore_iter(st);                                             // sub_1A3AE
+        if (score > best) { best = score; bx = tx; by = ty; }
+    } while (r.cone_next(tx, ty));
+    // 49ADF rejects a positive score farther than 16 tiles; loc_42A15 then returns 0 without
+    // clearing dword_F0B9C+2. Every other exit reaches loc_42A08, which clears the list (the
+    // port's list is local to this Range, so only the control flow is mirrored here).
+    if (best > 0) {
+        const int dist = std::abs((int)(int8_t)u.x - bx) + std::abs((int)(int8_t)u.y - by);
+        if (dist > 0x10) return 0;
+    }
+    r.list.clear();                                                     // loc_42A08
+    ox = bx;
+    oy = by;
+    return best;
 }
 
 // sub_28540: the reach grid of the 4A483 cursor. 1B7BF(1,1,0) sets the LOS filters, 13F8A
@@ -8680,21 +8826,25 @@ int CombatII::battle_spell_2a1c6(int unit_index, int kind, int k) {
 int CombatII::battle_spell_2b1d0(int unit_index, int kind, int k, int tx, int ty) {
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return 4;
     const auto& c = units_[(size_t)unit_index];
-    const int ux = (int)(int8_t)c.x, uy = (int)(int8_t)c.y;
-    if (tx < 0 || ty < 0 || tx >= (int)map_w_ || ty >= (int)map_h_) return 3;
+    int cx = tx, cy = ty;
     // 2BBB7 (Cure, kind 0) / 2BFEA (Confuse, kind 1) -> 2B1D0 loc_2B27D:
     //   sub_28B24(ecx=5, push k, push kind) = 28540 reach of sub_28465(5), then the 28A97
     //   diamond of radius k around the clicked tile filtered by kind (0 = allies, 1 =
     //   hostiles). 28B24 marks the caster tile when the expectation byte is 0.
     if (!battle_spell_auto_) {
+        if (tx < 0 || ty < 0 || tx >= (int)map_w_ || ty >= (int)map_h_) return 3;
         const std::vector<int16_t> reach = battle_spell_range_grid(unit_index, 5, kind == 0);
         if (reach.size() != (size_t)map_w_ * (size_t)map_h_ ||
             reach[(size_t)ty * map_w_ + (size_t)tx] < 0) return 3;
     } else {
-        const int range = battle_lookup_184a4(c.combat_type_5b, 0x36) + 5;
-        if (std::abs(tx - ux) + std::abs(ty - uy) > range) return 3;
+        // AI: sub_2B1D0 calls 4258C for Cure and 42743(0x1000) for Confuse, then runs the
+        // 28A97 diamond around the collector's chosen tile.
+        const int best = (kind == 0)
+            ? battle_spell_ai_pick_4258c(unit_index, k, cx, cy)
+            : battle_spell_ai_pick_42743(unit_index, 0x1000, k, cx, cy);
+        if (best <= 0) return 3;
     }
-    std::vector<int> targets = battle_spell_diamond(unit_index, tx, ty, k, kind == 0 ? 0 : 1);
+    std::vector<int> targets = battle_spell_diamond(unit_index, cx, cy, k, kind == 0 ? 0 : 1);
     if (targets.empty()) return 3;                                      // 28B24 -> eax=-1
     battle_spell_announce(unit_index, battle_spell_name_);
     if (should_exit_) return 0;
@@ -8757,8 +8907,8 @@ int CombatII::battle_spell_2b391(int unit_index, int bit, int k, int tx, int ty)
         if (reach.size() != (size_t)map_w_ * (size_t)map_h_ || ci >= reach.size() ||
             reach[ci] < 0) return 3;
     } else {
-        const int range = battle_lookup_184a4(u.combat_type_5b, 0x36) + 5;
-        if (std::abs(cx - (int)(int8_t)u.x) + std::abs(cy - (int)(int8_t)u.y) > range) return 3;
+        // AI: sub_2B391 calls 42743(bit,k) and then 28A97 around the chosen tile.
+        if (battle_spell_ai_pick_42743(unit_index, bit, k, cx, cy) <= 0) return 3;
     }
     const int radius = (k < 0) ? 0 : k;
     std::vector<int> targets = battle_spell_diamond(unit_index, cx, cy, radius,
@@ -9063,7 +9213,15 @@ int CombatII::battle_spell_2c36a(int unit_index, int k) {
 //   [25h] = word_7448C[k] (duration). 275A4(dna.nsp) is presentation only and skipped.
 int CombatII::battle_spell_2c468(int unit_index, int k, int tx, int ty) {
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return 4;
-    const int target = battle_spell_pick_single(unit_index, tx, ty, 5, 1);
+    int target = -1;
+    if (battle_spell_auto_) {
+        // sub_2C468 -> sub_42743(0x4000, k=0): the chosen tile's occupant is the victim.
+        int cx = 0, cy = 0;
+        if (battle_spell_ai_pick_42743(unit_index, 0x4000, 0, cx, cy) <= 0) return 3;
+        target = battle_unit_index_at(cx, cy);
+    } else {
+        target = battle_spell_pick_single(unit_index, tx, ty, 5, 1);
+    }
     if (target < 0) return 3;
     battle_spell_announce(unit_index, battle_spell_name_);
     if (should_exit_) return 0;
