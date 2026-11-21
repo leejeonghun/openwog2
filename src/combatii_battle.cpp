@@ -2054,8 +2054,8 @@ bool CombatII::battle_after_move(int unit_index) {
 // by sub_17310. sub_45BFB prepares the slot-0 digit buffer from dmg/100 (truncated) and clears
 // the walk offset, sub_45ED2 sets the knockback from the unit's own facing ([+60h]>>24), then
 // 25 frames draw the digits (sub_45CCB) and shake (sub_45F29), each presenting (sub_5E9E8) and
-// waiting one timer tick (sub_499E4). sub_499DA(0x20) sets the next timer period and sub_12124
-// resets the pose.
+// waiting one timer tick (sub_499E4). sub_499DA(0x20) sets the next timer period and then falls
+// through to sub_499E4 (one more wait) before sub_12124 resets the pose.
 void CombatII::battle_terrain_damage_46359(int unit_index, int dmg) {
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return;
     auto& u = units_[(size_t)unit_index];
@@ -2113,7 +2113,8 @@ void CombatII::battle_terrain_damage_46359(int unit_index, int dmg) {
         video_.present();                                       // sub_5E9E8
         wait_game_tick();                                       // sub_499E4
     }
-    game_timer_set(0x20);                                       // sub_499DA(20h): next period, no wait
+    game_timer_set(0x20);                                       // sub_499DA(20h) sets the period
+    wait_game_tick();                                           // 499DA falls through to 499E4
     if ((size_t)unit_index < units_.size())
         reset_unit_pose(units_[(size_t)unit_index]);            // sub_12124
 }
@@ -2127,8 +2128,9 @@ void CombatII::battle_terrain_damage_46359(int unit_index, int dmg) {
 //   scales esi by adjust/10.
 //   [48h] -= esi, then sub_53797 (mode 1); sub_46359 (damage digits/knockback) or sub_462A7
 //   (healing steps) plays only inside the 12x12 viewport. [48h] <= 0 runs sub_1DB1D with no
-//   killer and returns 0, else 1. Healing clamps at max HP (loc_462BE) and the viewport is
-//   approximated by the 12x12 camera window.
+//   killer and returns 0, else 1. sub_462A7 clamps the healing amount at max HP (loc_462BE),
+//   but [48h] itself may stay above [4Ch]; the viewport is approximated by the 12x12 camera
+//   window.
 int CombatII::battle_terrain_17310(int unit_index) {
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return 1;
     CombatUnitPlacement& u = units_[(size_t)unit_index];
@@ -2156,13 +2158,14 @@ int CombatII::battle_terrain_17310(int unit_index) {
         esi = (esi * adjust) / 10;                                // imul+idiv 0Ah (same signed truncation)
     }
     const int old_raw = battle_hp_raw(u);
-    int new_raw = old_raw - esi;
-    if (new_raw > max_raw) new_raw = max_raw;                     // equivalent to the sub_462A7 clamp
+    int new_raw = old_raw - esi;                                  // [48h] -= esi; may exceed [4Ch]
     if (new_raw <= 0) {
         u.hp = 0; u.hp_deficit = 0;
     } else {
         const int new_hp = (new_raw + 99) / 100;
         u.hp = new_hp; u.hp_deficit = new_hp * 100 - new_raw;
+        // sub_462A7 clamps only the amount it adds, so [48h] can stay above [4Ch]. Keep that
+        // raw value in the negative deficit while the display HP stays at max.
         if (u.hp > u.max_hp) { u.hp = u.max_hp; u.hp_deficit = u.max_hp * 100 - new_raw; }
     }
     run_unit_hp_trigger(unit_index, -1, 1);                       // sub_53797(ebx=1)
@@ -2189,16 +2192,18 @@ int CombatII::battle_terrain_17310(int unit_index) {
     }
     // loc_1743F/loc_17467: the viewport-gated presentation runs after the HP trigger and
     // before the death check (damage), or after the HP update (healing, which tops up to max).
+    // `test esi,esi; jle loc_17467` sends esi == 0 through sub_462A7 too, and only the damage
+    // path reaches the death check.
     if (inside) {
         if (esi > 0) {
             battle_terrain_damage_46359(unit_index, esi);          // sub_46359
             if (should_exit_ || !units_[(size_t)unit_index].active) return 0;
-        } else if (esi < 0) {
-            battle_heal_462a7(unit_index, -esi);                   // sub_462A7
+        } else {
+            battle_heal_462a7(unit_index, -esi);                   // sub_462A7 (esi == 0 included)
             if (should_exit_) return 0;
         }
     }
-    if (battle_hp_raw(units_[(size_t)unit_index]) <= 0) {
+    if (esi > 0 && battle_hp_raw(units_[(size_t)unit_index]) <= 0) {
         play_unit_death(unit_index, -1);                           // sub_1DB1D(eax=0)
         return 0;
     }
@@ -3657,14 +3662,14 @@ void CombatII::battle_reset() {
                 battle_music_on_ ? 1 : 0, battle_sfx_on_ ? 1 : 0);
 }
 
-// sub_4FF8E (sub_55EBC+93): open game.cfg with mode 0x202 (O_RDWR|O_CREAT, no truncate) and
-// write four bytes from the file start: word_FDAEA (instant camera), word_FDAE8 (music),
-// word_FDAE6 (sfx), then sub_1A11C -> byte_74138 (turn interval / time-gauge divisor).
+// sub_4FF8E (sub_55EBC+93): open game.cfg with Watcom mode 0x202 (O_RDWR|O_BINARY, no
+// O_CREAT) and write four bytes from the file start: word_FDAEA (instant camera), word_FDAE8
+// (music), word_FDAE6 (sfx), then sub_1A11C -> byte_74138 (turn interval / time-gauge divisor).
+// The original's open_ fails when game.cfg is absent (sub_4976F prints "Missed!").
 void CombatII::battle_write_game_cfg_4ff8e() {
     std::string path = game_path("game.cfg");
     if (path.empty()) path = std::string(GAME_DATA_DIR) + "/game.cfg";
     FILE* f = fopen(path.c_str(), "r+b");                 // 0x202 keeps the remaining 6 bytes
-    if (!f) f = fopen(path.c_str(), "w+b");                // missing file: O_CREAT
     if (!f) {
         fprintf(stderr, "COMBAT: warning: cannot write game.cfg (%s)\n", path.c_str());
         return;
@@ -6177,7 +6182,9 @@ void CombatII::battle_draw_unit_info_panel(int unit_index) {
     snprintf(buf, sizeof(buf), "%3d", (int)u.combat_level_2b);
     draw_small_text_outlined(0x60, 0x92, buf, 0x11);
 
-    const int hp_cur = u.hp;                                          // ceil(raw/100) = sub_13853
+    // sub_13853: ceil([+48h]/100), without clamping to [+4Ch] (over-max raw shows above max).
+    const int hp_raw_now = battle_hp_raw(u);
+    const int hp_cur = hp_raw_now > 0 ? (hp_raw_now + 99) / 100 : u.hp;
     const int hp_max = (u.max_hp * 100 - u.max_hp_deficit) / 100;     // [+4Ch]/100 floored
     snprintf(buf, sizeof(buf), "%4d/%4d", hp_cur, hp_max);
     draw_small_text_outlined(0x3C, 0x9D, buf, 0x11);
@@ -7149,6 +7156,29 @@ void CombatII::battle_write_blackbox_record(const CombatUnitPlacement& u) {
     fclose(fp);
 }
 
+// sub_113E4: copy a battle unit (or its [77h] stored base form) into the first CC990 record
+// with the same ID, then clear [56h], [5Ch] and [84h] (and dword [67h]). The original keeps
+// the roster record's [7Bh] next pointer; the port keeps the vector order in list_seq and the
+// port-only runtime flags on the roster entry. Returns true when a CC990 record exists, even
+// when [87h] is zero and no copy happens (sub_4EAF3 still processes that record).
+bool CombatII::battle_roster_copy_113e4(const CombatUnitPlacement& battle_unit) {
+    const CombatUnitPlacement& src = battle_unit.stored_77 ? *battle_unit.stored_77 : battle_unit;
+    CombatUnitPlacement* dest = battle_roster_find_500ed(src.id);      // sub_500ED-style list walk
+    if (!dest) return false;                                          // loc_1211E
+    if (src.owner_87 == 0) return true;                               // cmp byte ptr [eax+87h],0
+    CombatUnitPlacement rec = src;                                    // repne movsd 0x88
+    rec.list_seq = dest->list_seq;                                    // [edx+7Bh] = old link
+    rec.active = dest->active;                                        // port-only CC990 flag
+    rec.deploy_roster = dest->deploy_roster;                          // port-only CC990 flag
+    rec.group = dest->group;                                          // port-only scheduler field
+    rec.battle_list_membership_modeled = dest->battle_list_membership_modeled;
+    rec.battle_gauge = 0;                                             // mov byte ptr [edx+56h],0
+    rec.code_b = 0;                                                   // mov byte ptr [edx+5Ch],0
+    rec.flags_84 = 0;                                                 // mov byte ptr [edx+84h],0
+    *dest = rec;                                                      // dword [67h] is not modelled; pack zeroes it
+    return true;
+}
+
 // sub_4EC51 + sub_4EAF3: after battle, remove the battle units from the army list and
 // restore the persistent fields.
 //   - HP: when current != max, heal by max/10. For owner == low word_FDF85, raise anything
@@ -7156,8 +7186,8 @@ void CombatII::battle_write_blackbox_record(const CombatUnitPlacement& u) {
 //   - MP current = max, [+13h] = 0; [+14h]&1 is cleared with [+61h]--, &2 clears [+83h].
 //   - [+14h]/[+1Eh]/[+15h] = 0, buff/ailment words = FFFF, gauge/TP/AI state reset.
 //   - Regular units with [+12h]==0 write their 0x88 record back to BLACKBOX.DAT.
-//   The original removes them from the army list (sub_113E4) and walks all of CC990 with
-//   sub_4EAF3.
+//   The original first copies each army-list unit without a summon tag into the matching
+//   CC990 record (sub_113E4), then runs sub_4EAF3 over every CC990 record.
 void CombatII::battle_battle_cleanup_4ec51() {
     const int party_owner = (int)(fdf85_word_ & 0xFF);
     auto cleanup_one = [&](CombatUnitPlacement& u) {
@@ -7207,16 +7237,28 @@ void CombatII::battle_battle_cleanup_4ec51() {
         }
         u.active = false;                                     // sub_113E4 (remove from the army list)
     };
-    for (auto& u : units_) {
-        if (!u.active) continue;                              // already gone from the CC990 list
-        cleanup_one(u);
+    // sub_4EC51 loop 1: for each army-list unit without a summon tag, sub_113E4 copies the
+    // battle record into its CC990 record. Units with a [77h] base form copy that form, so a
+    // mounted/transformed unit persists as its base record.
+    std::vector<uint8_t> handled(units_.size(), 0);
+    for (size_t i = 0; i < units_.size(); ++i) {
+        CombatUnitPlacement& u = units_[i];
+        if (!u.active || u.item_use_12 != 0) continue;        // cmp cl, [edx+12h]
+        if (battle_roster_copy_113e4(u)) {
+            handled[i] = 1;
+            u.active = false;                                 // sub_113CC: leaves the army list
+        }
     }
-    // 4EC51 runs 4EAF3 over all of CC990, including party records that never made it onto
-    // the map ([56h] != 0x80). Records placed on the map are handled by the units_ loop
-    // above, so roster entries with [56h]==0x80 are skipped here.
-    for (auto& r : battle_roster_cc990_) {
-        if (!r.deploy_roster || r.active || r.battle_gauge == 0x80) continue;
+    // sub_4EC51 loop 2: sub_4EAF3 over every CC990 record, including party records that never
+    // entered the battle. This is the only BLACKBOX write path, so a stale roster copy can no
+    // longer overwrite the fresh battle-unit record.
+    for (auto& r : battle_roster_cc990_)
         cleanup_one(r);
+    // The port keeps battle units that have no CC990 record (the original only writes CC990).
+    // Apply the same tail to those so their persistent record still sees the cleanup.
+    for (size_t i = 0; i < units_.size(); ++i) {
+        if (!units_[i].active || handled[i]) continue;
+        cleanup_one(units_[i]);
     }
     battle_ready_queue_.clear();
     battle_target_list_.clear();

@@ -1357,6 +1357,7 @@ CombatII::VmResult CombatII::run_vm(uint32_t offset) {
                 // allied unit (effective army 1, not a summon) with the same ID. The
                 // [5Ch] != 0 link path keeps the existing linked_class projection.
                 const bool raw_zero = (nu.army == 0);
+                bool roster_found = false; // sub_50D9F `si`: 0 after sub_50105, 1 after sub_4E81F
                 if (raw_zero) {
                     // With no CC990 record, sub_4E81F re-reads the (ID-1)*0x88+0x4E26 record
                     // from BLACKBOX.DAT, overwrites the fields, and remaps the army through
@@ -1365,6 +1366,7 @@ CombatII::VmResult CombatII::run_vm(uint32_t offset) {
                     CombatUnitPlacement* roster = battle_roster_find_500ed(nu.id);
                     if (roster) {
                         battle_roster_apply_50105(nu, *roster);
+                        roster_found = true;
                         // The original does roster [0Eh] (=1) -> dec -> 0 -> inc (=1), which is
                         // raw 0 / effective 1 under the port's raw convention.
                         nu.army = 0;
@@ -1385,10 +1387,11 @@ CombatII::VmResult CombatII::run_vm(uint32_t offset) {
                 // sub_4E81F/CC990.
                 if (nu.memory_army < 0)
                     nu.memory_army = nu.army != 0 ? (int)battle_incremented_raw_army(nu.army) : -1;
-                // sub_50D9F loc_50EFF..loc_50F25: records that started with army 0 are copied
-                // back to the front of the CC990 list after processing. When [+77h] holds a
-                // link, the link (base form) record is used as the copy.
-                if (raw_zero) {
+                // sub_50D9F loc_50EFF..loc_50F25: only the sub_4E81F path (`si`=1, no CC990
+                // record was found) appends the processed record; sub_50105 (`si`=0) leaves the
+                // existing CC990 record in place. When [+77h] holds a link, the link (base form)
+                // record is used as the copy.
+                if (raw_zero && !roster_found) {
                     battle_roster_push_cc990(nu.stored_77 ? *nu.stored_77 : nu);
                     if (script_trace_)
                         fprintf(stderr, "COMBAT: spawn id=%d -> CC990 insert (%zu records)\n",

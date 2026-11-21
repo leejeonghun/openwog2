@@ -91,7 +91,7 @@ struct CombatUnitPlacement {
     uint8_t hit_seq_2d = 0;      // BattleUnit +0x2D critical pattern column counter
     std::shared_ptr<CombatUnitPlacement> stored_77; // [+77h] preserved record (pre-transform copy from sub_3C548, restored by sub_1808A). SCE link records are not loaded (linked_class only)
     int linked_class = -1;       // class [+11h] of the linked record ([+77h]); sub_174CF maps 0x17 to weapon class 5
-    int hp_deficit = 0;          // how far [+48h] falls below hp*100 (0..99); original HP(x100) = hp*100 - deficit
+    int hp_deficit = 0;          // original HP(x100) = hp*100 - deficit; negative when [+48h] > hp*100 (over-max raw)
     int max_hp_deficit = 0;      // same rule for max HP ([+4Ch])
     uint8_t combat_type_5a = 0;  // BattleUnit +0x5A, sub_184A4 lookup index
     uint8_t combat_type_5b = 0;  // BattleUnit +0x5B
@@ -1826,6 +1826,7 @@ private:
     //   same data into the [77h] copy and sub_17E6D turns the live unit into its transformed form.
     std::vector<CombatUnitPlacement> battle_roster_cc990_;
     CombatUnitPlacement* battle_roster_find_500ed(int id);
+    bool battle_roster_copy_113e4(const CombatUnitPlacement& battle_unit); // sub_113E4 battle unit -> CC990
     void battle_roster_apply_50105(CombatUnitPlacement& spawn, const CombatUnitPlacement& roster_rec);
     void battle_roster_push_cc990(const CombatUnitPlacement& rec);
     // sub_4E81F: reloads a raw-army-0 spawn that is missing from the roster from
