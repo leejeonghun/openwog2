@@ -330,18 +330,18 @@ void CombatII::battle_fx_47fdc(int unit_index) {
 constexpr int kSub46E27StackVar8 = 0;
 
 // sub_46E27: interpolates a small BATTLE.SYB projectile from attacker towards the tile in
-// dword_FA8B0+2 / word_FA8B4. The 12-byte frame table at unk_FA070 is four direction
-// records (BATTLE.SYB frames 0..3); var_8 (the class group) only selects the pose reset,
-// the direction override, and the 1/6-tick pacing.
+// dword_FA8B0+2 / word_FA8B4. unk_FA070 is a table of 4-direction groups of 12-byte records:
+// loc_47063 computes base = unk_FA070 + var_8*30h (four records per group) and then indexes
+// base + facing*12, so the drawn record is var_8*4 + facing. var_8 (the class group) also
+// selects the pose reset, the direction override and the 1/6-tick pacing.
 void CombatII::play_weapon_class5_projectile_at(CombatUnitPlacement& attacker,
                                                 int tx, int ty, bool reaches_target,
                                                 int stack_var8) {
     const bool linked = attacker.code_b >= 1 && attacker.code_b <= 4 && attacker.linked_class >= 0;
     const int effect_class = linked ? attacker.linked_class : attacker.combat_class;
-    // sub_46F15..46FE5: frame_group (var_8) selects pose/timer and, for 8/9, the
-    // direction override. The 12-byte frame table at unk_FA070 is only the four
-    // direction records (BATTLE.SYB frames 0..3) for every class; var_C's high word
-    // is the low word of edx (0/1) and therefore never offsets the table base.
+    // sub_46F15..46FE5: frame_group (var_8) selects the BATTLE.SYB record group
+    // (base = unk_FA070 + var_8*30h, four direction records per group) and, for 8/9,
+    // the direction override. It also drives the pose reset (<4) and the 6-vs-1 timer.
     int frame_group = -1;
     bool override_direction = false;
     if (effect_class >= 0x15 && effect_class <= 0x18) {
@@ -402,7 +402,7 @@ void CombatII::play_weapon_class5_projectile_at(CombatUnitPlacement& attacker,
         else
             direction = (attacker.y < ty) ? 0 : 2;
     }
-    const size_t frame_index = (size_t)direction; // unk_FA070 + direction*12
+    const size_t frame_index = (size_t)(frame_group * 4 + direction); // unk_FA070 + group*30h + facing*12
     if (frame_index >= battle_effects_.size()) return;
     const TerrainOverlayFrame& projectile = battle_effects_[frame_index];
     if (projectile.rle.empty()) return;
