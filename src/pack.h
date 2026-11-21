@@ -468,6 +468,15 @@ private:
         int move_counter = 0;         // remaining phase-2 steps (unk_7D7EF)
         int move_speed = 1;           // unk_8293C (op13 sets 1, op27 changes it)
         int fine_x = 0, fine_y = 0;   // offset from tile origin (may keep a residual)
+        // ---- op23 camera pan state (actor-scoped counter; global camera step) ----
+        // The original stores the frame count in the actor's unk_7D7EF byte. The command
+        // velocity is global (word_7D88A/word_7D888) and phase 2 copies it into 15BA1A.
+        // Phase 2 decrements this counter once per actor turn; sub_21E29 integrates the
+        // camera once after the VM has run all actors, so this state does not block other
+        // actors while the pan is active.
+        int pan_total = 0;            // counter after the original 8-bit store, for the log
+        int pan_counter = 0;          // remaining phase-2 frames
+        int pan_start_x = 0, pan_start_y = 0; // camera tile at command time
     };
     static constexpr int MAX_EVE_ACTORS = 51;
     EveActorState eve_actors_[MAX_EVE_ACTORS];
@@ -476,6 +485,19 @@ private:
     // NPCs through the town NPC path, so the slots are bookkeeping only (no extra draw).
     struct EveSlot { bool active = false; int type = 0; int sprite = 0; int x = 0, y = 0; };
     EveSlot eve_slots_[320];
+    // ---- op23 global camera integration state (sub_21E29) ----
+    // The counters live in EveActorState; the command velocity and camera are global. One
+    // integration step is applied after all actor turns, using the velocity written by the
+    // last op23 tick in that frame. The shadow keeps the original fine-sign convention.
+    bool eve_pan_shadow_valid_ = false;
+    int eve_pan_shadow_tile_x_ = 0, eve_pan_shadow_tile_y_ = 0;
+    int eve_pan_shadow_fine_x_ = 0, eve_pan_shadow_fine_y_ = 0;
+    bool eve_pan_frame_active_ = false;
+    int eve_pan_frame_dx_ = 0, eve_pan_frame_dy_ = 0;
+    // loc_13063 writes the command velocity to the global word_7D88A/word_7D888, not to
+    // the actor record. Every active op23 phase-2 tick copies this pair into 15BA1A, so
+    // the most recently issued op23 command wins if multiple actors pan at once.
+    int eve_pan_vel_dx_ = 0, eve_pan_vel_dy_ = 0;
     void eve_clear_actors();
     void eve_op_spawn(int actor, const std::vector<uint16_t>& w, size_t base);
     void eve_op_hide(int actor);
@@ -504,18 +526,29 @@ private:
     // [fire,23,count,dx,dy]: dx and dy are speeds in px per frame. Evidence: the
     // shake cases (283: +-8 over 4 frames, 306: +-14 over 2 frames) and the snap
     // (-12 over 2 frames = -24 px = -1 tile) cannot be read as tile distances
-    // but fit a speed exactly. Every EVE frame the secondary path sets
-    // 15BA1A = (-dx, dy) and sub_21E29 integrates it into the camera (Y then X).
-    // On the last frame counter goes 1 -> 0, 15BA1A is cleared first and 21E29
-    // still runs, so the camera integrates count-1 times (271 has count 30 ->
-    // 29, world -54 px).
+    // but fit a speed exactly. The primary op stores the frame count in the
+    // actor's counter; phase 2 decrements it once per actor turn, and sub_21E29
+    // integrates the camera once after all actors have run (Y then X). Other
+    // actors keep running during the pan.
+    // On the last frame counter goes 1 -> 0, 15BA1A is cleared before 21E29, so
+    // the camera integrates count-1 times (271 has count 30 -> 29, world -54 px).
     // The wrap drops the remainder instead of carrying it (X: fine > 24 ->
     // tile--, fine = 0; fine < -24 -> tile++, fine = 0; Y uses 16 the same
     // way). The original's fine sign is opposite to the port
     // (world = tile*size - fine vs world = tile*size + fine), so a shadow
     // variable integrates the original convention and converts back through
     // world with floor.
-    void eve_op_camera_pan(int count, int dx, int dy);
+    void eve_op_camera_pan(int actor, int count, int dx, int dy);
+    // One phase-2 turn for the actor's op23 counter. Returns true while the pan remains
+    // active. The camera itself is not moved here; see eve_camera_pan_apply_frame().
+    bool eve_camera_pan_tick(int actor);
+    // Rebuild the original-sign shadow from the canonical port camera when it changes
+    // externally or no shadow exists yet.
+    void eve_pan_rebase_shadow();
+    // Convert the original-sign shadow back to the port's canonical tile/fine camera.
+    void eve_pan_publish_shadow();
+    // Apply one sub_21E29 camera integration step after all actor turns in a frame.
+    void eve_camera_pan_apply_frame();
     bool get_eve_actor_screen_box(int actor, int& out_left, int& out_top,
                                   int& out_w, int& out_h) const;
     void eve_op_dialogue(int text_id, int actor);

@@ -3450,6 +3450,10 @@ bool Pack::load_eve_file(int event_id, EveFile& out) {
 void Pack::eve_clear_actors() {
     for (int i = 0; i < MAX_EVE_ACTORS; i++) eve_actors_[i] = EveActorState();
     for (int i = 0; i < 320; i++) eve_slots_[i] = EveSlot();
+    eve_pan_shadow_valid_ = false;
+    eve_pan_frame_active_ = false;
+    eve_pan_frame_dx_ = eve_pan_frame_dy_ = 0;
+    eve_pan_vel_dx_ = eve_pan_vel_dy_ = 0;
 }
 
 // ---- op13: spawn an actor (loc_12BE2, 27 words) ----
@@ -3679,6 +3683,13 @@ bool Pack::eve_move_tick(int actor) {
     return true;
 }
 
+// Floor division for the original-sign shadow -> port camera conversion.
+static int eve_shadow_floor_div(int a, int b) {
+    int q = a / b, r = a - q * b;
+    if (r != 0 && ((r < 0) != (b < 0))) q--;
+    return q;
+}
+
 // ---- op15: absolute camera (loc_12D97, then sub_126AC) ----
 // loc_12D97 sets the camera tiles to (x=p0, y=p1) with no clamping and leaves fine alone;
 // the renderer skips tiles outside the map. sub_126AC then walks 50 actors and recomputes
@@ -3687,8 +3698,21 @@ bool Pack::eve_move_tick(int actor) {
 // unk_7D7EF counter, which the original adjusts to keep the screen continuous) stay
 // continuous through the shared fine offsets. The walk is kept for parity.
 void Pack::eve_op_camera_snap(int tx, int ty) {
-    cam_tile_x_ = (int16_t)tx;
-    cam_tile_y_ = (int16_t)ty;
+    // Keep the original camera representation. If no pan shadow exists yet, derive one
+    // from the current port camera; otherwise preserve its fine value exactly as loc_12D97
+    // does. Publish the equivalent canonical port camera afterwards.
+    if (!eve_pan_shadow_valid_ ||
+        eve_pan_shadow_tile_x_ * TOWN_TILE_W - eve_pan_shadow_fine_x_ !=
+            cam_tile_x_ * TOWN_TILE_W + cam_fine_x_ ||
+        eve_pan_shadow_tile_y_ * TOWN_TILE_H - eve_pan_shadow_fine_y_ !=
+            cam_tile_y_ * TOWN_TILE_H + cam_fine_y_) {
+        eve_pan_shadow_valid_ = true;
+        eve_pan_shadow_fine_x_ = -cam_fine_x_;
+        eve_pan_shadow_fine_y_ = -cam_fine_y_;
+    }
+    eve_pan_shadow_tile_x_ = (int16_t)tx;
+    eve_pan_shadow_tile_y_ = (int16_t)ty;
+    eve_pan_publish_shadow();
     for (int a = 0; a < 50; a++) {
         const EveActorState& st = eve_actors_[a];
         if (!st.active) continue;
@@ -3697,113 +3721,163 @@ void Pack::eve_op_camera_snap(int tx, int ty) {
 }
 
 // ---- op23: relative camera pan (loc_13063 phase 1, loc_13AC9 phase 2, sub_21E29 tail) ----
-// [fire, 23, count, dx, dy] with dx/dy as pixels per frame. Each EVE frame, phase 2 of
-// sub_12857 sets 15BA1A = (-dx, dy) (loc_13AC9) and sub_13B8D calls sub_21E29 to integrate it
-// into the camera, Y before X. On the last frame (counter 1 -> 0) 15BA1A is cleared first, so
-// the camera integrates count - 1 times; wraps are discarded.
+// [fire, 23, count, dx, dy] with dx/dy as pixels per frame. The primary op stores the
+// frame count in the actor's own byte counter and the command velocity in the global
+// word_7D88A/word_7D888; phase 2 copies that pair into 15BA1A. On every actor turn phase 2
+// decrements that actor's counter; after the VM has run all actors, sub_13B8D calls
+// sub_21E29 once to integrate the camera, Y before X. Other actors keep running while the
+// pan is in progress. On the last frame (counter 1 -> 0) 15BA1A is cleared before
+// sub_21E29, so the camera integrates count - 1 times; wraps are discarded.
 // The original's fine sign is the opposite of the port's, so the original convention is
 // integrated in shadow variables and converted back through world-space floor division,
 // which keeps the rendered world identical.
-// The original's Y+ bounds compare against a label named 15BA1A+2 (-dx) at PACK.LST
-// 000220B1, but the X guard pattern suggests a mislabelled 15BA1E (map height), so a height
-// guard is used; this stays open until a dy != 0 Y+ pan (script 274) verifies it.
-void Pack::eve_op_camera_pan(int count, int dx, int dy) {
-    int16_t vx = (int16_t)(dx & 0xFFFF), vy = (int16_t)(dy & 0xFFFF);
-    int ox = cam_tile_x_, oy = cam_tile_y_;
-    bool auto_fast = (dbg_env("G2_PACK_AUTO"));
-    if (count <= 0) {
-        fprintf(stderr, "PACK: EVE op23 camera pan count=%d d=(%d,%d) (%d,%d)->(%d,%d) noop\n",
-                count, vx, vy, ox, oy, ox, oy);
+// PACK.EXE at 000220B1 loads the dword at 15BA1C and shifts it right 16, so the value
+// compared with tile_y + 13 is the high word at 15BA1E (map height), not the low-word
+// -dx. The guard below therefore already matches the original; scripts 274/282 keep
+// their pure dy pans.
+void Pack::eve_pan_rebase_shadow() {
+    if (!eve_pan_shadow_valid_) return;
+    eve_pan_shadow_tile_x_ = cam_tile_x_;
+    eve_pan_shadow_tile_y_ = cam_tile_y_;
+    eve_pan_shadow_fine_x_ = -cam_fine_x_;
+    eve_pan_shadow_fine_y_ = -cam_fine_y_;
+}
+
+void Pack::eve_pan_publish_shadow() {
+    if (!eve_pan_shadow_valid_) return;
+    const int world_x = eve_pan_shadow_tile_x_ * TOWN_TILE_W - eve_pan_shadow_fine_x_;
+    const int world_y = eve_pan_shadow_tile_y_ * TOWN_TILE_H - eve_pan_shadow_fine_y_;
+    const int tx = eve_shadow_floor_div(world_x, TOWN_TILE_W);
+    const int ty = eve_shadow_floor_div(world_y, TOWN_TILE_H);
+    cam_tile_x_ = tx;
+    cam_tile_y_ = ty;
+    cam_fine_x_ = world_x - tx * TOWN_TILE_W;
+    cam_fine_y_ = world_y - ty * TOWN_TILE_H;
+}
+
+void Pack::eve_op_camera_pan(int actor, int count, int dx, int dy) {
+    if (actor < 0 || actor >= MAX_EVE_ACTORS) return;
+    EveActorState& st = eve_actors_[actor];
+    const int16_t vx = (int16_t)(dx & 0xFFFF), vy = (int16_t)(dy & 0xFFFF);
+    const int cnt = count & 0xFF;   // loc_13063 stores only dl into unk_7D7EF
+    const int ox = cam_tile_x_, oy = cam_tile_y_;
+    // loc_13063 writes the global command velocity even when the byte counter is zero.
+    // A later phase-2 tick of another actor therefore uses the newest op23 command.
+    eve_pan_vel_dx_ = vx;
+    eve_pan_vel_dy_ = vy;
+    st.pan_total = cnt;
+    st.pan_counter = cnt;
+    st.pan_start_x = ox;
+    st.pan_start_y = oy;
+    if (cnt == 0) {
+        fprintf(stderr, "PACK: EVE actor%d op23 camera pan count=%d stored=%d d=(%d,%d) (%d,%d)->(%d,%d) noop\n",
+                actor, count, cnt, vx, vy, ox, oy, ox, oy);
         return;
     }
-    // Shadow copy of the original convention: world = tile*size - fine, derived from the
-    // port's world on entry.
-    int otx = cam_tile_x_, oty = cam_tile_y_;
-    int ofx = -cam_fine_x_, ofy = -cam_fine_y_;
-    auto floor_div = [](int a, int b) {
-        int q = a / b, r = a - q * b;
-        if (r != 0 && ((r < 0) != (b < 0))) q--;
-        return q;
-    };
-    // Integrate one frame (sub_21E29 tail, Y then X). Wrapping is ignored.
-    auto integrate_once = [&]() {
-        // Y (PACK.LST 0002206B~000220E9)
-        {
-            int new_fy = ofy - vy;
-            if (vy > 0) {
-                // 000220AB path; the bound is a height guard (see the note above).
-                if (oty + 13 < (int)map_h_ - 1) {
-                    ofy = new_fy;
-                    if (ofy < -TOWN_TILE_H) { oty++; ofy = 0; }
-                }
-            } else {
-                if (oty >= 0) {
-                    ofy = new_fy;
-                    if (ofy > TOWN_TILE_H) { oty--; ofy = 0; }
-                }
-            }
-        }
-        // X (PACK.LST 000220E9~00022128)
-        {
-            int step = -vx;
-            int new_fx = ofx + step;
-            if (step > 0) {
-                if (otx >= 0) {
-                    ofx = new_fx;
-                    if (ofx > TOWN_TILE_W) { otx--; ofx = 0; }
-                }
-            } else {
-                if (otx + 12 < (int)map_w_) {
-                    ofx = new_fx;
-                    if (ofx < -TOWN_TILE_W) { otx++; ofx = 0; }
-                }
-            }
-        }
-    };
-    auto publish = [&]() {
-        int world_x = otx * TOWN_TILE_W - ofx;
-        int world_y = oty * TOWN_TILE_H - ofy;
-        int tx = floor_div(world_x, TOWN_TILE_W);
-        int ty = floor_div(world_y, TOWN_TILE_H);
-        int fx = world_x - tx * TOWN_TILE_W;
-        int fy = world_y - ty * TOWN_TILE_H;
-        cam_tile_x_ = tx;
-        cam_tile_y_ = ty;
-        cam_fine_x_ = fx;
-        cam_fine_y_ = fy;
-        if (cam_tile_x_ < 0) { cam_tile_x_ = 0; cam_fine_x_ = 0; }
-        if (cam_tile_y_ < 0) { cam_tile_y_ = 0; cam_fine_y_ = 0; }
-        if (map_w_ > 13 && cam_tile_x_ > (int)map_w_ - 13) { cam_tile_x_ = (int)map_w_ - 13; cam_fine_x_ = 0; }
-        if (map_h_ > 14 && cam_tile_y_ > (int)map_h_ - 14) { cam_tile_y_ = (int)map_h_ - 14; cam_fine_y_ = 0; }
-    };
-    if (auto_fast) {
-        // Integrate to the final world without rendering, keeping the log and timing.
-        for (int f = 0; f < count - 1; f++) {
+    // Keep the original camera representation across consecutive pans. Rebase only when
+    // the port camera no longer matches the shadow world (an external camera change).
+    if (!eve_pan_shadow_valid_ ||
+        eve_pan_shadow_tile_x_ * TOWN_TILE_W - eve_pan_shadow_fine_x_ !=
+            cam_tile_x_ * TOWN_TILE_W + cam_fine_x_ ||
+        eve_pan_shadow_tile_y_ * TOWN_TILE_H - eve_pan_shadow_fine_y_ !=
+            cam_tile_y_ * TOWN_TILE_H + cam_fine_y_) {
+        eve_pan_shadow_valid_ = true;
+        eve_pan_rebase_shadow();
+    }
+    if (dbg_env("G2_PACK_AUTO")) {
+        // Test fast path: consume the actor's counter immediately, without rendering and
+        // without waiting for the outer frame loop. The camera still integrates count - 1
+        // times and ends in the same state as the normal path.
+        for (int f = 0; f < cnt && st.pan_counter > 0; f++) {
             if (should_exit_) break;
-            integrate_once();
+            eve_camera_pan_tick(actor);
+            if (eve_pan_frame_active_) eve_camera_pan_apply_frame();
         }
-        publish();
-        // Publish handles the final clamp; fine is included in the log.
-        fprintf(stderr, "PACK: EVE op23 camera pan count=%d vel=(%d,%d) (%d,%d)->(%d,%d) fine=(%d,%d) [auto]\n",
-                count, vx, vy, ox, oy, cam_tile_x_, cam_tile_y_, cam_fine_x_, cam_fine_y_);
-        return;
     }
-    // Rendered path: draw count frames but integrate the camera only on the first count - 1
-    // (the last frame clears 15BA1A before sub_21E29 runs, loc_13AC9).
-    for (int f = 0; f < count; f++) {
-        if (should_exit_) break;
-        if (f < count - 1) {
-            integrate_once();
-            publish();
+}
+
+// One phase-2 turn for an actor's op23 camera pan (loc_13AC9). The original decrements
+// unk_7D7EF here and clears the global velocity when it reaches zero. The actual camera
+// integration is deferred to eve_camera_pan_apply_frame() so it runs once after all actors.
+bool Pack::eve_camera_pan_tick(int actor) {
+    if (actor < 0 || actor >= MAX_EVE_ACTORS) return false;
+    EveActorState& st = eve_actors_[actor];
+    if (st.pan_counter <= 0) return false;
+    --st.pan_counter;
+    if (st.pan_counter > 0) {
+        eve_pan_frame_active_ = true;
+        // loc_13AC9 copies the global word_7D88A/word_7D888 into 15BA1A on every tick.
+        eve_pan_frame_dx_ = eve_pan_vel_dx_;
+        eve_pan_frame_dy_ = eve_pan_vel_dy_;
+    } else {
+        // loc_13AC9 clears 15BA1A when the counter reaches zero. A finishing pan must
+        // clear an earlier actor's velocity too, matching the single global word.
+        eve_pan_frame_active_ = false;
+        eve_pan_frame_dx_ = eve_pan_frame_dy_ = 0;
+        fprintf(stderr, "PACK: EVE actor%d op23 camera pan count=%d vel=(%d,%d) (%d,%d)->(%d,%d) fine=(%d,%d)%s\n",
+                actor, st.pan_total, eve_pan_vel_dx_, eve_pan_vel_dy_,
+                st.pan_start_x, st.pan_start_y,
+                cam_tile_x_, cam_tile_y_, cam_fine_x_, cam_fine_y_,
+                dbg_env("G2_PACK_AUTO") ? " [auto]" : " smooth");
+    }
+    return true;
+}
+
+// sub_21E29 tail: integrate the camera once for the current EVE frame, Y before X. The
+// original runs this after sub_12857 has processed every actor turn, so the pan does not
+// block another actor's commands or movement.
+void Pack::eve_camera_pan_apply_frame() {
+    if (!eve_pan_shadow_valid_ || !eve_pan_frame_active_) return;
+    const int vx = eve_pan_frame_dx_, vy = eve_pan_frame_dy_;
+    // Y (PACK.LST 0002206B~000220E9)
+    {
+        int new_fy = eve_pan_shadow_fine_y_ - vy;
+        if (vy > 0) {
+            // 000220AB path; original map-height guard at 15BA1E (see the note above).
+            if (eve_pan_shadow_tile_y_ + 13 < (int)map_h_ - 1) {
+                eve_pan_shadow_fine_y_ = new_fy;
+                if (eve_pan_shadow_fine_y_ < -TOWN_TILE_H) {
+                    eve_pan_shadow_tile_y_++;
+                    eve_pan_shadow_fine_y_ = 0;
+                }
+            }
+        } else {
+            if (eve_pan_shadow_tile_y_ >= 0) {
+                eve_pan_shadow_fine_y_ = new_fy;
+                if (eve_pan_shadow_fine_y_ > TOWN_TILE_H) {
+                    eve_pan_shadow_tile_y_--;
+                    eve_pan_shadow_fine_y_ = 0;
+                }
+            }
         }
-        video_.clear();
-        render_town_frame();
-        video_.present();
-        pack_maybe_dump_shot(video_);
-        GameTimer::delay_with_pump(input_, 16);
     }
-    fprintf(stderr, "PACK: EVE op23 camera pan count=%d vel=(%d,%d) (%d,%d)->(%d,%d) fine=(%d,%d) smooth\n",
-            count, vx, vy, ox, oy, cam_tile_x_, cam_tile_y_, cam_fine_x_, cam_fine_y_);
+    // X (PACK.LST 000220E9~00022128)
+    {
+        int step = -vx;
+        int new_fx = eve_pan_shadow_fine_x_ + step;
+        if (step > 0) {
+            if (eve_pan_shadow_tile_x_ >= 0) {
+                eve_pan_shadow_fine_x_ = new_fx;
+                if (eve_pan_shadow_fine_x_ > TOWN_TILE_W) {
+                    eve_pan_shadow_tile_x_--;
+                    eve_pan_shadow_fine_x_ = 0;
+                }
+            }
+        } else {
+            if (eve_pan_shadow_tile_x_ + 12 < (int)map_w_) {
+                eve_pan_shadow_fine_x_ = new_fx;
+                if (eve_pan_shadow_fine_x_ < -TOWN_TILE_W) {
+                    eve_pan_shadow_tile_x_++;
+                    eve_pan_shadow_fine_x_ = 0;
+                }
+            }
+        }
+    }
+    eve_pan_publish_shadow();
+    // sub_21E29 returns at 00022167 without a post-integration clamp. The boundary
+    // checks above already reproduce its guards, including the one-tile overshoot that
+    // the original permits at the left/top and right/bottom edges.
+    eve_pan_frame_active_ = false;
 }
 
 bool Pack::get_eve_actor_screen_box(int actor, int& out_left, int& out_top,
@@ -3947,6 +4021,9 @@ void Pack::eve_op_warp(int new_town_id, int cam_x, int cam_y) {
         cam_tile_y_ = cam_y;
         cam_fine_x_ = 0;
         cam_fine_y_ = 0;
+        // An op18 warp replaces the camera while a pan may be active; sub_21E29 still
+        // integrates relative to the new camera fields, not the pre-warp shadow.
+        eve_pan_rebase_shadow();
         // The done markers survive the reload (unk_7FF9C is global, [town*40+idx]).
         // EVE cutscene actors also survive a warp: sub_20EB0 only frees the map layers
         // (15B9B4/15B9B0/15B9C8/15B9C4/15B9C0/15B9BC/15B9B8) and never touches
@@ -4007,6 +4084,10 @@ bool Pack::run_eve_script(int event_id) {
             // it runs phase 2 instead, before the next actor's turn.
             {
                 const EveActorState& st = eve_actors_[a];
+                if (st.pan_counter > 0) {
+                    moving |= eve_camera_pan_tick(a);
+                    continue;
+                }
                 if (st.move_counter > 0) {
                     moving |= eve_move_tick(a);
                     continue;
@@ -4253,7 +4334,7 @@ bool Pack::run_eve_script(int event_id) {
                         int cnt = (L >= 3) ? w[i + 2] : 0;
                         int dx = (L >= 4) ? w[i + 3] : 0;
                         int dy = (L >= 5) ? w[i + 4] : 0;
-                        eve_op_camera_pan(cnt, dx, dy);
+                        eve_op_camera_pan(a, cnt, dx, dy);
                         saw_visual = true;
                         break;
                     }
@@ -4270,7 +4351,11 @@ bool Pack::run_eve_script(int event_id) {
             // move started by this command already takes its first step in this turn.
             // Non-movement commands have counter == 0 and this is a no-op.
             moving |= eve_move_tick(a);
+            moving |= eve_camera_pan_tick(a);
         }
+        // sub_21E29 runs after the VM has processed every actor turn. Applying the
+        // accumulated op23 velocity here keeps other actors running during a camera pan.
+        if (eve_pan_frame_active_) eve_camera_pan_apply_frame();
         if (eve_auto_fast) continue; // skip rendering and animation after the teleport
         if (should_exit_) break;
         // The sub_13B8D frame loop runs sub_12857 (VM), sub_21D70 (tile animation),
