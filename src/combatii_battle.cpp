@@ -8639,6 +8639,7 @@ void CombatII::battle_item_3c12d(int unit_index) {
     u.anim_frame = 0;                                    // mov byte [esi+64h],0
     u.active = false;                                    // sub_11EE4 + sub_1137A + sub_1134F(D6620) + 119B6
     battle_wc1_occupancy_preserve_or_close("wish to win removal");
+    battle_roster_copy_113e4(u);                         // sub_113E4 (after 1137A/1134F)
     present_cutscene_frame();
     run_morale_trigger();                                // sub_53E0F
     if (should_exit_) return;
