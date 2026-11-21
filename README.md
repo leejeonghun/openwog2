@@ -11,7 +11,7 @@
 <img width="320" height="200" alt="screenshot_20261104_234126" src="https://github.com/user-attachments/assets/ebeb316f-e4a8-40d5-b299-a591558bc08c" />
 <img width="320" height="200" alt="screenshot_20261104_234624" src="https://github.com/user-attachments/assets/c04e858c-7fed-4e02-8ab0-33f695e5011c" />
 <img width="320" height="200" alt="asura" src="https://github.com/user-attachments/assets/8d35cbf6-5389-49cc-b952-725a0d818c00" />
-<img width="320" height="200" alt="f-quake" src="https://github.com/user-attachments/assets/51d5a235-9050-4431-a6fb-f42ebfb221ec" />
+<img width="320" height="200" alt="f-quake" src="https://github.com/user-attachments/assets/a739e8a0-638d-4584-9938-415df7a6624f" />
 
 **openwog2** is an open-source C++/SDL2 reimplementation of the game engine of the classic Korean MS-DOS SRPG **The War of Genesis II (창세기전 2)**, made for modern-platform compatibility and preservation. It is an engine only and cannot run without the original game files.
 
