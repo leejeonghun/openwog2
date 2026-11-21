@@ -631,21 +631,14 @@ CombatII::VmResult CombatII::run_vm(uint32_t offset) {
             ev.cam_mode = mode;
             bool emit = true;
             if (mode == 3) {
-                // sub_52940: unit.x-6 / unit.y-6, clamped to (map limit - 12)
-                int ui = find_unit_index(b, cc);
-                if (ui >= 0) {
-                    int tx = units_[(size_t)ui].x - 6;
-                    int ty = units_[(size_t)ui].y - 6;
-                    int maxx = (int)map_w_ - 12; if (maxx < 0) maxx = 0;
-                    int maxy = (int)map_h_ - 12; if (maxy < 0) maxy = 0;
-                    if (tx < 0) tx = 0; if (tx > maxx) tx = maxx;
-                    if (ty < 0) ty = 0; if (ty > maxy) ty = maxy;
-                    ev.type = VmEventType::CameraUnit;
-                    ev.cam_x = tx; ev.cam_y = ty; ev.cam_speed = dd;
-                } else {
-                    // Without a unit the original jumps straight to loc_52B45 (no effect).
-                    emit = false;
-                }
+                // sub_52940 calls sub_501BA(B, C) when the command runs, so the unit may have
+                // moved through an earlier 0x03/0x05 walk. Keep the reference and compute
+                // x-6/y-6 (clamped to map limit - 12) at playback.
+                ev.type = VmEventType::CameraUnit;
+                ev.unit_ref_sel = b; ev.unit_ref_id = cc;
+                ev.cam_speed = dd;
+                // sub_501BA uses dword_11024C at execution; keep the parse-time forced target.
+                ev.forced_target_context = script_forced_target_;
             } else if (mode == 2) {
                 // loc_52AA0: B (var_4) is the wait count (0 = until sub_5046B finishes)
                 ev.type = VmEventType::CameraWait;
@@ -693,10 +686,15 @@ CombatII::VmResult CombatII::run_vm(uint32_t offset) {
             uint8_t val = c.u8();
             if (!c.ok) { abort_range(); break; }
             if (cmd == VM_BGM) {
-                battle_sfx_id_ = val;                    // byte_FF0B8
-                // sub_52DA4 first calls sub_5CD0D(0) and sub_4F3BD; both only touch the
-                // SB/CD layer (no sample bank in this port), so only 4F427's guard is modeled.
-                battle_sfx_preview_4f427();
+                // sub_52DA4 runs when the VM reaches the command, not when the block is scanned.
+                // Defer it to playback: scan_script_blocks() also calls run_vm() for display-only
+                // blocks, and starting the sample there would play it during the scan. Playback
+                // also keeps the sound in command order relative to dialogue/camera events.
+                VmEvent ev;
+                ev.type = VmEventType::Bgm;
+                ev.offset = op_pos;
+                ev.value = val;                      // byte_FF0B8
+                r.events.push_back(std::move(ev));
             } else {
                 battle_bgm_active_ = false;              // sub_5AF1B: unconditional CD stop
                 battle_bgm_id_ = val;                    // byte_FF0B7
@@ -774,12 +772,15 @@ CombatII::VmResult CombatII::run_vm(uint32_t offset) {
             VmEvent ev; ev.offset = op_pos;
             int entries = 0;
             bool unit_missing = false;
+            uint8_t attacker_sel = 0, attacker_idx = 0;
             while (entries < 2) {
                 if (!script_in_range(c.off, 3)) { abort_range(); break; }
                 uint8_t sel = c.u8(), idx = c.u8(), mode = c.u8();
+                if (entries == 0) { attacker_sel = sel; attacker_idx = idx; }
                 int ui = find_unit_index(sel, idx);
                 // loc_51C8F: after sel/idx (esi=+2) a missing unit does `lea eax,[esi+1]`,
-                // consuming only the 3 bytes up to mode.
+                // consuming only the 3 bytes up to mode. The unit list is stateful, so the
+                // reference is resolved again at playback; ui is only the parse-time hint.
                 if (ui < 0) { unit_missing = true; break; }
                 if (entries == 0) {
                     ev.attacker_unit = ui; ev.attacker_mode = mode;
@@ -790,7 +791,7 @@ CombatII::VmResult CombatII::run_vm(uint32_t offset) {
                     if (mode < 2 || mode > 0x32) {                   // loc_51D16
                         c.off -= 3; break;
                     }
-                    VmAttackTarget t; t.unit_index = ui; t.mode = mode;
+                    VmAttackTarget t; t.unit_index = ui; t.ref_sel = sel; t.ref_id = idx; t.mode = mode;
                     t.result = (mode == 2) ? 1 : (mode == 3) ? 2 : -1;   // loc_51D63 word_F0430[i]
                     ev.attack_targets.push_back(t);
                 }
@@ -806,21 +807,27 @@ CombatII::VmResult CombatII::run_vm(uint32_t offset) {
                 r.abort_opcode = op;
                 break;
             }
-            if (unit_missing || ev.attacker_unit < 0) {
-                if (script_trace_)
-                    fprintf(stderr, "COMBAT: warning: vm event-combat: unit not found -> off 0x%X\n", c.off);
-                break;
-            }
+            // sub_51C74 resolves each record with sub_501BA while executing. Emit the event even
+            // when the parse-time list has no match; playback resolves the same references and
+            // sub_51C74 does nothing when the unit is still absent.
+            ev.attacker_ref_sel = attacker_sel;
+            ev.attacker_ref_id = attacker_idx;
+            ev.forced_target_context = script_forced_target_;
             ev.type = (ev.attack_targets.empty() && ev.attacker_mode >= 2)
                           ? VmEventType::UnitPose                    // loc_51E34
                           : VmEventType::Attack;                     // loc_51DFE / loc_51E0F
             if (script_trace_) {
-                const auto& a = units_[(size_t)ev.attacker_unit];
-                fprintf(stderr, "COMBAT: vm event-combat attacker=unit %d (type %d, mode %d) targets=%zu",
-                        a.id, a.sprite_type, ev.attacker_mode, ev.attack_targets.size());
-                for (const auto& t : ev.attack_targets)
-                    fprintf(stderr, " [unit %d mode %d -> %s]", units_[(size_t)t.unit_index].id, t.mode,
-                            t.result == 1 ? "guard" : t.result == 2 ? "dodge" : "hit");
+                if (ev.attacker_unit >= 0) {
+                    const auto& a = units_[(size_t)ev.attacker_unit];
+                    fprintf(stderr, "COMBAT: vm event-combat attacker=unit %d (type %d, mode %d) targets=%zu",
+                            a.id, a.sprite_type, ev.attacker_mode, ev.attack_targets.size());
+                    for (const auto& t : ev.attack_targets)
+                        fprintf(stderr, " [unit %d mode %d -> %s]", units_[(size_t)t.unit_index].id, t.mode,
+                                t.result == 1 ? "guard" : t.result == 2 ? "dodge" : "hit");
+                } else {
+                    fprintf(stderr, "COMBAT: vm event-combat attacker=(%u,%u) unresolved at parse (deferred), mode %d targets=%zu",
+                            attacker_sel, attacker_idx, ev.attacker_mode, ev.attack_targets.size());
+                }
                 fprintf(stderr, " -> off 0x%X\n", c.off);
             }
             r.events.push_back(std::move(ev));
@@ -851,8 +858,9 @@ CombatII::VmResult CombatII::run_vm(uint32_t offset) {
             if (sub == 5) extra = c.u8(); // extra read at loc_520E0
             else c.skip(1);                // loc_52115 inc ebp: consume the fourth byte
             if (!c.ok) { abort_range(); break; }
-            // sub_51FF7: a missing unit does nothing. Subcommands 5/6 (clone/transform)
-            // change the list, so they close the WC1 occupancy gate.
+            // sub_51FF7 resolves the unit with sub_501BA when the command executes; a missing
+            // unit does nothing. Subcommands 5/6 (clone/transform) change the list, so they
+            // close the WC1 occupancy gate.
             const int ui = find_unit_index(sel, idx);
             if (sub == 5 || sub == 6) {
                 VmEvent occupancy_event;
@@ -862,9 +870,11 @@ CombatII::VmResult CombatII::run_vm(uint32_t offset) {
                                                   "VM 0x09 subcmd 6 clone/list insertion";
                 r.events.push_back(std::move(occupancy_event));
             }
-            if (ui >= 0 && sub <= 6) {
+            if (sub <= 6) {
                 VmEvent ev; ev.type = VmEventType::UnitEffect; ev.offset = op_pos;
                 ev.hp_unit = ui; ev.value = sub; ev.army = extra;
+                ev.unit_ref_sel = sel; ev.unit_ref_id = idx;
+                ev.forced_target_context = script_forced_target_;
                 r.events.push_back(std::move(ev));
             }
             if (script_trace_)
@@ -883,12 +893,14 @@ CombatII::VmResult CombatII::run_vm(uint32_t offset) {
             // (sub_45BFB) plus knockback (sub_45ED2, direction = tail), and death when HP
             // drops to 0 within 25 frames. The port applies HP and effects in the same order
             // at playback (play_hp_change), matching the synchronous original handler.
+            // sub_501BA runs when the command executes (the original resolves the target after
+            // every preceding command of the block has played), so only the reference is kept.
             int ui = find_unit_index(sel, idx);
-            if (ui >= 0) {
-                VmEvent ev; ev.type = VmEventType::Hp; ev.offset = op_pos;
-                ev.hp_unit = ui; ev.hp_delta = delta; ev.hp_dir = tail;
-                r.events.push_back(std::move(ev));
-            }
+            VmEvent ev; ev.type = VmEventType::Hp; ev.offset = op_pos;
+            ev.hp_unit = ui; ev.hp_delta = delta; ev.hp_dir = tail;
+            ev.unit_ref_sel = sel; ev.unit_ref_id = idx;
+            ev.forced_target_context = script_forced_target_;
+            r.events.push_back(std::move(ev));
             if (script_trace_)
                 fprintf(stderr, "COMBAT: vm hp (%u,%u) delta=%d dir=%u -> unit %d hp=%d%s\n",
                         sel, idx, delta, tail, ui >= 0 ? units_[(size_t)ui].id : -1,
@@ -1455,6 +1467,11 @@ CombatII::VmResult CombatII::run_vm(uint32_t offset) {
                     VmWalkUnit wu;
                     wu.unit_index = spawn_idx;
                     wu.load = script_buffer_[load_off];
+                    wu.count2 = (int)count2;
+                    // sub_16D3E reads unk_E5210[0] as its first target, so the first tile move
+                    // is spawn(x,y) -> path[0]. The payload coordinates are that start point;
+                    // sub_51211 copies only the count2-1 rows into the path.
+                    wu.path.push_back({ nu.x, nu.y });
                     const uint32_t pts = (uint32_t)(count2 - 1);
                     for (uint32_t k = 0; k < pts; ++k) {
                         const size_t q = (size_t)load_off + 4u + (size_t)k * 2u;
@@ -1479,6 +1496,10 @@ CombatII::VmResult CombatII::run_vm(uint32_t offset) {
                     wu.load = script_buffer_[load_off];
                     wu.drop = 1;
                     wu.spawn_delay = (int)count1;
+                    wu.count2 = (int)count2;
+                    // word_EDD74 = (count2-1) - unk_E5A50 + 2 with unk_E5A50 = -count1.
+                    if (sev.walk_frames < (int)count2 + (int)count1 + 1)
+                        sev.walk_frames = (int)count2 + (int)count1 + 1;
                     sev.walk_units.push_back(std::move(wu));
                 }
                 if (term == 3) { cur = p; continue; }   // loc_50DD4
@@ -2607,13 +2628,11 @@ void CombatII::play_spawn_fall(const VmEvent& ev) {
 
     // unk_E5A50 starts at -count1 and increments every even frame; 0..7 renders the drop
     // (sub_50216), negative values draw nothing, and 8 is the landing (sub_11F74 dust; the pose is
-    // kept and [64h] is not cleared). Total frames = 2*EDD74+1 with EDD74 = max(2*count1+1)+8
-    // (the per-group var_14 maximum).
-    // Deviation: the K==0 walk-start delay (count1+1 even frames) does not occur in 1-5 and is
-    // not ported.
+    // kept and [64h] is not cleared). sub_508E6 sets EDD74 = max(var_14)+8 with
+    // var_14 = (count2-1) - (-count1) + 2 = count2 + count1 + 1, then runs 2*EDD74+1 frames.
     int max_var14 = 1;
     for (const auto& w : ev.walk_units)
-        max_var14 = std::max(max_var14, 2 * w.spawn_delay + 1);
+        max_var14 = std::max(max_var14, w.count2 + w.spawn_delay + 1);
     for (auto& w : ev.walk_units) {
         CombatUnitPlacement* u = unit_at(w.unit_index);
         if (!u) continue;
@@ -3308,8 +3327,10 @@ VmEvent CombatII::battle_spawn_subevent(const VmEvent& ev, const std::vector<int
         if (std::find(units.begin(), units.end(), w.unit_index) == units.end()) continue;
         out.walk_units.push_back(w);
         if (ev.spawn_mode == 0 && !w.path.empty())
+            // K==0 paths now carry the spawn tile first, so path.size() == count2 and
+            // word_EDD74 = (count2-1) + count1 + 2 = path.size() + count1 + 1.
             out.walk_frames = std::max(out.walk_frames,
-                                       (int)w.path.size() + w.spawn_delay + 2);   // word_EDD74
+                                       (int)w.path.size() + w.spawn_delay + 1);   // word_EDD74
     }
     if (ev.spawn_mode != 0) out.walk_frames = ev.walk_frames;
     return out;
@@ -3495,20 +3516,38 @@ void CombatII::play_vm_events(const std::vector<VmEvent>& events) {
         }
         case VmEventType::CameraScroll:
         case VmEventType::CameraUnit: {
+            // sub_52940 mode 3 resolves (B, C) with sub_501BA when the command runs and targets
+            // unit.x-6 / unit.y-6 (clamped to map size - 12); the unit may have moved since the
+            // script was scanned. Without a unit it jumps to loc_52B45 (no effect).
+            VmEvent cam_ev = ev;
+            if (ev.type == VmEventType::CameraUnit) {
+                const int ci = resolve_vm_unit_ref(ev.unit_ref_sel, ev.unit_ref_id,
+                                                   ev.forced_target_context);
+                if (ci < 0 || (size_t)ci >= units_.size()) break;
+                int tx = (int)(int8_t)units_[(size_t)ci].x - 6;
+                int ty = (int)(int8_t)units_[(size_t)ci].y - 6;
+                int maxx = (int)map_w_ - 12; if (maxx < 0) maxx = 0;
+                int maxy = (int)map_h_ - 12; if (maxy < 0) maxy = 0;
+                if (tx < 0) tx = 0;
+                if (tx > maxx) tx = maxx;
+                if (ty < 0) ty = 0;
+                if (ty > maxy) ty = maxy;
+                cam_ev.cam_x = tx; cam_ev.cam_y = ty;
+            }
             if (camera_fully_scrolling()) {
                 // loc_52A2C: when both the X and Y frames are nonzero the update is queued instead
                 // of
                 // applied at once (up to 16 entries, until the read index catches up). loc_5050D
                 // pops
                 // them one at a time.
-                cam_waypoints_.push_back({ ev.cam_mode, ev.cam_x, ev.cam_y, ev.cam_speed });
+                cam_waypoints_.push_back({ cam_ev.cam_mode, cam_ev.cam_x, cam_ev.cam_y, cam_ev.cam_speed });
                 fprintf(stderr, "COMBAT: play camera queue -> (%d,%d) speed=%d mode=%d (%zu queued) [cur tile=(%d,%d) frames=%d/%d]\n",
-                        ev.cam_x, ev.cam_y, ev.cam_speed, ev.cam_mode, cam_waypoints_.size(),
+                        cam_ev.cam_x, cam_ev.cam_y, cam_ev.cam_speed, cam_ev.cam_mode, cam_waypoints_.size(),
                         cam_tile_x_, cam_tile_y_, (int)cam_scroll_frames_x_, (int)cam_scroll_frames_y_);
             } else {
-                camera_setup(ev.cam_mode, ev.cam_x, ev.cam_y, ev.cam_speed);
+                camera_setup(cam_ev.cam_mode, cam_ev.cam_x, cam_ev.cam_y, cam_ev.cam_speed);
                 fprintf(stderr, "COMBAT: play camera start -> (%d,%d) speed=%d mode=%d%s (frames %d/%d)\n",
-                        ev.cam_x, ev.cam_y, ev.cam_speed, ev.cam_mode,
+                        cam_ev.cam_x, cam_ev.cam_y, cam_ev.cam_speed, cam_ev.cam_mode,
                         ev.type == VmEventType::CameraUnit ? " [unit]" : "",
                         (int)cam_scroll_frames_x_, (int)cam_scroll_frames_y_);
             }
@@ -3822,7 +3861,6 @@ void CombatII::play_vm_events(const std::vector<VmEvent>& events) {
                     dst->max_hp = maxraw > 0 ? (int)((maxraw + 99) / 100) : 0;
                     dst->max_hp_deficit = dst->max_hp * 100 - maxraw;
                     if (dst->max_hp_deficit < 0) dst->max_hp_deficit = 0;
-                    dst->combat_mp_50 = (uint16_t)(rec[0x50] | (rec[0x51] << 8));
                     dst->combat_mp_max_52 = (uint16_t)(rec[0x52] | (rec[0x53] << 8));
                     dst->combat_value_54 = (int16_t)(rec[0x54] | (rec[0x55] << 8));
                     if (linked) {
@@ -3849,10 +3887,22 @@ void CombatII::play_vm_events(const std::vector<VmEvent>& events) {
                 } else {
                     unit.sprite_type = (int)rec[0] | ((int)rec[1] << 8);
                 }
-                unit.slot_hint = battle_image_slot(unit.sprite_type); // [60h] = sub_1198D([61h])
                 unit.sprite_id = (uint8_t)(unit.sprite_type % 222);
-                if (unit.stored_77)                            // loc_526B2: [77h]+60h = dl
-                    unit.stored_77->slot_hint = unit.slot_hint;
+                if (ev.value == 2) {
+                    // loc_5267C: with no link [60h] = sub_1198D(word [61h]); with a link
+                    // sub_11B77 maps the *link's* [61h] through the form table (+1F4, cwde) and
+                    // writes only [link+60h]. The unit's own [60h] is left alone.
+                    if (!unit.stored_77) {
+                        unit.slot_hint = battle_image_slot((int16_t)(uint16_t)unit.sprite_type);
+                    } else {
+                        const int mapped = battle_rider_image_type(unit);
+                        unit.stored_77->slot_hint = (mapped >= 0) ? battle_image_slot(mapped) : 0;
+                    }
+                } else {
+                    // loc_5270B (action 4): always the unit's own [60h]; no link write.
+                    // The original reads [unit+5Fh] with `sar 10h`, i.e. a signed word.
+                    unit.slot_hint = battle_image_slot((int16_t)(uint16_t)unit.sprite_type);
+                }
                 if (ev.value == 4) {                          // [48h]=[4Ch] full HP restore
                     unit.hp = unit.max_hp;
                     unit.hp_deficit = unit.max_hp_deficit;
@@ -3899,6 +3949,14 @@ void CombatII::play_vm_events(const std::vector<VmEvent>& events) {
             }
             present_cutscene_frame();
             break;
+        case VmEventType::Bgm:
+            // sub_52DA4: byte_FF0B8 = value, sub_5CD0D(0) + sub_4F3BD (off_75480 sample
+            // load/start), then sub_4F427's word_FDAE6 gate. Deferred from parse time so a
+            // display-only block scan does not start the sample.
+            battle_sfx_id_ = ev.value;               // byte_FF0B8
+            battle_sfx_start_4f3bd();
+            battle_sfx_preview_4f427();
+            break;
         case VmEventType::NextScenario:
             fprintf(stderr, "COMBAT: play next scenario '%s'\n", ev.text.c_str());
             // loc_53002 -> sub_52D33 literally: cleanup/save -> fade-out -> contmap.dat -> exit(1).
@@ -3906,14 +3964,28 @@ void CombatII::play_vm_events(const std::vector<VmEvent>& events) {
             vm_next_scenario_52d33(ev.text);
             return;
         case VmEventType::Attack:
-            // sub_51C74 loc_51DFE/loc_51E0F: sub_1E61D (attacker) [+ sub_1EF5C]
-            play_attack_sequence(ev);
+        case VmEventType::UnitPose: {
+            // sub_51C74 resolves the attacker and each target with sub_501BA when the command
+            // runs. A missing attacker leaves `lea eax,[esi+1]` (no animation), so do nothing.
+            const int ai = resolve_vm_unit_ref(ev.attacker_ref_sel, ev.attacker_ref_id,
+                                               ev.forced_target_context);
+            if (ai < 0 || (size_t)ai >= units_.size()) break;
+            VmEvent combat = ev;
+            combat.attacker_unit = ai;
+            combat.attack_targets.clear();
+            for (const VmAttackTarget& t : ev.attack_targets) {
+                const int ti = resolve_vm_unit_ref(t.ref_sel, t.ref_id, ev.forced_target_context);
+                if (ti < 0 || (size_t)ti >= units_.size()) continue;
+                VmAttackTarget rt = t;
+                rt.unit_index = ti;
+                combat.attack_targets.push_back(rt);
+            }
+            // loc_51DFE/loc_51E0F: sub_1E61D (attacker) [+ sub_1EF5C]; loc_51E34: pose.
+            if (ev.type == VmEventType::Attack) play_attack_sequence(combat);
+            else play_unit_pose(combat);
             if (should_exit_) return;
             break;
-        case VmEventType::UnitPose:
-            play_unit_pose(ev);                        // loc_51E34
-            if (should_exit_) return;
-            break;
+        }
         case VmEventType::Item: {
             // sub_5196F: kind 0 stores the item, kinds 1..3 equip it (weapon / shield /
             // accessory). A failed equip goes to the first free backpack slot; when both are
@@ -3960,13 +4032,21 @@ void CombatII::play_vm_events(const std::vector<VmEvent>& events) {
                 static const char kEquipWeapon[] = "\xB5\xA1\x9F\x65\xAD\xA5 \xB8\x77\xC0\x62!"; // 오른손 장착!
                 static const char kEquipShield[] = "\xB6\x45\xAD\xA5 \xB8\x77\xC0\x62!";         // 왼손 장착!
                 static const char kEquipAccessory[] = "\xA5\xA1\xB9\xA1\x8A\x81\x9D\xA1 \xB8\x77\xC0\x62!"; // 보조구로 장착!
-                // VA 0x78000: "배낭에 보관\n있던 ITEM은 창고에 보관" (sub_5196F+266)
+                // VA 0x77FCC: "창고에 보관." (kind 0)
+                static const char kWibAEbi[] = "\xC0\x77\x89\xA1\xB5\x41\x20\xA5\xA1\x89\xC5.";
+                // VA 0x78024: "배낭에 보관" (stored in [5Eh]/[5Fh])
+                static const char kBagStore[] = "\xA4\x81\x90\x77\xB5\x41\x20\xA5\xA1\x89\xC5";
+                // VA 0x78000: "배낭에 보관\n있던 ITEM은 창고에 보관" (both slots full)
                 static const char kBagKeep[] = "\xA4\x81\x90\x77\xB5\x41\x20\xA5\xA1\x89\xC5\x0A\xB7\xB6\x94\xE5\x20\x49\x54\x45\x4D\xB7\x65\x20\xC0\x77\x89\xA1\xB5\x41\x20\xA5\xA1\x89\xC5";
                 auto& iu = units_[(size_t)ui];
+                // loc_519E1 appends " 획득!\n" to the item name before the kind switch; every
+                // branch then appends its own line (a failed equip falls through to the backpack
+                // path with the same buffer).
                 std::string msg;
+                if (ev.item_kind <= 3) msg = name + kGot;
                 if (ev.item_kind == 0) {
                     battle_stash_add(ev.item_id);                              // sub_4ECE4
-                    msg = name + kGot;
+                    msg += kWibAEbi;
                 } else if (ev.item_kind >= 1 && ev.item_kind <= 3) {
                     const int sk = ev.item_kind == 1 ? 1 : (ev.item_kind == 2 ? 0 : 2);
                     if (battle_equip_check(ui, ev.item_id, sk)) {              // sub_1832D
@@ -3977,18 +4057,18 @@ void CombatII::play_vm_events(const std::vector<VmEvent>& events) {
                             battle_equip_remove(ui, sk);                       // sub_18262
                         }
                         battle_equip_apply(ui, ev.item_id, sk);                // sub_181A6
-                        msg = name + (ev.item_kind == 1 ? kEquipWeapon
-                                   : ev.item_kind == 2 ? kEquipShield : kEquipAccessory);
+                        msg += (ev.item_kind == 1 ? kEquipWeapon
+                              : ev.item_kind == 2 ? kEquipShield : kEquipAccessory);
                     } else if (iu.inv_5e == 0) {
                         iu.inv_5e = ev.item_id;
-                        msg = name + kGot;
+                        msg += kBagStore;                                      // loc_51C1E
                     } else if (iu.inv_5f == 0) {
                         iu.inv_5f = ev.item_id;
-                        msg = name + kGot;
+                        msg += kBagStore;
                     } else {
-                        battle_stash_add(iu.inv_5f);
+                        battle_stash_add(iu.inv_5f);                           // loc_51BDE
                         iu.inv_5f = ev.item_id;
-                        msg = name + kBagKeep;
+                        msg += kBagKeep;
                     }
                 }
                 if (!msg.empty()) battle_unit_message(ui, msg);                 // sub_482A5
@@ -3996,23 +4076,34 @@ void CombatII::play_vm_events(const std::vector<VmEvent>& events) {
             if (should_exit_) return;
             break;
         }
-        case VmEventType::UnitEffect:
-            play_unit_effect(ev);                      // sub_51FF7
+        case VmEventType::UnitEffect: {
+            // sub_51FF7 resolves the target with sub_501BA when the command runs; a missing
+            // unit jumps to loc_52115 without dispatching a subcommand.
+            const int ui = resolve_vm_unit_ref(ev.unit_ref_sel, ev.unit_ref_id,
+                                               ev.forced_target_context);
+            if (ui < 0 || (size_t)ui >= units_.size()) break;
+            VmEvent eff = ev;
+            eff.hp_unit = ui;
+            play_unit_effect(eff);                     // sub_51FF7
             if (should_exit_) return;
             break;
-        case VmEventType::Hp:
-            // sub_5211D resolves the unit and calls sub_1124A before the delta branches; the
-            // target tile is centred before the death/heal/damage presentation. Kept here (not
-            // inside play_hp_change) because the attack/spell paths reuse play_hp_change for the
-            // 45BFB/45ED2 presentation without going through sub_5211D.
-            // sub_5211D reaches sub_1124A only when sub_501BA still resolves a battle-list unit.
-            if (ev.hp_unit >= 0 && (size_t)ev.hp_unit < units_.size() &&
-                units_[(size_t)ev.hp_unit].active)
-                camera_center_on((int)(int8_t)units_[(size_t)ev.hp_unit].x,
-                                 (int)(int8_t)units_[(size_t)ev.hp_unit].y);
-            play_hp_change(ev);                        // sub_5211D
+        }
+        case VmEventType::Hp: {
+            // sub_5211D resolves the unit with sub_501BA when the command runs and calls
+            // sub_1124A before the delta branches. The reference is resolved here so a unit
+            // added/changed by an earlier command of the same block is the one affected.
+            const int ui = resolve_vm_unit_ref(ev.unit_ref_sel, ev.unit_ref_id,
+                                               ev.forced_target_context);
+            if (ui < 0 || (size_t)ui >= units_.size()) break;   // test ecx,ecx / jz loc_522A0
+            VmEvent hp = ev;
+            hp.hp_unit = ui;
+            if (units_[(size_t)ui].active)
+                camera_center_on((int)(int8_t)units_[(size_t)ui].x,
+                                 (int)(int8_t)units_[(size_t)ui].y);
+            play_hp_change(hp);                        // sub_5211D
             if (should_exit_) return;
             break;
+        }
         case VmEventType::UnitLeave: {
             if (!ev.leave_units.empty())
                 battle_wc1_occupancy_unknown("VM 0x04 retreat/removal", ev.offset); // defensive if a parser marker is absent

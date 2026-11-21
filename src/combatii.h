@@ -267,7 +267,7 @@ enum class VmEventType {
     Faction,        // 0x0C act=0 change a unit's army
     Flag,           // 0x11 scenario flag
     Weather,        // 0x71
-    Bgm,            // 0x77 / 0x13
+    Bgm,            // 0x77 (deferred to playback; 0x13 stays a parse-time state change)
     NextScenario,   // 0x12 load the next .SCE
     Victory,        // 0x01 sub_506F3 -> sub_44CCA fade out, then end the module
     Choice,         // 0x65 sub_50751: battle result menu / contmap handoff
@@ -289,10 +289,12 @@ enum class VmEventType {
 
 // One 0x07 target (dword_F0648[i] + word_F0430[i]).
 struct VmAttackTarget {
-    int unit_index = -1;
+    int unit_index = -1;                   // parse-time hint; play_vm_events resolves ref_sel/ref_id
     int mode = 0;      // script byte (2..0x32)
     int result = -1;   // word_F0430[i]: mode 2 -> 1 (block: sub_4609A), mode 3 -> 2 (dodge: sub_461C6),
                        //                 otherwise -> -1 (hit: sub_45ED2)
+    // Kept last so the tactical attack paths' aggregate initializers {unit, mode, result} stay valid.
+    uint8_t ref_sel = 0, ref_id = 0;       // [sel][idx] of the target record
 };
 // One unit handled by a single sub_516D0 (0x05) command. The original stores a unit pointer in
 // dword_F0648[record], the load in unk_E5AD0[record] and the path in unk_E5210[record*64], then
@@ -308,6 +310,9 @@ struct VmWalkUnit {
     // sub_16D3E (K==0 walk) and sub_508E6 (K==1 drop) both wait out that negative counter.
     // 0 = start immediately.
     int spawn_delay = 0;
+    // Count2 as read from the spawn payload (the number of tile rows). K==1 uses it in
+    // sub_508E6's var_14 = count2 + count1 + 1, which decides the drop's total frame count.
+    int count2 = 0;
 };
 struct VmEvent {
     VmEventType type = VmEventType::Message;
@@ -370,7 +375,8 @@ struct VmEvent {
     int spawn_steps = 0;
     std::vector<int> spawn_units; // all units activated by this 0x03 event (walk_units holds only the effect targets)
     // Attack / UnitPose (0x07 sub_51C74)
-    int attacker_unit = -1;               // edi - unit of the first record
+    int attacker_unit = -1;               // parse-time hint; playback resolves attacker_ref_sel/id
+    uint8_t attacker_ref_sel = 0, attacker_ref_id = 0; // [sel][idx] of the attacker record
     int attacker_mode = 0;                // var_14[0] - 0 normal, 1 -> dword_F0B8A+2=1 (special/skill), >=2 -> pose
     std::vector<VmAttackTarget> attack_targets;
     // Hp (0x0A sub_5211D)
@@ -2651,6 +2657,7 @@ private:
     int  battle_system_menu_4e0ee(int no_saveload = 0); // sub_4E0EE (ESC menu; a non-zero argument disables QUICK SAVE/LOAD). 2 = quick load, 7 = restart, 8 = title, -1 = cancel
     void battle_music_start_4f369();      // sub_4F369: restart BGM (state-only CD layer)
     void battle_music_stop_4f3ae();       // sub_4F3AE: stop BGM
+    void battle_sfx_start_4f3bd();        // sub_4F3BD: start the SFX sample (off_75480[byte_FF0B8])
     void battle_sfx_preview_4f427();      // sub_4F427: start the preview SFX
     void battle_sfx_stop_4f450();         // sub_4F450: stop SFX channel 0
     bool battle_quick_save_4f4ef();       // sub_4F4EF: genesis.qsv
