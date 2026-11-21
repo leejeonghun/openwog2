@@ -454,6 +454,8 @@ void Pack::status_slide_back(int sel, bool from_item_list) {
 
 // ==== sub_32315: right-click status window ====
 void Pack::status_window() {
+    // sub_32315 is outside sub_190A3; the direction cursor is not drawn here.
+    video_.cursor_use_default();
     load_item_data();
     load_shop_assets();
     status_load_assets();

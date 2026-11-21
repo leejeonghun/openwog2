@@ -304,7 +304,7 @@ int Pack::run_yes_no(const std::vector<uint8_t>& base) {
 // Returns a screen snapshot used as the base for redrawing the button labels.
 std::vector<uint8_t> Pack::draw_confirm_screen(int item1, const char* name, int price, const char* prompt) {
     video_.clear();
-    render_town_frame();
+    render_town_frame(false);
     load_shop_assets();
 
     char pstr[24];
@@ -569,7 +569,7 @@ bool Pack::warp_to_town(int new_town_id) {
 
 void Pack::handle_inn(int talk_id) {
     video_.clear();
-    render_town_frame();
+    render_town_frame(false);
     shop_grab_screen();                                   // sub_2B3DC: unk_172224
     load_shop_assets();
 
@@ -637,7 +637,7 @@ void Pack::handle_inn(int talk_id) {
 void Pack::shop_bubble(int npc_idx, int portrait_id, const char* name,
                        const char* l1, const char* l2, const char* l3) {
     video_.clear();
-    render_town_frame();
+    render_town_frame(false);
     shop_grab_screen();
     DialogPlacement dp;
     const bool ok = npc_idx < 0 ? compute_dialog_placement_for_player(dp) : compute_dialog_placement(npc_idx, dp);
@@ -724,7 +724,7 @@ int Pack::hire_merc(int npc_idx, int id) {
 
     // Step 1: name/class and the "hire this mercenary?" prompt
     video_.clear();
-    render_town_frame();
+    render_town_frame(false);
     shop_grab_screen();
     load_shop_assets();
     render_dim_band(0x4A, 0xA0);
@@ -866,7 +866,7 @@ int Pack::rejoin_member(int npc_idx, int member) {
     const uint8_t* lead = pidx < (int)party.size() ? chr_raw(party[pidx]) : zero_rec;
 
     video_.clear();
-    render_town_frame();
+    render_town_frame(false);
     shop_grab_screen();
     load_shop_assets();
     if (party.size() >= 0x5A) {
@@ -1059,6 +1059,8 @@ int Pack::confirm_box(const char* msg) {
 // toggle by clicking the left (0) or right (1) area; the bottom-left button returns to the
 // game and the bottom-right one asks "quit?", writes cstldata\MENU and exits with "EXIT".
 void Pack::handle_options_menu() {
+    // sub_34B92 is outside sub_190A3; the direction cursor is not drawn here.
+    video_.cursor_use_default();
     load_shop_assets();
     if (option_sprites_.size() < 13) return;
     uint8_t saved_pal[256][3];

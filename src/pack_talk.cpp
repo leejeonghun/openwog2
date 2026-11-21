@@ -80,7 +80,8 @@ int Pack::run_talk_choice(const DialogPlacement& dp, int portrait_id, const std:
 int Pack::run_talk_engine(int npc_idx, int eve_actor, int portrait_id, const std::string& speaker,
                           const std::vector<uint8_t>& buf, int len) {
     video_.clear();
-    render_town_frame();
+    // sub_2708B/run_talk_engine is outside sub_190A3: no software direction cursor.
+    render_town_frame(false);
     shop_grab_screen();                                  // sub_2B3DC: save unk_172224 on page 1
     bool first_page = true;
     bool choice_mode = false;

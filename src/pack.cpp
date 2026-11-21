@@ -1798,9 +1798,11 @@ void Pack::render_dim_band(int y0, int y1) {
 // y_off = -new_h, foot = 0 (loc_18B41). The popup therefore draws at
 // (0x96 - len*6 + x_off + 0x0C, 0x7D - (h + 0x10)).
 void Pack::show_item_acquired(int item0, const char* name, bool redraw_scene) {
+    // sub_1B082 runs inside sub_1D12F, before loc_1948C draws the direction cursor.
+    video_.cursor_use_default();
     if (redraw_scene) {
         video_.clear();
-        render_town_frame();
+        render_town_frame(false);
     }
     render_dim_band(0x55, 0x73);
 
@@ -2140,6 +2142,8 @@ int Pack::run_dialogue_script(int npc_idx) {
 // press (state 1), then for release. Keyboard input is ignored.
 void Pack::show_message_box(const char* text) {
     if (!text) return;
+    // sub_34FBE draws over the current frame; it does not redraw the direction cursor.
+    video_.cursor_use_default();
     wait_buttons_released();                                   // sub_3197D
     const int len = (int)strlen(text);
     draw_frame_box(0xB0 - 5 * len, 0x55, 0xB8 + 3 * len, 0x78, 0x0B);
@@ -2158,7 +2162,7 @@ int Pack::show_choice_dialog(const char* msg, const char* opt1, const char* opt2
     int selected = 1;
     while (true) {
         video_.clear();
-        render_town_frame();
+        render_town_frame(false);
 
         uint8_t* backbuf = video_.get_backbuffer();
         int bx = 30, by = 60, bw = 260, bh = 70;
@@ -2804,8 +2808,14 @@ void Pack::render_tile_highlight() {
 // arrow shapes: index 0 (up) is 9x8 with its tip at column 4 of the top row (X_off = -4,
 // Y_off = 0), and index 4 (left) is 9 high with its tip at row 4, column 0 (X_off = 0,
 // Y_off = -4).
-void Pack::render_mouse_cursor() {
-    if (cursor_sprites_.size() != 8) return; // no cursor sprites loaded: draw nothing
+void Pack::render_mouse_cursor(bool draw_game_cursor) {
+    // Only the town loop (sub_190A3) draws the software direction cursor. The EVE
+    // loop, fades, dialogues and shop screens never do, so the original leaves the
+    // driver's default hardware cursor visible there.
+    if (!draw_game_cursor || cursor_sprites_.size() != 8) {
+        video_.cursor_use_default();
+        return;
+    }
 
     int mx = input_.get_mouse_x();
     int my = input_.get_mouse_y();
@@ -2854,7 +2864,7 @@ void Pack::render_mouse_cursor() {
 // Hardware cursor creation and its scale/palette tracking live in Video::cursor_* (video.cpp).
 
 // ---- render_town_frame: draw the whole town screen (sub_190A3) ----
-void Pack::render_town_frame() {
+void Pack::render_town_frame(bool draw_game_cursor) {
     // sub_190A3 loc_19123 order: sub_21D70 (tile animation, driven separately) -> sub_21E29
     // (base tiles) -> sub_22897 (shadows) -> sub_2294D (characters and top tiles).
     // Shadows must go between the tiles and the sprites so they land on the floor.
@@ -2862,7 +2872,7 @@ void Pack::render_town_frame() {
     render_shadows();
     render_sprites_and_objects();
     render_tile_highlight();
-    render_mouse_cursor();
+    render_mouse_cursor(draw_game_cursor);
 }
 
 // ---- update_player_movement: player movement and camera (sub_1D12F) ----
@@ -3974,6 +3984,9 @@ void Pack::eve_op_dialogue(int text_id, int actor) {
 }
 
 void Pack::fade_out_to_black_rendered(int retraces_per_step) {
+    // The fade runs outside sub_190A3, which is the only routine that draws the
+    // direction cursor; keep the default hardware cursor visible.
+    video_.cursor_use_default();
     // sub_208FA: cur = src*1000 and step = src*1000/32 in fixed point, applied 29 times
     // (cur -= step). The callers (loc_213CB, loc_2D239, inn at 1AEFC) repeat while al == 1
     // after a retrace wait: warps and events use 2 x sub_2B206, the inn 1 x sub_2B206.
@@ -4009,7 +4022,7 @@ void Pack::fade_out_to_black_rendered(int retraces_per_step) {
             palette_set_entry((uint8_t)i, (uint8_t)o[0], (uint8_t)o[1], (uint8_t)o[2]);
         }
         video_.clear();
-        render_town_frame();
+        render_town_frame(false);
         video_.present();
         pack_maybe_dump_shot(video_);
         GameTimer::delay_with_pump(input_, retraces_per_step >= 2 ? 33 : 16);
@@ -4074,6 +4087,10 @@ void Pack::eve_op_warp(int new_town_id, int cam_x, int cam_y) {
 bool Pack::run_eve_script(int event_id) {
     EveFile eve;
     if (!load_eve_file(event_id, eve)) return false;
+    // sub_13B8D never draws the direction cursor; only sub_190A3 does. Leave the
+    // hardware cursor at the OS default for the whole cutscene, including the
+    // G2_PACK_AUTO path that skips rendering.
+    video_.cursor_use_default();
     // SM town events reach this loop through sub_2D038 -> sub_13B8D. The other EVE
     // loop in the original (sub_13D99) is only reached from the TOOL-mode event
     // tester (byte_54040 == 1), which this port does not expose.
@@ -4404,7 +4421,7 @@ bool Pack::run_eve_script(int event_id) {
         (void)saw_visual;
         if (need_render) {
             video_.clear();
-            render_town_frame();
+            render_town_frame(false);
             // sub_21E29 draws the base tiles (and registers top tiles) with the
             // pre-integration camera, then integrates the op23 velocity at its tail.
             // Applying the pan after the draw reproduces the original frame's one-step

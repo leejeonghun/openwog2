@@ -378,7 +378,10 @@ private:
 
     // ---- Loop and renderers ----
     void town_loop();
-    void render_town_frame();
+    // draw_game_cursor = false for screens that do not draw the original software
+    // direction cursor (EVE loop, fades, dialogues and shop overlays); those leave the
+    // OS/hardware cursor at its default shape.
+    void render_town_frame(bool draw_game_cursor = true);
     void render_base_tiles();
     // sub_22897: draws the ellipse shadow (off_56C00) under the player and the
     // active NPCs, after the base tiles and before characters and top tiles.
@@ -401,8 +404,9 @@ private:
     // outside the loaded sprite array.
     bool get_npc_screen_box(int npc_idx, int& out_left, int& out_top, int& out_w, int& out_h) const;
     void render_tile_highlight();
-    // sub_190A3 loc_1948C: draw the direction cursor
-    void render_mouse_cursor();
+    // sub_190A3 loc_1948C: draw the direction cursor. false restores the OS default
+    // cursor for loops/screens where the original does not draw it.
+    void render_mouse_cursor(bool draw_game_cursor);
     void draw_rect_border(int x, int y, int w, int h, uint8_t color);
     void update_player_movement();
     // ---- NPC runtime movement state (sub_1F6E4 / sub_1EC6E) ----

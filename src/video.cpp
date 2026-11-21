@@ -392,6 +392,14 @@ bool Video::cursor_select(int id) {
     return !cursor_failed_ && cursor_current_ >= 0;
 }
 
+void Video::cursor_use_default() {
+    cursor_wanted_ = -1;
+    if (!initialized_ || !window_) return;
+    SDL_SetCursor(SDL_GetDefaultCursor());
+    cursor_current_ = -1;
+    SDL_ShowCursor(cursor_visible_ ? SDL_ENABLE : SDL_DISABLE);
+}
+
 void Video::cursor_show(bool show) {
     cursor_visible_ = show;
     if (initialized_) SDL_ShowCursor(show ? SDL_ENABLE : SDL_DISABLE);

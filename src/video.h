@@ -77,6 +77,10 @@ public:
     int  cursor_register(CursorFrame frame);
     void cursor_set_pressed_variant(int normal_id, int pressed_id);
     bool cursor_select(int id);
+    // Restore the OS default cursor. The original draws its software direction cursor
+    // only in the town loop, so EVE cutscenes, fades, dialogues and shop screens keep
+    // the mouse driver's default hardware cursor.
+    void cursor_use_default();
     void cursor_show(bool show);
     void cursor_update();
     void cursor_reset();
