@@ -8,8 +8,10 @@
 // sub_3E18B (dasm 61565..61635): distance state for watch target / direct target / home.
 // Returns -1 = watch-list target absent or within 1 tile, 0 = [+71h] is FFh and matches
 // home-x, 1 = target farther than 1 tile, 2 = signed position differs from both
-// zero-extended home coordinates. -2 is a port-only diagnostic for selectors outside the
-// seven list heads (7..254), not an original return value.
+// zero-extended home coordinates. Selector values 7..254 index past the seven list heads in
+// the original (dword_CC960[sel*8], an out-of-array read); battle_ai_cc960_member models
+// those heads as empty, so the lookup takes the same missing-target path and returns -1.
+// The original has no -2 return value.
 // sub_1379A(sel,id): walk the dword_CC960[sel*8] linked list and return the first unit
 // whose [+0Fh] equals id. sub_4ED18/sub_1134F insert a record at CC968+(effective_army-1)*8,
 // so selectors 0..5 address the effective-army lists 0..5 and selector 6 addresses the
@@ -65,17 +67,16 @@ int CombatII::battle_ai_watch_state(int unit_index) const {
     const int unit_y = (int)(int8_t)u.y;
 
     if (u.ai_watch_sel != 0xFF) {
-        const int selector = (int)u.ai_watch_sel;
-        if (selector >= 0 && selector <= 6) {
-            const int target = battle_ai_cc960_member(selector, (int)u.ai_watch_id);
-            if (target < 0) return -1; // sub_1379A found no such ID in that list
-            const CombatUnitPlacement& candidate = units_[(size_t)target];
-            const int distance = std::abs(unit_x - (int)(int8_t)candidate.x) +
-                                 std::abs(unit_y - (int)(int8_t)candidate.y);
-            return distance > 1 ? 1 : -1;
-        }
-        // sel>=7 runs into the CC998 occupancy map, so it is no valid list descriptor.
-        return -2; // port diagnostic: outside the modeled selector range
+        // sub_1379A(sel, id) has no selector range test. Selectors 7..254 read past the seven
+        // list heads in the original; the port's bounded lookup treats those heads as empty,
+        // so they follow the missing-target branch (loc_3E1C8 -> -1) instead of a port-only
+        // diagnostic value.
+        const int target = battle_ai_cc960_member((int)u.ai_watch_sel, (int)u.ai_watch_id);
+        if (target < 0) return -1; // sub_1379A found no such ID in that list
+        const CombatUnitPlacement& candidate = units_[(size_t)target];
+        const int distance = std::abs(unit_x - (int)(int8_t)candidate.x) +
+                             std::abs(unit_y - (int)(int8_t)candidate.y);
+        return distance > 1 ? 1 : -1;
     }
 
     // [+73h] is a BattleUnit pointer in the original; the port reads the stored unit index.
@@ -2605,7 +2606,8 @@ bool CombatII::battle_ai_jump_approach(int unit_index, int state, int sec, int d
 // Early/state selection path of sub_40DFD, checked against the original COMBATII.EXE
 // bytes for calling convention and branches.
 void CombatII::battle_ai_169d7_reset(int unit_index,
-                                     std::vector<int>& grid) const {
+                                     std::vector<int>& grid,
+                                     const std::vector<uint8_t>* ignore) const {
     if (map_w_ == 0 || map_h_ == 0 || tile_attr_.empty()) return;
     grid.assign((size_t)map_w_ * (size_t)map_h_, -1);
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return;
@@ -2618,7 +2620,7 @@ void CombatII::battle_ai_169d7_reset(int unit_index,
             const size_t i = (size_t)y * (size_t)map_w_ + (size_t)x;
             const int attr = (int)tile_attr_[i];                   // unk_88BD4[i]
             const int cost = (int)(int8_t)mob[attr & 0xFF];        // `jle` on the signed value
-            if (cost <= 0 || battle_unit_index_at(x, y) >= 0)      // CC998[i*4]!=0
+            if (cost <= 0 || battle_cc998_occupant(x, y, true, ignore) >= 0) // CC998[i*4]!=0
                 grid[i] = -2;
         }
     }

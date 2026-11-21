@@ -2915,6 +2915,59 @@ void CombatII::battle_force_retreat_50aa7(const VmEvent& ev) {
                 mode, ev.leave_units.size());
 }
 
+// sub_50D3A(x*, y*): walk the sub_1AC08/sub_1AC59 diamonds from radius 1 to 0x31 and take
+// the first tile whose sub_13CBD value is -1. The accepted tile is written back as signed
+// bytes; when nothing qualifies the coordinates stay unchanged.
+bool CombatII::battle_move_50d3a(int& x, int& y, const std::vector<int>& grid) const {
+    for (int r = 1; r < 0x32; ++r) {                           // mov ecx,1; cmp cx,32h; jl
+        Wc5Dia dia;
+        battle_ai_wc5_dia_init(dia, x, y, r);                  // sub_1AC08
+        int cx = 0, cy = 0;
+        while (battle_ai_wc5_dia_next(dia, cx, cy)) {          // sub_1AC59
+            if (battle_ai_wc5_diff_read(grid, cx, cy) != -1) continue; // sub_13CBD != -1
+            x = (int)(int8_t)(uint8_t)cx;                      // `mov [esi],al`
+            y = (int)(int8_t)(uint8_t)cy;                      // `mov [edi],al`
+            return true;
+        }
+    }
+    return false;
+}
+
+// sub_516D0 loc_51877 (group == 1 only): sub_169D7 seeds E8F46 from the first record's unit
+// (dword_F0648[0]), an occupied destination is relocated with sub_50D3A, and the result is
+// written back to the record's unk_E5210 slot and marked with sub_13D02(x, y, -2). The
+// relocation depends on live occupancy, so it runs at playback, before the walk.
+void CombatII::battle_vm_move_group1_relocate(VmEvent& ev) const {
+    if (ev.walk_group != 1 || ev.walk_units.empty()) return;
+    std::vector<int> grid;
+    // sub_516D0 calls sub_11EE4 on the first record's unit before sub_169D7, and on each later
+    // record just before its own relocation. Model that transient CC998 state while relocating.
+    std::vector<uint8_t> cleared(units_.size(), 0);
+    const int first = ev.walk_units.front().unit_index;
+    if (first >= 0 && (size_t)first < cleared.size()) cleared[(size_t)first] = 1;
+    battle_ai_169d7_reset(first, grid, &cleared);              // sub_169D7
+    for (VmWalkUnit& w : ev.walk_units) {
+        if (w.unit_index >= 0 && (size_t)w.unit_index < cleared.size())
+            cleared[(size_t)w.unit_index] = 1;                 // sub_11EE4 for this record
+        if (w.path.empty()) continue;
+        int x = (int)(int8_t)(uint8_t)w.path.front().first;     // movsx from unk_E5210
+        int y = (int)(int8_t)(uint8_t)w.path.front().second;
+        const int ox = x, oy = y;
+        bool relocated = false;
+        if (battle_cc998_occupant(x, y, true, &cleared) >= 0)  // sub_11DB2
+            relocated = battle_move_50d3a(x, y, grid);         // sub_50D3A
+        w.path.front().first = (uint8_t)x;                     // unk_E5210 write-back
+        w.path.front().second = (uint8_t)y;
+        battle_ai_wc5_diff_write(grid, x, y, -2);              // sub_13D02(x, y, -2)
+        if (relocated && (battle_trace_ || script_trace_))
+            fprintf(stderr,
+                    "COMBAT: vm move group 1 unit=%d dest=(%d,%d) occupied -> (%d,%d), E8 mark -2\n",
+                    w.unit_index >= 0 && (size_t)w.unit_index < units_.size()
+                        ? units_[(size_t)w.unit_index].id : -1,
+                    ox, oy, x, y);
+    }
+}
+
 void CombatII::animate_unit_walk(const VmEvent& ev) {
     if (ev.walk_units.empty()) { present_cutscene_frame(); return; }
     const bool walk_trace = DevUtil::walk_trace();
@@ -3413,44 +3466,55 @@ void CombatII::play_vm_events(const std::vector<VmEvent>& events) {
             // With no records the original also skips the presentation (loc_5192F's `test ah,ah;
             // jle`).
             if (ev.walk_units.empty()) { present_cutscene_frame(); break; }
+            // loc_51877 runs before sub_50BAF: group 1 relocates occupied destinations on E8
+            // (sub_169D7/sub_50D3A) and marks each final tile with sub_13D02(x, y, -2). The
+            // relocation depends on live occupancy, so it happens here, not while parsing.
+            VmEvent relocated_ev;
+            const VmEvent* walk_ev = &ev;
+            if (ev.walk_group == 1) {
+                relocated_ev = ev;
+                battle_vm_move_group1_relocate(relocated_ev);
+                walk_ev = &relocated_ev;
+            }
+            const VmEvent& wev = *walk_ev;
             const char* occupancy_reject_reason = nullptr;
             const bool preserve_occupancy = battle_wc1_group0_move_preserves_occupancy(
-                ev, &occupancy_reject_reason);
+                wev, &occupancy_reject_reason);
             if (!preserve_occupancy)
                 battle_wc1_occupancy_unknown(occupancy_reject_reason
-                    ? occupancy_reject_reason : "VM 0x05 scripted movement", ev.offset);
+                    ? occupancy_reject_reason : "VM 0x05 scripted movement", wev.offset);
             else if (battle_trace_ || script_trace_)
                 fprintf(stderr, "COMBAT: WC1 occupancy pre-move proof passed for VM 0x05 group-%d batch @0x%X\n",
-                        ev.walk_group, ev.offset);
-            if (ev.walk_group == 0) {
+                        wev.walk_group, wev.offset);
+            if (wev.walk_group == 0) {
                 int steps = 1; size_t pts = 0;
-                for (const auto& w : ev.walk_units) {
-                    steps = std::max(steps, std::max(1, ev.walk_frames));
+                for (const auto& w : wev.walk_units) {
+                    steps = std::max(steps, std::max(1, wev.walk_frames));
                     pts = std::max(pts, w.path.size());
                 }
                 fprintf(stderr,
                         "COMBAT: play unit move (group 0, %zu unit(s), max %zu points, "
                         "%d repeats x 4 subframes x 9 ticks = %d frames = %.2fs)\n",
-                        ev.walk_units.size(), pts, steps, steps * 4,
+                        wev.walk_units.size(), pts, steps, steps * 4,
                         steps * 4.0 * 9.0 / kTimerHz);
             } else {
                 fprintf(stderr,
                         "COMBAT: play unit move (group %d, %zu unit(s), 2-point interpolation, "
                         "%d+1 frames x 12 ticks = %.2fs)\n",
-                        ev.walk_group, ev.walk_units.size(),
-                        2 * (std::max(1, ev.walk_frames) + 8),
-                        (2 * (std::max(1, ev.walk_frames) + 8) + 1) * 12.0 / kTimerHz);
+                        wev.walk_group, wev.walk_units.size(),
+                        2 * (std::max(1, wev.walk_frames) + 8),
+                        (2 * (std::max(1, wev.walk_frames) + 8) + 1) * 12.0 / kTimerHz);
             }
-            animate_unit_walk(ev);
+            animate_unit_walk(wev);
             if (should_exit_) return;
             if (skip_cutscene_) {
                 if (preserve_occupancy)
-                    battle_wc1_occupancy_unknown("VM 0x05 scripted movement interrupted", ev.offset);
+                    battle_wc1_occupancy_unknown("VM 0x05 scripted movement interrupted", wev.offset);
                 break;   // ESC: skip the post-move proofs; the loop continues to the terminal events
             }
             bool moved_to_proven_endpoints = preserve_occupancy;
             if (moved_to_proven_endpoints) {
-                for (const VmWalkUnit& walk : ev.walk_units) {
+                for (const VmWalkUnit& walk : wev.walk_units) {
                     if (walk.unit_index < 0 || (size_t)walk.unit_index >= units_.size() || walk.path.empty()) {
                         moved_to_proven_endpoints = false;
                         break;
@@ -3464,14 +3528,14 @@ void CombatII::play_vm_events(const std::vector<VmEvent>& events) {
             }
             if (preserve_occupancy && (!moved_to_proven_endpoints ||
                                        !battle_wc1_static_occupancy_unambiguous()))
-                battle_wc1_occupancy_unknown("VM 0x05 post-move occupancy proof failed", ev.offset);
+                battle_wc1_occupancy_unknown("VM 0x05 post-move occupancy proof failed", wev.offset);
             else if (preserve_occupancy && (battle_trace_ || script_trace_))
                 fprintf(stderr, "COMBAT: WC1 occupancy preserved after VM 0x05 group-%d batch @0x%X\n",
-                        ev.walk_group, ev.offset);
+                        wev.walk_group, wev.offset);
             // sub_516D0/sub_16D3E returns to loc_50AA1 without calling sub_5401B. The original
             // area/region trigger is checked only by actual movement call sites (AI/player walks),
             // not by this scripted cutscene displacement. Keep this playback trigger-free.
-            for (const VmWalkUnit& w : ev.walk_units) {
+            for (const VmWalkUnit& w : wev.walk_units) {
                 if (w.unit_index < 0 || (size_t)w.unit_index >= units_.size()) continue;
                 const CombatUnitPlacement& moved = units_[(size_t)w.unit_index];
                 if (!moved.active) continue;
@@ -3666,7 +3730,11 @@ void CombatII::play_vm_events(const std::vector<VmEvent>& events) {
                     dst->combat_mp_50 = (uint16_t)(rec[0x50] | (rec[0x51] << 8));
                     dst->combat_mp_max_52 = (uint16_t)(rec[0x52] | (rec[0x53] << 8));
                     dst->combat_value_54 = (int16_t)(rec[0x54] | (rec[0x55] << 8));
-                    if (linked) unit.face = dst->face;   // [ecx+10h]=[ebp+10h] + sub_17E6D
+                    if (linked) {
+                        // loc_52670: `mov [ecx+10h],al` then sub_17E6D(ecx, [ecx+5Ch]).
+                        unit.face = dst->face;
+                        battle_form_17e6d(unit, unit.code_b);
+                    }
                 } else {
                     // loc_526C6: name and [10h] only.
                     unit.name.clear();
@@ -3810,6 +3878,15 @@ void CombatII::play_vm_events(const std::vector<VmEvent>& events) {
             if (should_exit_) return;
             break;
         case VmEventType::Hp:
+            // sub_5211D resolves the unit and calls sub_1124A before the delta branches; the
+            // target tile is centred before the death/heal/damage presentation. Kept here (not
+            // inside play_hp_change) because the attack/spell paths reuse play_hp_change for the
+            // 45BFB/45ED2 presentation without going through sub_5211D.
+            // sub_5211D reaches sub_1124A only when sub_501BA still resolves a battle-list unit.
+            if (ev.hp_unit >= 0 && (size_t)ev.hp_unit < units_.size() &&
+                units_[(size_t)ev.hp_unit].active)
+                camera_center_on((int)(int8_t)units_[(size_t)ev.hp_unit].x,
+                                 (int)(int8_t)units_[(size_t)ev.hp_unit].y);
             play_hp_change(ev);                        // sub_5211D
             if (should_exit_) return;
             break;

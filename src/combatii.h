@@ -1175,11 +1175,20 @@ private:
     int  battle_unit_index_at(int x, int y) const;                // sub_11DB2 guarded CC998 footprint lookup
     // sub_11DB2/sub_11E04 cell lookup over the modeled CC998 occupancy. apply_guard=false is for
     // direct grid scans (sub_530F1/sub_53C12) that do not apply the (x-2)/(y-4) filter.
-    int  battle_cc998_occupant(int x, int y, bool apply_guard) const;
+    // ignore: transient CC998 model for sub_516D0, where sub_11EE4 has already cleared those units.
+    int  battle_cc998_occupant(int x, int y, bool apply_guard,
+                               const std::vector<uint8_t>* ignore = nullptr) const;
     // Compatibility name for callers that need the guarded sub_11DB2 lookup.
     int  battle_unit_index_at_footprint(int x, int y) const;
     bool battle_wc1_static_occupancy_unambiguous() const;          // complete static SCE, ordinary armies, unique D66A8 footprints
     bool battle_wc1_group0_move_preserves_occupancy(const VmEvent& ev, const char** reject_reason = nullptr) const;
+    // sub_50D3A(x*, y*): first tile of the increasing sub_1AC08/sub_1AC59 diamond (r = 1..0x31)
+    // whose sub_13CBD value is -1. The accepted coordinates are written back as signed bytes.
+    bool battle_move_50d3a(int& x, int& y, const std::vector<int>& grid) const;
+    // sub_516D0 loc_51877 (group == 1): sub_169D7 seeds E8 from the first record's unit, an
+    // occupied destination is relocated through sub_50D3A, and the final destination is written
+    // back to the record's unk_E5210 slot and marked with sub_13D02(x, y, -2).
+    void battle_vm_move_group1_relocate(VmEvent& ev) const;
     void battle_wc1_occupancy_unknown(const char* reason, uint32_t offset = 0xFFFFFFFFu); // fail-closed latch; reopened only by next complete SCE snapshot
     // Keeps the latch when the gate still passes after a verified 1x1 add/remove/move; closes it as
     // unknown otherwise.
@@ -1232,7 +1241,8 @@ private:
     // sub_3E18B: -1 = watch target not found or distance <= 1, 0 = +71h (FFh) equals the home x,
     // 1 = target distance > 1, 2 = signed x/y differ from both home coordinates. AI selectors 0..6
     // resolve through the CC960/CC968..CC990 lists (effective armies 0..5 and the global
-    // roster); 7..254 are outside the list array and return the port-only -2 diagnostic.
+    // roster). Selectors 7..254 index past the array in the original; the port models those list
+    // heads as empty, so they return -1 like a missing target (no port-only -2 value).
     int battle_ai_watch_state(int unit_index) const;
     // sub_1379A(sel,id): walk dword_CC960[sel*8] and return the first active unit with
     // [+0Fh]==id. Selectors 0..5 select effective-army lists 0..5, selector 6 the CC990 global
@@ -1405,7 +1415,8 @@ private:
     int battle_ai_wc5_1ad2e(const Wc5Dia& it) const;
     // sub_169D7: resets E8F46 to -1 on cells that are unoccupied and have terrain cost > 0 for
     // the actor's move selector, and to -2 everywhere else (the reset that precedes 3F0E4/3F247).
-    void battle_ai_169d7_reset(int unit_index, std::vector<int>& grid) const;
+    void battle_ai_169d7_reset(int unit_index, std::vector<int>& grid,
+                               const std::vector<uint8_t>* ignore = nullptr) const;
     // sub_3F0E4(actor, edx=radius, ebx=band): after the 169D7 reset it walks the 1AC08/1AC59
     // diamond (r=radius) and writes the band value on every cell with E8 == -1. The value is the
     // low 16 bits of (EDD72 & 0xFFFF) + 1 - ebx (accumulated), where ebx is updated from the 1AD2E

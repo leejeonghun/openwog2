@@ -830,7 +830,8 @@ void CombatII::battle_wc1_occupancy_preserve_or_close(const char* reason, uint32
 // scanning active units: each base tile must pass the sub_11E04 guard, then the unit occupies
 // its current facing/pose D66A8 footprint (x..x+w-1, y-h+1..y). frame_nt/frame_mt are render
 // frames and do not replace this occupancy descriptor.
-int CombatII::battle_cc998_occupant(int x, int y, bool apply_guard) const {
+int CombatII::battle_cc998_occupant(int x, int y, bool apply_guard,
+                                    const std::vector<uint8_t>* ignore) const {
     if (map_w_ <= 0 || map_h_ <= 0) return -1;
     if (apply_guard) {
         // sub_11DB2: (x-2) and (y-4) are zero-extended 16-bit values compared against W-4
@@ -849,6 +850,7 @@ int CombatII::battle_cc998_occupant(int x, int y, bool apply_guard) const {
     int found = -1;
     for (size_t i = 0; i < units_.size(); ++i) {
         const auto& u = units_[i];
+        if (ignore && i < ignore->size() && (*ignore)[i]) continue;   // sub_11EE4 already cleared this unit
         if (!u.active || u.hp <= 0 || u.fx_sprite_hidden) continue;   // sub_11EE4 cleared the cell
         const int ux = (int)(int8_t)u.x, uy = (int)(int8_t)u.y;
         if (ux < 2 || ux >= (int)map_w_ - 2 || uy < 4 || uy >= (int)map_h_ - 4) continue;
