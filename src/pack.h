@@ -458,15 +458,16 @@ private:
         int dir = 0;                  // 0 = S (0x50), 1 = W (0x4B), 2 = N (0x48), 3 = E (0x4D)
         int frame_idx = 0;            // op16 absolute frame (0..43), split into dir*11 + pose
         // ---- secondary move state (loc_1336C..13AB2, unk_7D7EF/82938/8293A/82936/8293C) ----
-        // The primary op sets counter = (16 or 24) / speed * steps. Each EVE
-        // frame then moves 1 px, cycles the walk frame with (counter >> 2) % 4,
+        // The primary op sets counter = (16 or 24) / speed * steps. Each actor
+        // turn then moves speed px, cycles the walk frame with (counter >> 2) % 4,
         // and commits the tile when counter % interval == 0 (!= 0) or counter
-        // reaches 0. fine is the in-tile pixel offset (-23..23 / -15..15,
-        // starts at 0): screen = (tile - cam) * size - cam_fine + fine.
-        int move_op = 0;              // 0 = idle, 1..8 moving (unk_7D7BC)
-        int move_counter = 0;         // remaining pixels (unk_7D7EF)
+        // reaches 0. fine is the pixel offset from the tile origin (starts at 0):
+        // screen = (tile - cam) * size - cam_fine + fine. Speeds that do not divide
+        // the tile keep the residual (e.g. 16/3 leaves -1 px per tile step).
+        int move_op = 0;              // last op (unk_7D7BC); phase 2 is gated by move_counter
+        int move_counter = 0;         // remaining phase-2 steps (unk_7D7EF)
         int move_speed = 1;           // unk_8293C (op13 sets 1, op27 changes it)
-        int fine_x = 0, fine_y = 0;   // in-tile pixel offset
+        int fine_x = 0, fine_y = 0;   // offset from tile origin (may keep a residual)
     };
     static constexpr int MAX_EVE_ACTORS = 51;
     EveActorState eve_actors_[MAX_EVE_ACTORS];
@@ -484,17 +485,19 @@ private:
     // ----
     // Tile delta: op1/5 = up (-Y), op2/6 = down (+Y), op3/7 = left (-X),
     // op4/8 = right (+X).
-    // Primary: counter = (Y ? 16 : 24) / speed * steps. Direction and frame are
-    // set by op1-4 only; op5-8 keep them (loc_1390D/13970/139DB/13A54 write no
-    // frame).
-    // Secondary (every frame): screen += speed; op1-4 cycle the walk frame with
-    // (counter >> 2) % 4 using op1 [25,24,25,26], op2 [3,2,3,4],
+    // Primary: counter = (Y ? 16 : 24) / speed * steps. It changes no direction or
+    // frame; phase 2 (same actor turn, loc_1336C) writes the walk frame and derives
+    // the direction from it. op5-8 never write the frame.
+    // Secondary (once per actor turn): screen += speed; op1-4 cycle the walk frame
+    // with (counter >> 2) % 4 using op1 [25,24,25,26], op2 [3,2,3,4],
     // op3 [14,13,14,15], op4 [36,35,36,37]; op5-8 keep their frame. The tile
-    // commits when counter % interval == 0 (!= 0) or counter == 0.
+    // commits when counter % interval == 0 (!= 0) or counter == 0, and the fine
+    // offset keeps the pixel residual instead of snapping to 0.
     void eve_op_move(int actor, int op, int steps);
-    // Advance every actor with counter > 0 by 1 px per EVE frame (in parallel),
-    // for smooth walking. Returns true while any movement is in progress.
-    bool eve_animate_moves_once();
+    // One phase-2 step (speed px) for one actor (loc_1336C..13AB2). Returns true if
+    // the actor was moving (counter > 0) when called. The draw-active flag is not
+    // tested here; the original checks it only at loc_13B0E, after the move.
+    bool eve_move_tick(int actor);
     // Op15 absolute camera (loc_12D97): set cam_tile = (x, y) directly
     void eve_op_camera_snap(int tx, int ty);
     // ---- op23 relative camera (loc_13063 primary + loc_13AC9 secondary + sub_21E29 tail) ----

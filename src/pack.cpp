@@ -3550,22 +3550,20 @@ void Pack::eve_op_set_frame(int actor, int frame_idx) {
 // ---- op1-8: move an actor (loc_12956..12A79 phase 1, loc_1336C..13AB2 phase 2) ----
 // op1/5 decrement word_7D024 (up, -Y), op2/6 increment it (down, +Y),
 // op3/7 decrement word_7D022 (left, -X), op4/8 increment it (right, +X).
-// Phase 1 sets counter = (Y ? 0x10 : 0x18) / speed * steps (24 px per X tile, 16 px per Y
-// tile; speed = unk_8293C, initialised to 1 by op13).
-// Phase 2 (every EVE frame, eve_animate_moves_once) adds speed to the screen position and
-// picks walk frames from (counter >> 2) % 4 for op1-4:
-//   op1 [25,24,25,26], op2 [3,2,3,4], op3 [14,13,14,15], op4 [36,35,36,37];
-//   op5-8 keep the frame. Tiles update when counter % interval == 0 (non-zero) and at 0.
-// Every active actor animates in parallel at 1 px per frame, matching the original.
+// Phase 1 only stores the movement counter: counter = (Y ? 0x10 : 0x18) / speed * steps
+// (24 px per X tile, 16 px per Y tile; speed = unk_8293C, initialised to 1 by op13).
+// It does not touch the direction or frame: those are written by phase 2, which runs in the
+// same actor turn because every command handler jumps to loc_1336C before the next actor.
+// Phase 2 adds speed to the screen position and picks walk frames from (counter >> 2) % 4
+// for op1-4 (op5-8 keep the frame). The tile advances when counter % (unit/speed) == 0
+// (non-zero) and once more at 0; the accumulated pixel offset is kept, not snapped to 0.
 // G2_PACK_AUTO teleports instead of animating so offscreen tests keep their speed.
 void Pack::eve_op_move(int actor, int op, int steps) {
     if (actor < 0 || actor >= MAX_EVE_ACTORS) return;
     EveActorState& st = eve_actors_[actor];
-    if (!st.active) {
-        fprintf(stderr, "PACK: EVE actor%d op%d move steps=%d ignored (inactive)\n",
-                actor, op, steps);
-        return;
-    }
+    // loc_12956..12A79 does not test the draw-active flag: the VM applies the move to
+    // the actor slot even when op14 has hidden it. Rendering checks active later, so
+    // an inactive actor may still carry a counter/frame without being drawn.
     if (op < 1 || op > 8) return;
     if (steps < 0) steps = 0;
     int ox = st.tile_x, oy = st.tile_y;
@@ -3604,88 +3602,81 @@ void Pack::eve_op_move(int actor, int op, int steps) {
                 actor, op, steps, ox, oy, st.tile_x, st.tile_y, st.dir, st.frame_idx);
         return;
     }
-    // Phase 1 only sets the counter; the frame loop animates in parallel. No step is taken
-    // here so the first pixel moves on the next frame, as in loc_12A2B -> loc_1336C (a
-    // one-frame difference), which is imperceptible at 60 fps.
+    // loc_12A1C: the counter lives in a byte (unk_7D7EF), so values past 255 wrap to
+    // the low 8 bits (e.g. speed 1 X: 11+ tiles, Y: 16+ tiles).
     bool is_y = (op == 1 || op == 2 || op == 5 || op == 6);
     int unit = is_y ? TOWN_TILE_H : TOWN_TILE_W; // 16 or 24
     int speed = st.move_speed > 0 ? st.move_speed : 1;
     if (speed < 1) speed = 1;
     st.move_op = op;
-    // loc_12A1C: the counter lives in a byte (unk_7D7EF), so values past 255 wrap to
-    // the low 8 bits (e.g. speed 1 X: 11+ tiles, Y: 16+ tiles).
     st.move_counter = ((unit / speed) * steps) & 0xFF;
-    // Op1-4 fix the direction; the frame enters its cycle on the first animation step.
-    // op5-8 keep both (phase 2 at loc_1390D/13970/139DB/13A54 never writes unk_82936).
-    if (op >= 1 && op <= 4) {
-        if (op == 1) st.dir = 2;
-        else if (op == 2) st.dir = 0;
-        else if (op == 3) st.dir = 1;
-        else if (op == 4) st.dir = 3;
-    }
-    fprintf(stderr, "PACK: EVE actor%d op%d move start steps=%d counter=%d (%d,%d) dir=%d\n",
+    fprintf(stderr, "PACK: EVE actor%d op%d move start steps=%d counter=%d (%d,%d) dir_before=%d\n",
             actor, op, steps, st.move_counter, ox, oy, st.dir);
 }
 
-// Phase 2, one step per EVE frame for every moving actor (loc_1336C..13AB2):
-// screen += speed -> frame from (counter>>2)%4 for op1-4 -> counter -= 1 -> tile update and
-// fine wrap when counter % interval == 0 (non-zero) -> final tile and idle at counter == 0.
-bool Pack::eve_animate_moves_once() {
-    bool any = false;
-    for (int a = 0; a < MAX_EVE_ACTORS; a++) {
-        EveActorState& st = eve_actors_[a];
-        if (!st.active || st.move_op < 1 || st.move_op > 8 || st.move_counter <= 0) continue;
-        any = true;
-        int op = st.move_op;
-        int speed = st.move_speed > 0 ? st.move_speed : 1;
-        if (speed < 1) speed = 1;
-        bool is_y = (op == 1 || op == 2 || op == 5 || op == 6);
-        int interval = (is_y ? TOWN_TILE_H : TOWN_TILE_W) / speed;
-        if (interval < 1) interval = 1;
-        int dx = 0, dy = 0;
-        switch (op) {
-        case 1: case 5: dy = -1; break;
-        case 2: case 6: dy = +1; break;
-        case 3: case 7: dx = -1; break;
-        case 4: case 8: dx = +1; break;
-        default: break;
-        }
-        // Screen movement (fine offset accumulation).
-        st.fine_x += dx * speed;
-        st.fine_y += dy * speed;
-        // Walk frame, op1-4 only, from the counter value before the decrement.
-        if (op >= 1 && op <= 4) {
-            int idx = ((st.move_counter >> 2) % 4 + 4) % 4;
-            static const int kWalk[4][4] = {
-                {25, 24, 25, 26}, // op1 up
-                {3, 2, 3, 4},     // op2 down
-                {14, 13, 14, 15}, // op3 left
-                {36, 35, 36, 37}, // op4 right
-            };
-            int frame = kWalk[op - 1][idx];
-            st.frame_idx = frame;
-            st.dir = frame / 11;
-        }
-        // Decrement the counter.
-        st.move_counter -= 1;
-        if (st.move_counter < 0) st.move_counter = 0;
-        // Tile update, intermediate and final.
-        if (st.move_counter % interval == 0 && st.move_counter != 0) {
-            st.tile_x += dx;
-            st.tile_y += dy;
-            // Wrap fine so the screen position stays continuous.
-            if (dx != 0) st.fine_x += -dx * (is_y ? TOWN_TILE_H : TOWN_TILE_W);
-            if (dy != 0) st.fine_y += -dy * (is_y ? TOWN_TILE_H : TOWN_TILE_W);
-        }
-        if (st.move_counter == 0) {
-            st.tile_x += dx;
-            st.tile_y += dy;
-            if (dx != 0) st.fine_x = 0;
-            if (dy != 0) st.fine_y = 0;
-            st.move_op = 0;
-        }
+// Phase 2, one step (speed px) for one actor (loc_1336C..13AB2). The original reaches
+// this code at the end of every actor turn: a moving actor jumps here instead of fetching
+// a command, and a command handler also jumps here after doing its work. The caller below
+// therefore runs it inside the actor loop, not as a separate pass over all actors.
+bool Pack::eve_move_tick(int actor) {
+    if (actor < 0 || actor >= MAX_EVE_ACTORS) return false;
+    EveActorState& st = eve_actors_[actor];
+    // loc_1336C tests only unk_7D7EF; the draw-active flag is checked after phase 2
+    // at loc_13B0E, so a hidden actor still finishes its move.
+    if (st.move_counter <= 0) return false;
+    const int op = st.move_op;
+    if (op < 1 || op > 8) return false;
+    int speed = st.move_speed > 0 ? st.move_speed : 1;
+    if (speed < 1) speed = 1;
+    const bool is_y = (op == 1 || op == 2 || op == 5 || op == 6);
+    const int unit = is_y ? TOWN_TILE_H : TOWN_TILE_W;
+    int dx = 0, dy = 0;
+    switch (op) {
+    case 1: case 5: dy = -1; break;
+    case 2: case 6: dy = +1; break;
+    case 3: case 7: dx = -1; break;
+    case 4: case 8: dx = +1; break;
+    default: break;
     }
-    return any;
+    // loc_133F3/loc_13574/loc_136D9/loc_1381C/1390D/13970/139DB/13A54:
+    // unk_82938/unk_8293A += speed, before the counter is decremented.
+    st.fine_x += dx * speed;
+    st.fine_y += dy * speed;
+    // Walk frame, op1-4 only, from the counter value before the decrement.
+    // op5-8 never write unk_82936 (loc_1390D/13970/139DB/13A54).
+    if (op <= 4) {
+        const int idx = (st.move_counter >> 2) % 4;
+        static const int kWalk[4][4] = {
+            {25, 24, 25, 26}, // op1 up
+            {3, 2, 3, 4},     // op2 down
+            {14, 13, 14, 15}, // op3 left
+            {36, 35, 36, 37}, // op4 right
+        };
+        st.frame_idx = kWalk[op - 1][idx];
+        st.dir = st.frame_idx / 11;
+    }
+    --st.move_counter;
+    // loc_13xxx: the logical tile advances when counter % (unit/speed) == 0. The screen
+    // position keeps moving by speed each frame independently of the tile, so only the
+    // tile's worth is removed from the fine offset. It must not be snapped to 0: when
+    // speed does not divide the tile (e.g. 16/3 = 5), the residual is kept (loc_13547
+    // and friends decrement the tile without touching unk_82938/unk_8293A).
+    int interval = unit / speed;
+    if (interval < 1) interval = 1;   // speed > unit: the original would divide by zero
+    if (st.move_counter != 0 && st.move_counter % interval == 0) {
+        st.tile_x += dx;
+        st.tile_y += dy;
+        if (dx) st.fine_x -= dx * unit;
+        if (dy) st.fine_y -= dy * unit;
+    }
+    if (st.move_counter == 0) {
+        st.tile_x += dx;
+        st.tile_y += dy;
+        if (dx) st.fine_x -= dx * unit;
+        if (dy) st.fine_y -= dy * unit;
+        // loc_13B0E: unk_7D7BC keeps the last op; the zero counter is the only stop.
+    }
+    return true;
 }
 
 // ---- op15: absolute camera (loc_12D97, then sub_126AC) ----
@@ -3994,7 +3985,7 @@ bool Pack::run_eve_script(int event_id) {
     fprintf(stderr, ")\n");
 
     // Frame loop: sub_13B8D repeats sub_12857 plus rendering while frame < total. Phase 1
-    // (spawn, counters, blocking dialogue) and phase 2 (1 px per frame) run together, giving
+    // (spawn, counters, blocking dialogue) and phase 2 (speed px per frame) run together, giving
     // the three-actor walk of cap4.avi. G2_PACK_AUTO teleports without rendering.
     // sub_12857 keeps a per-actor PC (unk_7CF52 high word / word_7CF54): each actor fetches
     // at most the single command at its PC, only when the command's fire value equals the
@@ -4008,13 +3999,16 @@ bool Pack::run_eve_script(int event_id) {
     for (int frame = 0; frame < eve.total; frame++) {
         if (should_exit_) break;
         bool saw_visual = false, saw_dialog = false, saw_move_setup = false;
+        bool moving = false;
         for (int a = 0; a < 51; a++) {
             const std::vector<uint16_t>& w = eve.actors[a].words;
             size_t i = (size_t)eve_pc[a];
-            // loc_1336C gate: a moving actor (counter != 0) fetches nothing this frame.
+            // loc_1336C gate: a moving actor (counter != 0) fetches nothing this turn;
+            // it runs phase 2 instead, before the next actor's turn.
             {
                 const EveActorState& st = eve_actors_[a];
-                if (st.active && st.move_op >= 1 && st.move_op <= 8 && st.move_counter > 0) {
+                if (st.move_counter > 0) {
+                    moving |= eve_move_tick(a);
                     continue;
                 }
             }
@@ -4272,11 +4266,13 @@ bool Pack::run_eve_script(int event_id) {
                     eve_pc[a] = (int)(i + (size_t)L);
                 }
             }
+            // Command handlers jump to loc_1336C (phase 2) after doing their work, so a
+            // move started by this command already takes its first step in this turn.
+            // Non-movement commands have counter == 0 and this is a no-op.
+            moving |= eve_move_tick(a);
         }
         if (eve_auto_fast) continue; // skip rendering and animation after the teleport
         if (should_exit_) break;
-        // Phase 2: advance every moving actor by 1 px, including actors set up this frame.
-        bool moving = eve_animate_moves_once();
         // The sub_13B8D frame loop runs sub_12857 (VM), sub_21D70 (tile animation),
         // sub_21E29, sub_13D04 and sub_2294D every frame; only frames that drew their own
         // dialogue are skipped.
@@ -4297,20 +4293,9 @@ bool Pack::run_eve_script(int event_id) {
         // every frame, so only the tick is kept.
         if (frame > 0 && frame % 60 == 0) bgm_tick();
     }
-    // Tail safety: if a counter survives past total (only on a malformed EVE), advance up to
-    // 512 frames to settle the positions. Script 271 never needs this.
-    if (!eve_auto_fast && !should_exit_) {
-        for (int extra = 0; extra < 512; extra++) {
-            bool moving = eve_animate_moves_once();
-            if (!moving) break;
-            video_.clear();
-            render_town_frame();
-            video_.present();
-            pack_maybe_dump_shot(video_);
-            eve_pacer.pace(input_);
-            if (should_exit_) break;
-        }
-    }
+    // loc_13CAE: the original leaves the frame loop immediately. An actor still mid-move
+    // at total (283.EVE actor 0 has one phase-2 step left: counter 1 at speed 2) is
+    // cleared by sub_11F2D below; the port must not advance extra movement frames.
     // ---- sub_13B8D teardown: sub_11F2D ----
     // On script exit the original deactivates all 51 actor slots (unk_82934 = 0, PC, opcode
     // and movement counters reset, sprites released by sub_1A5CA). Unlike op14, this applies
