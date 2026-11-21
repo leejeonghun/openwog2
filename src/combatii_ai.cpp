@@ -3411,7 +3411,7 @@ bool CombatII::battle_ai_class_a4_4426d(int unit_index) {
             nu.ai_target_unit = -1;                             // [67h]=[77h]=0
             nu.ai_field_7f = nu.ai_field_81;                    // [7Fh]=[81h]
             nu.ai_field_80 = (uint8_t)nu.ai_mode;               // [80h]=[82h]
-            nu.slot_hint = nu.sprite_type & 0xFF;               // approximation of sub_1198D([61h])
+            nu.slot_hint = battle_image_slot(nu.sprite_type);   // [60h] = sub_1198D([61h])
             nu.list_seq = battle_next_list_seq();               // sub_1134F
             nu.active = true;
             nu.occupancy_hp_known = true;

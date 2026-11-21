@@ -613,14 +613,16 @@ private:
     int  ui_speaker_tx_ = -1, ui_speaker_ty_ = -1;  // speaker tile (sub_1124A/loc_48368 circle effect)
     int  ui_speaker_unit_ = -1;     // speaker unit index - the original keeps a unit pointer, so
                                     // Playback resolves the tile through the unit, not this tile.
-    int  last_dialogue_unit_ = -1;  // dword_1102B8: previous dialogue speaker unit. For
+    int  ui_speaker_key_ = -1;      // sub_507BE's record identity for the repeat-speaker check
+    int  last_dialogue_unit_ = -1;  // dword_1102B8: previous dialogue speaker key (unit ID). For
                                     // Consecutive lines by the same speaker sub_507BE sets
                                     // bx=0 and skips the circle animation (loc_48368).
     bool ui_visible_ = false;
     bool skip_cutscene_ = false;    // ESC skips the remaining effects
     void set_ui_text(const std::string& text, bool is_overlay, int portrait,
                      const std::string& speaker_name = std::string(),
-                     int speaker_tx = -1, int speaker_ty = -1, int speaker_unit = -1);
+                     int speaker_tx = -1, int speaker_ty = -1, int speaker_unit = -1,
+                     int speaker_key = -1);
     void render_overlay();
     // Draws one frame as background (FPM + tiles) -> weather -> units -> UI, which is
     // sub_454B3 + sub_454D5, then the sub_5046B message text and the sub_50216 drop (sub_4559F
@@ -844,7 +846,8 @@ private:
     void advance_message_window(); // sub_5046B: decrement/advance after the text has been drawn
     void show_dialogue_line(const std::string& text, int portrait_id,
                             const std::string& speaker_name = std::string(),
-                            int speaker_tx = -1, int speaker_ty = -1, int speaker_unit = -1);
+                            int speaker_tx = -1, int speaker_ty = -1, int speaker_unit = -1,
+                            int speaker_key = -1);
     void show_overlay_message(const std::string& text); // sub_5046B -> sub_5E048(x=0x20, y=0x24): top-left text, no box or dimming
     void show_portrait(int portrait_id, int x, int y); // y is the bottom edge of the portrait (same rule as PACK)
 
@@ -1018,6 +1021,12 @@ private:
     //   it. The raw D66A8 table is read from this cache with the `combatii_d66a8.h` layout
     //   (slot = per-type block, minus the [9..12] sprite pointer).
     mutable std::unordered_map<int, std::unique_ptr<NC2Parser>> nc2_chars_;
+    // sub_114EF / sub_1198D image-slot table (unk_E4FC8 refcounts + type -> slot bytes). A
+    // type's first use claims the lowest free slot of 100; later uses return the same slot.
+    // Unit [+0x60] stores this value, not the type code.
+    std::unordered_map<int, int> battle_image_slots_;
+    uint8_t battle_image_slot_ref_[100] = {};
+    int battle_image_slot(int type_code);
     std::string characte_path(const char* filename) const;
     // Loads the NC2 file for a type code on demand and returns the (facing, pose) frame.
     const NC2Frame* nc2_frame_for(int type_code, int dir, int pose) const;
@@ -1825,7 +1834,7 @@ private:
     bool run_region_count_trigger();                          // sub_53C12
     bool run_morale_trigger();                                // sub_53E0F
     bool run_army_wiped_trigger(int group);                   // sub_53F94
-    void battle_after_move(int unit_index);                   // sub_5401B (contact triggers excluded)
+    bool battle_after_move(int unit_index);                   // sub_5401B: false = 0 (unit left the list)
     int battle_terrain_17310(int unit_index);                 // sub_17310 (terrain damage/heal: 0 = death, -2 equivalent, 1 = survived)
     void battle_terrain_damage_46359(int unit_index, int dmg); // sub_46359 (terrain damage digits/knockback, 25 frames)
     void battle_remove_from_ready_queue(int unit_index);      // sub_197AD
@@ -2795,6 +2804,20 @@ private:
     int find_unit_index_ctx(uint8_t sel, uint8_t idx, int forced_context) const;
     CombatUnitPlacement* find_unit_ref_mut(uint8_t sel, uint8_t idx);
     int find_unit_index(uint8_t sel, uint8_t idx) const;
+    // sub_507BE speaker selection, re-run at playback time (sub_52E55 executes the command in
+    // order, so a unit spawned earlier in the same block is visible here). Implements the
+    // sel>9 sub_5019C/list walk, the sel<=9 sub_501BA lookup, and the sub_500ED hidden-speaker
+    // fallback with the camera-centre+6 placement.
+    struct DialogueSpeakerInfo {
+        bool found = false;
+        int unit_index = -1;   // live frame target; -1 on the sub_500ED hidden path (bx=2)
+        int portrait = -1;
+        std::string name;
+        int tx = -1, ty = -1;
+        int key = -1;          // record identity for dword_1102B8 (unit ID)
+    };
+    DialogueSpeakerInfo battle_dialogue_speaker_507be(uint8_t sel, uint8_t idx,
+                                                      int forced_context);
     // The two words of dword_F0BA0 (morale and scroll limits), set by sub_52757 (0x0D)
     int16_t morale_lo_ = 0;
     int16_t morale_hi_ = 0x64;

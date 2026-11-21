@@ -230,7 +230,7 @@ void CombatII::render_battle_frame() {
 
 void CombatII::set_ui_text(const std::string& text, bool is_overlay, int portrait,
                            const std::string& speaker_name, int speaker_tx, int speaker_ty,
-                           int speaker_unit) {
+                           int speaker_unit, int speaker_key) {
     ui_text_ = text;
     ui_is_overlay_ = is_overlay;
     ui_portrait_ = portrait;
@@ -238,13 +238,15 @@ void CombatII::set_ui_text(const std::string& text, bool is_overlay, int portrai
     ui_speaker_tx_ = speaker_tx;
     ui_speaker_ty_ = speaker_ty;
     ui_speaker_unit_ = speaker_unit;
+    ui_speaker_key_ = speaker_key;
     ui_visible_ = !text.empty();
 }
 
 void CombatII::render_overlay() {
     if (ui_visible_) {
         if (ui_is_overlay_) show_overlay_message(ui_text_);
-        else show_dialogue_line(ui_text_, ui_portrait_, ui_speaker_, ui_speaker_tx_, ui_speaker_ty_, ui_speaker_unit_);
+        else show_dialogue_line(ui_text_, ui_portrait_, ui_speaker_, ui_speaker_tx_, ui_speaker_ty_,
+                                ui_speaker_unit_, ui_speaker_key_);
     }
     // sub_5046B's message window is not part of sub_454D5: sub_4559F draws it after the whole
     // 454B3/454D5 frame, and sub_508E6 draws the sub_50216 drop after that text. It is drawn by

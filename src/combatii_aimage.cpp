@@ -167,7 +167,8 @@ int CombatII::battle_ai_mage_42dc1(int unit_index, int mode) {
     if (s16(u.combat_mp_50) < 0) return -1;
     const int var10 = (int)(int8_t)battle_lookup_184a4(u.combat_type_5b, 0x36);  // cbw
     int esi = 6;
-    if ((mode == 1 || mode == 2) && combat_rand(3) == 0) esi = 3;
+    // loc_42E1D: sub_499BD(3) != 0 -> esi=3 (2/3 probability); only 0 keeps the full range.
+    if ((mode == 1 || mode == 2) && combat_rand(3) != 0) esi = 3;
     const int tp = battle_tp();
     const int mp = s16(u.combat_mp_50);
     if (tp == s16(u.combat_value_54) && weapon_class(u) == 2) {

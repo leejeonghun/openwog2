@@ -326,7 +326,18 @@ void CombatII::battle_move_commit(int unit_index, int facing) {
         if ((size_t)unit_index >= units_.size() || !units_[(size_t)unit_index].active) return;
     }
     const int moved_unit_id = u2.id;
-    battle_after_move(unit_index);                   // sub_5401B: area -> zone unit-count trigger (u may be invalid after this)
+    // sub_5401B returns 0 when a trigger removed the unit from the list (sub_11FF7). sub_16834
+    // then returns -2 (loc_169B0 -> loc_143EB) and sub_4D674 loc_4DA59 sets var_24=1 before
+    // jumping to the turn end (loc_4DAAF).
+    if (!battle_after_move(unit_index)) {
+        if (should_exit_) return;
+        if (battle_trace_)
+            fprintf(stderr, "COMBAT: move unit=%d removed by post-move trigger, turn ends (sub_5401B=0 -> -2)\n",
+                    moved_unit_id);
+        battle_var24_action_end_ = true;
+        battle_player_end_turn(true);
+        return;
+    }
     if (should_exit_) return;
     if ((size_t)unit_index >= units_.size() || !units_[(size_t)unit_index].active) return;
     // sub_17310 (terrain damage/heal): after 5401B and before the TP charge. 0 = death

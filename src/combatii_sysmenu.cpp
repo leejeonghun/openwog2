@@ -260,15 +260,13 @@ int CombatII::battle_system_menu_4e0ee(int no_saveload) {
                     }
                     case 1:                             // QUICK SAVE
                         if (no_saveload == 0) {
-                            battle_text_band(deploydata::kStrSaving, false);   // sub_48083("Saving...")
-                            wait_info_dismiss(0x5A);                           // sub_499EF(0x5A) inside sub_48083
+                            battle_text_band(deploydata::kStrSaving, false);   // sub_48083("Saving...", includes 499EF(5Ah))
                             battle_quick_save_4f4ef();                         // sub_4F4EF
                         }
                         break;
                     case 2:                             // QUICK LOAD
                         if (no_saveload == 0) {
-                            battle_text_band(deploydata::kStrLoading, false);  // sub_48083("Loading...")
-                            wait_info_dismiss(0x5A);                           // sub_499EF(0x5A) inside sub_48083
+                            battle_text_band(deploydata::kStrLoading, false);  // sub_48083("Loading...", includes 499EF(5Ah))
                             battle_quick_load_4fd25();                         // sub_4FD25 + sub_4A321
                         }
                         break;
@@ -293,7 +291,26 @@ int CombatII::battle_system_menu_4e0ee(int no_saveload) {
                         fprintf(stderr, "COMBAT: scroll speed %d (word_FDAEA, sub_4E0EE)\n", battle_scroll_speed_);
                         break;
                     case 7:                             // restart battle (sub_55EBC, sub_4FD6B, sub_61CFF(1))
-                    case 8:                             // to TITLE (sub_4FDD1("EXIT"), sub_4FE28)
+                        break;
+                    case 8: {                           // to TITLE (sub_4FDD1("EXIT"), sub_4FE28)
+                        // sub_4FE28: creat(".\\cstldata\\MENU", 0x180) -> close -> open(2)
+                        // -> write(4 bytes from the stack) -> close. The original writes
+                        // uninitialised stack bytes; the port writes zeros, which only have
+                        // to exist as the TITLE-return marker.
+                        const std::string menu_path = cstldata_path("MENU");
+                        bool wrote = false;
+                        if (!menu_path.empty()) {
+                            if (FILE* fp = fopen(menu_path.c_str(), "wb")) {
+                                const uint8_t marker[4] = {0, 0, 0, 0};
+                                wrote = fwrite(marker, 1, sizeof(marker), fp) == sizeof(marker);
+                                fclose(fp);
+                            }
+                        }
+                        if (battle_trace_)
+                            fprintf(stderr, "COMBAT: TITLE return marker %s -> %s (sub_4FE28)\n",
+                                    menu_path.c_str(), wrote ? "written" : "write failed");
+                        break;
+                    }
                     default:
                         break;
                 }

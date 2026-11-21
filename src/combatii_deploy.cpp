@@ -603,7 +603,6 @@ int CombatII::battle_deploy_list(const std::vector<size_t>& party, std::vector<i
     auto page_down = [&]() { if (count - scroll > 0x14) { scroll += 5; if (sel > 5) sel -= 5; } };
     auto message = [&](const std::string& s) {                        // sub_48083 (includes the internal wait)
         battle_text_band(s, false);
-        wait_info_dismiss(0x5A);
     };
 
     // ---- events (sub_5D22E / getch_) ----

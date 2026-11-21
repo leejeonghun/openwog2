@@ -239,6 +239,110 @@ CombatUnitPlacement* CombatII::find_unit_ref_mut(uint8_t sel, uint8_t idx) {
     return i < 0 ? nullptr : &units_[(size_t)i];
 }
 
+// sub_507BE(al=sel, dl=idx): pick the dialogue speaker. sub_52E55 calls this when it reaches
+// opcode 0x02, so the lookup must run at playback time (a spawn earlier in the same block is
+// already in the list).
+//   sel > 9 : sub_5019C forced target if its [+0Bh]>>24 equals sel-9; otherwise subtract 0x0A,
+//             take dword_CC968[sel-10] (= effective-army list sel-9), prefer the previous
+//             speaker (dword_1102B8) when it belongs to that army, else walk the list and
+//             replace the candidate with sub_499BD(3)==0. No list member -> 0.
+//   sel <= 9: sub_501BA(sel, idx).
+//   If none: sub_500ED(idx) (CC990 by unit ID); the record needs [+87h]!=0. sub_1124A centres
+//            the camera on word_FDF80/FDF7E+6 (the screen-centre tile), then the record's [0]/[1]
+//            are set to dword_BA83C/+2 + 6 and sub_482A5 runs with bx=2 (window only, no frame
+//            and no ellipse). Otherwise loc_508DF returns without showing a window.
+CombatII::DialogueSpeakerInfo CombatII::battle_dialogue_speaker_507be(uint8_t sel, uint8_t idx,
+                                                                     int forced_context) {
+    DialogueSpeakerInfo out;
+    const int signed_sel = (int)(int8_t)sel;
+    int ui = -1;
+    if (signed_sel > 9) {
+        // sub_5019C(dword_11024C): the forced target must carry army sel-9.
+        if (forced_context >= 0 && (size_t)forced_context < units_.size() &&
+            battle_effective_army(units_[(size_t)forced_context]) == signed_sel - 9)
+            ui = forced_context;
+        if (ui < 0) {
+            const int army = signed_sel - 9;
+            // Previous speaker reuse (dword_1102B8 + [+0Bh]>>24 comparison). The port stores
+            // the unit ID as the key, so map it back to a live record first.
+            if (last_dialogue_unit_ >= 0 && army >= 0) {
+                for (size_t i = 0; i < units_.size(); ++i) {
+                    if (units_[i].id == last_dialogue_unit_ &&
+                        battle_effective_army(units_[i]) == army) {
+                        ui = (int)i;
+                        break;
+                    }
+                }
+            }
+            // CC968[sel-10] linked-list walk. List order follows list_seq (sub_1134F tail
+            // insertion); the first node seeds ecx and each later node replaces it when
+            // sub_499BD(3) returns 0.
+            if (ui < 0 && army >= 1 && army <= 6) {
+                std::vector<int> list;
+                for (size_t i = 0; i < units_.size(); ++i) {
+                    if (!units_[i].active || battle_effective_army(units_[i]) != army) continue;
+                    const uint64_t key = ((uint64_t)units_[i].list_seq << 32) | (uint32_t)i;
+                    size_t pos = list.size();
+                    while (pos > 0) {
+                        const int prev = list[pos - 1];
+                        const uint64_t prev_key =
+                            ((uint64_t)units_[(size_t)prev].list_seq << 32) | (uint32_t)prev;
+                        if (prev_key <= key) break;
+                        --pos;
+                    }
+                    list.insert(list.begin() + (std::ptrdiff_t)pos, (int)i);
+                }
+                for (int node : list) {
+                    if (ui < 0) ui = node;
+                    else if (combat_rand(3) == 0) ui = node;
+                }
+            }
+        }
+    } else {
+        ui = find_unit_index_ctx(sel, idx, forced_context);
+    }
+    if (ui >= 0) {
+        const auto& u = units_[(size_t)ui];
+        out.found = true;
+        out.unit_index = ui;
+        out.portrait = u.face;
+        out.name = u.name;
+        out.tx = u.x;
+        out.ty = u.y;
+        out.key = u.id;
+        return out;
+    }
+    // loc_50854: sub_500ED(idx), then require the CC990 record's [+87h] != 0.
+    CombatUnitPlacement* rec = battle_roster_find_500ed((int)idx);
+    int live = -1;
+    for (size_t i = 0; i < units_.size(); ++i) {
+        if (units_[i].id == (int)idx) { live = (int)i; break; }
+    }
+    if (!rec && live >= 0) rec = &units_[(size_t)live];
+    if (!rec || rec->owner_87 == 0) return out;
+    // `mov ax,word_FDF7E; add eax,6; ... mov ax,word_FDF80; add eax,6; call sub_1124A`.
+    // word_FDF80/FDF7E are the camera tile words, so +6 is the tile at the screen centre.
+    const int centred_x = cam_tile_x_ + 6;
+    const int centred_y = cam_tile_y_ + 6;
+    camera_center_on(centred_x, centred_y);   // sub_1124A
+    if (should_exit_) return out;
+    // `mov al,byte ptr dword_BA83C; add al,6; mov [esi],al` (+ the high word for [esi+1]).
+    rec->x = (uint8_t)(cam_tile_x_ + 6);
+    rec->y = (uint8_t)(cam_tile_y_ + 6);
+    if (live >= 0) {
+        units_[(size_t)live].x = rec->x;
+        units_[(size_t)live].y = rec->y;
+    }
+    out.found = true;
+    out.unit_index = -1;                      // sub_482A5 bx=2: skip the speaker frame
+    out.portrait = rec->face;
+    out.name = rec->name;
+    out.tx = (int)(int8_t)rec->x;
+    out.ty = (int)(int8_t)rec->y;
+    out.key = rec->id;
+    return out;
+}
+
 // Position check for variable-length commands: the offset must hold 0x00 (end of block)
 // or a byte present in dword_52DCF. The original skips unknown bytes too, but a
 // miscalculated command boundary almost always shows up here.
@@ -459,21 +563,16 @@ CombatII::VmResult CombatII::run_vm(uint32_t offset) {
                 ev.type = VmEventType::Dialogue;
                 ev.offset = op_pos;
                 ev.text = txt;
-                ev.portrait = e.portrait_id;
-                ev.speaker_id = (ui >= 0) ? units_[(size_t)ui].id : -1;
-                ev.speaker_name = e.speaker_name;
-                // sub_507BE passes the speaker unit pointer (ebp) from sub_501BA to
-                // sub_482A5; p1/p2 are a sel/idx reference, not coordinates. Record the
-                // index and read the unit tile when the event is played.
-                if (ui >= 0) {
-                    ev.speaker_tx = units_[(size_t)ui].x;
-                    ev.speaker_ty = units_[(size_t)ui].y;
-                    ev.speaker_unit = ui;
-                }
+                // sub_507BE runs when the VM reaches the command, so resolve the speaker at
+                // playback. Keep the parse-time values only on CombatDialogueEntry for the
+                // port's scan fallback (r.lines), not on the event timeline.
+                ev.unit_ref_sel = p1;
+                ev.unit_ref_id = p2;
+                ev.forced_target_context = script_forced_target_;
                 r.events.push_back(ev);
                 if (script_trace_)
-                    fprintf(stderr, "COMBAT: vm dialogue sel=%u idx=%u -> unit %d (face %d): %s\n",
-                            p1, p2, ev.speaker_id, ev.portrait, log_text(txt).c_str());
+                    fprintf(stderr, "COMBAT: vm dialogue sel=%u idx=%u -> parse unit %d (face %d): %s\n",
+                            p1, p2, ui, e.portrait_id, log_text(txt).c_str());
             } else {
                 // Len == 0 or whitespace only: the original shows no empty box either.
                 VmEvent ev; ev.type = VmEventType::Dialogue; ev.offset = op_pos; ev.text = ""; ev.portrait = -1;
@@ -1206,7 +1305,7 @@ CombatII::VmResult CombatII::run_vm(uint32_t offset) {
                 nu.army = (int)rec[0x0E]; // raw Spawn payload; effective army is byte-incremented when nonzero, remapped for raw zero.
                 // The type code is the u16 at +0x61 (same slot as loc_4F02F / sub_12567).
                 nu.sprite_type = (int)rec[0x61] | ((int)rec[0x62] << 8);
-                nu.slot_hint   = rec[0x60];
+                nu.slot_hint   = battle_image_slot(nu.sprite_type);   // loc_4F02F (sub_1198D)
                 nu.face     = rec[0x10]; // portrait from [+10h] (bx of sub_482A5 -> sub_48132)
                 for (int ci = 2; ci < 0x10 && rec[ci]; ++ci) nu.name.push_back((char)rec[ci]);
                 nu.sprite_id = (uint8_t)(nu.sprite_type % 222);
@@ -3364,20 +3463,22 @@ void CombatII::play_vm_events(const std::vector<VmEvent>& events) {
             // sub_507BE -> end of sub_482A5: after drawing the line it waits for a key or 700 ticks
             // (~3.99s) through `mov eax,2BCh; call sub_499EF`. sub_5046B is not called during that
             // wait, so neither the camera nor the message window advances.
-            // The original sub_482A5 reads the unit pointers [ebp+0/1], so it uses the live tiles
-            // at
-            // playback time.
-            int stx = ev.speaker_tx, sty = ev.speaker_ty;
-            if (ev.speaker_unit >= 0 && ev.speaker_unit < (int)units_.size()) {
-                stx = units_[(size_t)ev.speaker_unit].x;
-                sty = units_[(size_t)ev.speaker_unit].y;
+            // Speaker selection (sub_507BE) runs here, not at parse time: the CC968 list and
+            // the CC990 record can change through earlier events in this same stream.
+            const DialogueSpeakerInfo spk =
+                battle_dialogue_speaker_507be(ev.unit_ref_sel, ev.unit_ref_id, ev.forced_target_context);
+            if (!spk.found) {
+                // loc_508DF: no speaker -> return without drawing a window and without waiting.
+                fprintf(stderr, "COMBAT: play dialogue @0x%X no speaker (sel=%u idx=%u) -> skipped (loc_508DF)\n",
+                        ev.offset, (unsigned)ev.unit_ref_sel, (unsigned)ev.unit_ref_id);
+                break;
             }
-            set_ui_text(ev.text, false, ev.portrait, ev.speaker_name, stx, sty, ev.speaker_unit);
+            set_ui_text(ev.text, false, spk.portrait, spk.name, spk.tx, spk.ty, spk.unit_index, spk.key);
             present_cutscene_frame();
             // The stored text is Johab, which would print garbled, so log_text converts it to UTF-8
             // with Font::johab_to_utf8. On-screen rendering still uses Johab.
             fprintf(stderr, "COMBAT: play dialogue @0x%X (unit %d face %d tile=(%d,%d) name '%s'): %s\n",
-                    ev.offset, ev.speaker_id, ev.portrait, stx, sty, log_text(ev.speaker_name, 40).c_str(),
+                    ev.offset, spk.key, spk.portrait, spk.tx, spk.ty, log_text(spk.name, 40).c_str(),
                     log_text(ev.text).c_str());
             fprintf(stderr, "COMBAT: dialogue wait: key or 700 ticks (%.3fs), timer period=700\n",
                     700.0 / kTimerHz);
@@ -3748,7 +3849,7 @@ void CombatII::play_vm_events(const std::vector<VmEvent>& events) {
                 } else {
                     unit.sprite_type = (int)rec[0] | ((int)rec[1] << 8);
                 }
-                unit.slot_hint = unit.sprite_type & 0xFF;     // [60h] = sub_1198D([61h])
+                unit.slot_hint = battle_image_slot(unit.sprite_type); // [60h] = sub_1198D([61h])
                 unit.sprite_id = (uint8_t)(unit.sprite_type % 222);
                 if (unit.stored_77)                            // loc_526B2: [77h]+60h = dl
                     unit.stored_77->slot_hint = unit.slot_hint;

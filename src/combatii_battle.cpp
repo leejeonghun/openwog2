@@ -1988,8 +1988,8 @@ void CombatII::battle_apply_death_morale(const CombatUnitPlacement& dead) {
 // sub_5401B (post-move check): area trigger (sub_5361C) -> front-unit contact trigger
 // (sub_5394D, table 6) -> region unit-count trigger (sub_53C12).
 // An event can remove the unit, so every step re-checks list membership (sub_11FF7 == active).
-void CombatII::battle_after_move(int unit_index) {
-    if (unit_index < 0 || (size_t)unit_index >= units_.size()) return;
+bool CombatII::battle_after_move(int unit_index) {
+    if (unit_index < 0 || (size_t)unit_index >= units_.size()) return false;
     const int saved_target = script_forced_target_;
     VmResult area;
     const bool area_fired = run_area_trigger(units_[(size_t)unit_index], area);
@@ -2001,7 +2001,7 @@ void CombatII::battle_after_move(int unit_index) {
         play_vm_result(area);
     }
     script_forced_target_ = saved_target;
-    if (should_exit_ || !units_[(size_t)unit_index].active) return;
+    if (should_exit_ || !units_[(size_t)unit_index].active) return false;
     // sub_5401B: one tile ahead via sub_49ABC -> sub_11DB2 occupant -> sub_5394D(mode 1) if any.
     {
         const auto& u = units_[(size_t)unit_index];
@@ -2015,11 +2015,15 @@ void CombatII::battle_after_move(int unit_index) {
         const int occ = battle_unit_index_at(fx, fy);
         if (occ >= 0) {
             run_contact_trigger(unit_index, occ, 1);            // sub_5394D(mode 1, table 6)
-            if (should_exit_) return;
-            if (!units_[(size_t)unit_index].active) return;      // sub_11FF7 == 0 -> done
+            if (should_exit_) return false;
+            if (!units_[(size_t)unit_index].active) return false; // sub_11FF7 == 0 -> return 0
         }
     }
     run_region_count_trigger();
+    if (should_exit_) return false;
+    // sub_5401B's final sub_11FF7 check: `test ax,ax; jz loc_54013` returns 0.
+    if ((size_t)unit_index >= units_.size() || !units_[(size_t)unit_index].active) return false;
+    return true;
 }
 
 // sub_46359(unit, edx=raw damage): the terrain-damage presentation. HP was already subtracted
@@ -3112,7 +3116,7 @@ void CombatII::play_unit_death(int unit_index, int killer_index) {
                 battle_restore_stored_1808a(unit_index, false, false);   // sub_1808A
                 if ((size_t)unit_index < units_.size()) {
                     units_[(size_t)unit_index].slot_hint =
-                        (int)((uint32_t)units_[(size_t)unit_index].sprite_type & 0xFF); // [60h] = 1198D([61h])
+                        battle_image_slot(units_[(size_t)unit_index].sprite_type); // [60h] = 1198D([61h])
                     reset_unit_pose(units_[(size_t)unit_index]);
                 }
                 battle_wc1_occupancy_preserve_or_close("death revive (sub_11F74)");
@@ -3718,7 +3722,7 @@ void CombatII::battle_status_timer_19892(CombatUnitPlacement& u) {
                 if (u.combat_flags_1e & 0x40) {
                     // sub_1198D([+5Fh]>>16): restore the original image slot. The port keys
                     // its NC2 cache by type, so only the slot number returns to that type.
-                    u.slot_hint = (int)((uint32_t)u.sprite_type & 0xFF);
+                    u.slot_hint = battle_image_slot(u.sprite_type);
                 }
                 u.combat_flags_1e = (uint8_t)(u.combat_flags_1e & kStatusAilClearMask[i]);
                 *words[i] = 0xFFFF;
@@ -4985,7 +4989,9 @@ bool CombatII::battle_player_input() {
                         const int g = ring_sub_magic_g_, b = ring_sub_magic_d_;
                         const int c = (opt == 0) ? 7 : opt - 15;
                         const int v = battle_magic_ring_value(g, b, c);
-                        const int r = (v == 0) ? -1
+                        // loc_4C94E: `dec ecx; idiv 3; test edx,edx` -> (v-1)%3 != 0 is the
+                        // invalid slot and returns -1 (loc_4D337 keeps [80h]).
+                        const int r = ((v - 1) % 3 != 0) ? -1
                             : (v - 1) + battle_spell_kind(u, (v - 1) / 21);
                         // 4C72A hides the level-3 ring before it returns R. loc_4D337
                         // then applies [80h] (R >= 0) and jumps to loc_4D0D0.
@@ -5157,6 +5163,9 @@ bool CombatII::battle_player_input() {
                         fprintf(stderr, "COMBAT: click id %d not offered, ignored (4BA7F)\n", menu_id);
                     return false;
                 } else {
+                    // sub_4D674 (83305): after sub_4BA7F returns a valid id, sub_4B9D7 hides the
+                    // ring before sub_44DEC and the sub_4D442 dispatch, for every menu id.
+                    ring_close_anim();
                     // Banner off/on around the sub_4D674 dispatch (83309/83316, sub_44DEC).
                     battle_overlay_mode_ = 0; // sub_44DEC(0)
                     battle_ring_dispatch(ui, menu_id);
@@ -6167,6 +6176,9 @@ void CombatII::battle_text_band(const std::string& text, bool redraw_frame) {
     draw_text_wrapped(x, 0x5C, text);                // sub_5E048(x, 0x5C, "%s")
     video_.present();                                // sub_5E9E8
     dump_frame_if_requested();
+    // sub_48083 (75442): `mov eax,5Ah; call sub_499EF` is inside the helper. Callers rely on
+    // it (e.g. sub_18D36 adds 0x1F4 after the band, sub_1832D relies on the 0x5A hold).
+    wait_info_dismiss(0x5A);
 }
 
 // sub_482A5(unit, Johab string): dialogue window with the unit's portrait and name. At the
@@ -7286,7 +7298,7 @@ int CombatII::battle_spell_summon(int unit_index, int k, int row, int sprite, in
         nu.item_use_12 = (uint8_t)((unsigned)caster.id + 10u);         // [12h]=[0Fh]+0Ah
         nu.id = caster.id;                                            // [0Fh] keeps the copied value
         if ((int)battle_effective_army(caster) == 1) nu.auto_battle = 2; // [0Eh]==1 -> [83h]=2
-        nu.slot_hint = sprite & 0xFF;                                 // [60h] = sub_1198D([61h])
+        nu.slot_hint = battle_image_slot(sprite);                     // [60h] = sub_1198D([61h])
         nu.active = true;
         nu.occupancy_hp_known = true;
         reset_unit_pose(nu);

@@ -167,6 +167,27 @@ bool CombatII::battle_d66a8_footprint(int type_code, int dir, int* w, int* h) co
     return battle_d66a8_footprint_pose(type_code, dir, 0, w, h);
 }
 
+// sub_114EF / sub_1198D: image slot of a character type. sub_114EF returns the existing slot
+// (negative encoding) or claims the first free slot of unk_E4FC8[0..0x63] and stores the type
+// in its table; sub_11575 then loads the NC2 into that slot. The port keys its NC2 cache by
+// type, so the slot is only [+0x60]'s value, but it must be the original's small index rather
+// than the low byte of the type code.
+int CombatII::battle_image_slot(int type_code) {
+    const auto it = battle_image_slots_.find(type_code);
+    if (it != battle_image_slots_.end()) return it->second;  // sub_114EF negative -> existing
+    for (int slot = 0; slot < 100; ++slot) {
+        if (battle_image_slot_ref_[slot] == 0) {
+            battle_image_slot_ref_[slot] = 1;
+            battle_image_slots_[type_code] = slot;
+            return slot;
+        }
+    }
+    // Slot Full: sub_114EF reports "Slot Full" and returns 0x64 (after an out-of-range
+    // refcount write at index 100); the port returns 0 as a safe fallback. Unreachable until
+    // 100 distinct character types have been loaded.
+    return 0;
+}
+
 // Blit a strip (w*h, 0xFF = transparent), matching the staging-buffer layout made by sub_10083.
 void CombatII::blit_nc2_frame(int x, int y, const NC2Frame& fr) {
     if (fr.pixels.empty() || fr.w <= 0 || fr.h <= 0) return;
@@ -1147,7 +1168,10 @@ void CombatII::init_dummy_units(bool parse_sce_snapshot) {
                         // (SIREN),
                         //       37-1 Hanjo=199 (HANJO), 1-2 Ranger=14 (RANGER) - the names match.
                         p.sprite_type = (int)u[0x61] | ((int)u[0x62] << 8);
-                        p.slot_hint   = u[0x60];          // initial slot recorded in the SCE
+                        // loc_4F02F: `mov eax,[ebp+5Fh]; sar eax,10h; call sub_1198D; mov
+                        // [ebp+60h],al`. The SCE byte at +0x60 is overwritten; the slot is the
+                        // one sub_11575 assigned to this type.
+                        p.slot_hint   = battle_image_slot(p.sprite_type);
                         // The dialogue portrait is [+10h]: sub_482A5 reads `mov bl,[ebp+10h]` and
                         // passes it to sub_48132("portrait.syf", index=bx). PORTRAIT.SYF holds 85
                         // entries (u16 at 0x42) and the 1-1 values 0x2d/0x4b/0x4c are all below
@@ -1558,7 +1582,7 @@ void CombatII::battle_restore_blackbox_party() {
             p.group = 1;
             p.battle_list_membership_modeled = true;
             p.sprite_type = (int)(uint16_t)(rec[0x61] | (rec[0x62] << 8));
-            p.slot_hint = rec[0x60];
+            p.slot_hint = battle_image_slot(p.sprite_type);   // loc_4F02F (sub_1198D)
             p.face = rec[0x10];
             p.combat_class = rec[0x11];
             p.code_b = rec[0x5C];
@@ -3495,7 +3519,7 @@ void CombatII::render_all_unit_hp() {
 //   (~3.99s).
 void CombatII::show_dialogue_line(const std::string& text, int portrait_id,
                                   const std::string& speaker_name, int speaker_tx, int speaker_ty,
-                                  int speaker_unit){
+                                  int speaker_unit, int speaker_key){
     // sub_507BE -> sub_482A5 passes the speaker unit pointer, so the unit tile is read again at
     // display time instead of using a stored tile or the (sel, idx) of the dialogue prefix.
     if (speaker_unit >= 0 && speaker_unit < (int)units_.size()) {
@@ -3553,7 +3577,7 @@ void CombatII::show_dialogue_line(const std::string& text, int portrait_id,
     int su = -1;
     if (speaker_unit >= 0 && speaker_unit < (int)units_.size())
         su = speaker_unit;
-    else if (speaker_tx >= 0 && speaker_ty >= 0)
+    else if (speaker_key < 0 && speaker_tx >= 0 && speaker_ty >= 0)
         su = find_unit_index((uint8_t)speaker_tx, (uint8_t)speaker_ty);
 
     // ---- (3) Whether to animate: port of the bx decision in sub_507BE loc_508B4 ----
@@ -3562,12 +3586,19 @@ void CombatII::show_dialogue_line(const std::string& text, int portrait_id,
     //   no speaker found (loc_508DF)                        -> bx=2, turned into 0 at loc_482D7
     // dword_1102B8 is always set to the current speaker right after the sub_482A5 call
     // (`mov dword_1102B8, ecx`), regardless of bx.
+    // dword_1102B8 stores the record identity. VM dialogue keys are unit IDs (sub_507BE's
+    // record pointer); callers without a key keep the live-index behaviour. The original
+    // compares record pointers, so the ID key can only differ for summon clones that copy
+    // the caster's ID (those would share the no-ellipse state).
+    int key = speaker_key;
+    if (key < 0 && su >= 0) key = units_[(size_t)su].id;
     bool animate = true;
-    if (su < 0)
-        animate = false;                          // no speaker -> bx=2 -> 0
-    else if (last_dialogue_unit_ >= 0 && su == last_dialogue_unit_)
+    if (su < 0 || key < 0)
+        animate = false;                          // bx=2 (loc_482D7) or no speaker -> no ellipse
+    else if (last_dialogue_unit_ >= 0 && key == last_dialogue_unit_)
         animate = false;                          // same speaker again -> bx=0
-    last_dialogue_unit_ = su;
+    // loc_508DF returns without writing dword_1102B8 when no speaker was found.
+    if (key >= 0) last_dialogue_unit_ = key;
 
     // ---- Tail of sub_1124A (+0x68..+0x98): sub_454B3 -> sub_4A106 -> sub_5E9E8 ----
     // Once the camera is aligned, draw the world, overlay the speaker frame (corners + HP) and
