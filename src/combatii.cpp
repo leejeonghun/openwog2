@@ -135,8 +135,8 @@ bool CombatII::battle_ring_dim_active() const {
 // falls through into sub_454D5 (see render_battle_frame). It does not call sub_5046B, so the
 // 0x73 message window is not drawn here. The full sub_4559F frame is sub_454B3 -> sub_454D5 ->
 // sub_5046B (text), and sub_508E6 draws the sub_50216 drop after that text.
+// sub_10AEB never clears the backbuffer, so there is no leading video_.clear() (C-024).
 void CombatII::battle_fx_world() {
-    video_.clear();
     render_battle_map();                                            // sub_10AEB + sub_12BEE
     render_weather_layer();                                         // sub_4512E
 }
@@ -155,8 +155,7 @@ void CombatII::battle_fx_world_dim() {
 // sub_122C4/sub_12567 pass, so it draws no normal/attacking/water units and no weather - only
 // the map, its top tiles and the sub_18605 item/field markers.
 void CombatII::battle_fx_world_12d65() {
-    video_.clear();
-    render_battle_map(true);                                        // sub_10AEB + sub_12D65
+    render_battle_map(true);                                        // sub_10AEB + sub_12D65 (no clear)
 }
 
 // sub_276B9 step 2 calls sub_454B3 and then sub_12D65 again, so the top tiles and map effects
@@ -185,9 +184,7 @@ void CombatII::battle_fx_present_12d65() {
 // bar. Neither screen calls sub_50216 either; the drop layer belongs to the spawn/move animation
 // frames (sub_508E6, sub_50BAF), not to sub_454B3, so there is nothing to draw here.
 void CombatII::battle_fx_world_keep() {
-    battle_keep_backbuffer_ = true;
     render_battle_map();                                            // sub_10AEB + sub_12BEE (no clear)
-    battle_keep_backbuffer_ = false;
     render_weather_layer();                                         // sub_4512E
 }
 
@@ -818,7 +815,8 @@ void CombatII::battle_script_poll() {
 // Shared by the game-frame path (11.7Hz) and the manual-scroll 60Hz path. The caller presents
 // and dumps.
 void CombatII::render_battle_viewer() {
-    video_.clear();
+    // sub_4559F also enters sub_454B3, which never clears; the previous frame stays under the
+    // 13x13 map pass, units and weather (C-024).
     render_battle_map();
     render_weather_layer();   // sub_454B3: sub_10AEB -> sub_12BEE -> sub_4512E
     render_battle_drop_layer(); // sub_50216: draw the spawn-drop sprites over the map+weather

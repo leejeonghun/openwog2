@@ -29,9 +29,9 @@
 //   facing 3 (east):  intro F0DAA[9..11],  no curtain sprite,  seed x+17h,  y,
 //                     seg rand(4)+1, angle 0B4h+rand(5Ah), step rand(3)+1, gate 28h-rand(14h);
 //                     only this branch redraws the caster via 12F2A every iteration (3A1E6)
-//   facing 2 (north): intro F0DAA[11h..13h], curtain 16 (F0E6A), seed x+0Eh,  y-0Dh,
+//   facing 2 (north): intro F0DAA[11h..13h], curtain 20 (F0E9A), seed x+0Eh,  y-0Dh,
 //                     seg rand(3)+2, angle 5Ah+rand(5Ah),  step rand(2)+1, gate 136h-rand(1Eh)
-//   facing 0 (south): intro F0DAA[0Dh..0Fh], curtain 20 (F0E9A), seed x+0Fh,  y,
+//   facing 0 (south): intro F0DAA[0Dh..0Fh], curtain 16 (F0E6A), seed x+0Fh,  y,
 //                     seg rand(3)+2, angle 15Eh-rand(5Ah), step rand(2)+1, gate 82h+rand(1Eh)
 //   Every slot picks one of the 13 cells of the 1AC59 radius-2 diamond; its target is
 //   10971(cell)+0Ch (x) and 10988(cell)-2 (y).
@@ -251,14 +251,14 @@ int CombatII::battle_fx_39a49_anim(int unit_index) {
             redraw_caster = true;
             break;
         case 2:                                                                // north (loc_3A2C6)
-            intro_first = 0x11; curtain_frame = 16;
+            intro_first = 0x11; curtain_frame = 20;                             // F0E9A (loc_3A489)
             seed_x = anchor_x + 0x0E;   seed_y = anchor_y - 0x0D;
             seg_rand = 3; seg_add = 2; step_rand = 2;
             gate_base = 0x5A;  gate_rand = 0x5A; gate_sub = false;
             tgt_base = 0x136;  tgt_rand = 0x1E;  tgt_sub = true;
             break;
         default:                                                               // south (loc_3A59E)
-            intro_first = 0x0D; curtain_frame = 20;
+            intro_first = 0x0D; curtain_frame = 16;                             // F0E6A (loc_3A750)
             seed_x = anchor_x + 0x0F;   seed_y = anchor_y;
             seg_rand = 3; seg_add = 2; step_rand = 2;
             gate_base = 0x15E; gate_rand = 0x5A; gate_sub = true;

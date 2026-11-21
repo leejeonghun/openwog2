@@ -1879,12 +1879,8 @@ private:
     // ---- Battle tick state initialised by sub_19652 ----
     uint8_t  battle_state_ = 0;          // byte_F042E: 0 = running, 1 = waiting for player input, 2 = pause requested, 3 = paused
     bool battle_dim_row0_ = false;       // dword_FA8B6 equivalent: sub_454D5 dim over (0x10,4)-(0x130,0xC4), row 0; true only while the scenario condition is shown.
-    // The original sub_10AEB never clears the backbuffer, it only covers the 13x13 tiles. When
-    // true, render_battle_map skips its clear so the border strip the map does not cover (16 px on
-    // the sides, 4 px top and bottom) keeps the previous frame's pixels. The equipment screen
-    // (sub_48BC1) and detail screen (sub_48863) never call 454D5, so that strip is the previous
-    // battle HUD.
-    bool battle_keep_backbuffer_ = false;
+    // sub_10AEB never clears the backbuffer, so render_battle_map does not clear either (C-024).
+    // The border strip the 13x13 tile pass does not cover keeps the previous frame's pixels.
     bool battle_ring_dim_active() const; // dim while the ring/sub-ring is up (FA8B6 equivalent, in sub_454D5 order); used by render_battle_frame.
     uint16_t battle_overlay_mode_ = 0;   // word ptr dword_75008 (sub_44DEC): 1 makes sub_454D5 draw the state icons
     // ---- All-unit HP, TP gauge and clock (sub_13546/sub_45BBF family) ----

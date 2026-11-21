@@ -1775,9 +1775,11 @@ bool CombatII::battle_fx_32bcb_anim(int unit_index) {
 //   life 4..1 draw F0DAA[54..57] (F1032/F103E/F104A/F1056), each with its own payload and
 //   xo/yo (NANG.NSP records 54..57 are 43x53, 33x59, 18x66 and 6x74).
 //
-// Three equivalences:
-//   - The word dword_BA838 +-1 toggle only changes the 16.16 camera fraction (1/65536 px),
-//     which the integer-pixel port ignores: equivalent, not approximate.
+// Notes:
+//   - At life 4 sub_36531 toggles the low word of dword_BA838 between 1 and -1. That word is
+//     the camera fine Y that sub_10988 adds in pixels (`add eax, ebx` after `shl eax,4`), so
+//     the port toggles cam_fine_y_ the same way (C-021). The tail then stores si=0 into the
+//     same word (ASM 52816), so the 8+4 frame sequence starts from fine Y 0 again.
 //   - F1064/F1066/F106A and F0E16/F0E22/F0DAC are aliases of F0DAA entries, not separate
 //     tables (0xF0E16 = F0DAA + 9*12, 0xF0E22 = +10*12, 0xF106A = +58*12+8), so the port
 //     uses F0DAA[58] (last frame), [10], [9] and [0].
@@ -1834,6 +1836,7 @@ void CombatII::battle_fx_367ee_anim(int unit_index) {
             if (--s.life <= 0) { s.alive = false; continue; }
             if (s.life <= 4) {                                             // F1032/F103E/F104A/F1056
                 if (s.life == 4) {                                         // the fragment bursts
+                    cam_fine_y_ = (cam_fine_y_ == 1) ? -1 : 1;             // dword_BA838 toggle
                     s.x += kAx[g]; s.y += kAy[g];
                     sfx(0x34);                                             // 4F4CD(34h)
                 }
@@ -1978,6 +1981,7 @@ void CombatII::battle_fx_367ee_anim(int unit_index) {
     }
     battle_dim_row0_ = false;                                              // 44D6E(0, 100h)
     pal_load_range(0, 256, &battle_master_palette_[0][0]);                 // 5F9AE(0, unk_12824C)
+    cam_fine_y_ = 0;                                                       // mov word ptr dword_BA838, si (si=0)
     // (8) 8 frames (cx=7..0, F0DAA[cx] only when cx>=4), then 4 frames (cx=3..0)
     for (int cx = 7; cx >= 0 && !should_exit_; --cx) {
         frame(); gblit();

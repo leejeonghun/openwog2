@@ -1167,6 +1167,7 @@ CombatII::VmResult CombatII::run_vm(uint32_t offset) {
             const size_t script_size = script_buffer_.size();
             if ((size_t)cur >= script_size) { abort_range(); break; }
             const uint8_t K = script_buffer_[cur];
+            const uint32_t first_group = cur;
             bool done = false;
             int spawned = 0;
             // sub_50D9F+41C registers every unit in the move queue through
@@ -1179,6 +1180,20 @@ CombatII::VmResult CombatII::run_vm(uint32_t offset) {
             sev.offset = op_pos;
             uint32_t load_off = 0;
             while (!done) {
+                // loc_50DD4: after a separator 3 the original reads the next group's K into
+                // var_4 and compares it with var_10 (the first group's K). On a mismatch it
+                // jumps to loc_511DE with ebp still at K; `dec ebp` therefore steps back to
+                // the separator 3, and the VM dispatches the byte at the returned position.
+                // The 3 becomes a new 0x03 command whose payload starts at K, so the foreign
+                // group is parsed as a separate spawn command (C-023).
+                if ((size_t)cur < script_size && cur != first_group && script_buffer_[cur] != K) {
+                    if (script_trace_)
+                        fprintf(stderr, "COMBAT: vm spawn group K mismatch 0x%02X != 0x%02X at 0x%X -> end before group\n",
+                                script_buffer_[cur], K, cur);
+                    --cur;   // loc_511DE dec ebp: back to the separator 3, the next opcode
+                    done = true;
+                    break;
+                }
                 if ((size_t)cur > script_size || script_size - (size_t)cur < 2) { abort_range(); break; }
                 uint8_t count1 = script_buffer_[cur + 1];
                 (void)count1;
