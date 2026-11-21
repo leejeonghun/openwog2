@@ -2298,8 +2298,8 @@ void Pack::render_shadows() {
             // unk_82938/unk_8293A: the stored absolute screen position.
             int sx = st.screen_x;
             int sy = st.screen_y;
-            // sub_13D04 clip: 0x0A < sx < 0x131 and sy < 0xC8.
-            if (sx <= 0x0A || sx >= 0x131 || sy >= 0xC8) continue;
+            // sub_13D04 clip: 0x0A < sx < 0x131 and -5 < sy < 0xC8.
+            if (sx <= 0x0A || sx >= 0x131 || sy <= -5 || sy >= 0xC8) continue;
             blit_cursor_raw(sx - 8, sy + 9, shadow_sprite_);
         }
         return;
@@ -4074,6 +4074,9 @@ void Pack::eve_op_warp(int new_town_id, int cam_x, int cam_y) {
 bool Pack::run_eve_script(int event_id) {
     EveFile eve;
     if (!load_eve_file(event_id, eve)) return false;
+    // SM town events reach this loop through sub_2D038 -> sub_13B8D. The other EVE
+    // loop in the original (sub_13D99) is only reached from the TOOL-mode event
+    // tester (byte_54040 == 1), which this port does not expose.
     // Clear the actor slots when a cutscene starts. In the original, unk_82934 starts at 0
     // (set by sub_1A4F9/main) and changes only through op13/op14 inside the script.
     eve_clear_actors();
@@ -4391,9 +4394,6 @@ bool Pack::run_eve_script(int event_id) {
             moving |= eve_move_tick(a);
             moving |= eve_camera_pan_tick(a);
         }
-        // sub_21E29 runs after the VM has processed every actor turn. Applying the
-        // accumulated op23 velocity here keeps other actors running during a camera pan.
-        if (eve_pan_frame_active_) eve_camera_pan_apply_frame();
         if (eve_auto_fast) continue; // skip rendering and animation after the teleport
         if (should_exit_) break;
         // The sub_13B8D frame loop runs sub_12857 (VM), sub_21D70 (tile animation),
@@ -4405,9 +4405,17 @@ bool Pack::run_eve_script(int event_id) {
         if (need_render) {
             video_.clear();
             render_town_frame();
+            // sub_21E29 draws the base tiles (and registers top tiles) with the
+            // pre-integration camera, then integrates the op23 velocity at its tail.
+            // Applying the pan after the draw reproduces the original frame's one-step
+            // actor lead instead of moving the background first.
+            if (eve_pan_frame_active_) eve_camera_pan_apply_frame();
             video_.present();
             pack_maybe_dump_shot(video_);
             eve_pacer.pace(input_);
+        } else if (eve_pan_frame_active_) {
+            // No redraw this frame, but the camera still advances at the tail.
+            eve_camera_pan_apply_frame();
         }
         // Outside G2_PACK_AUTO, saw_move_setup has already become a counter; nothing to do.
         (void)saw_move_setup;
