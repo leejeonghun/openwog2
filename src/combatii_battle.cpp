@@ -1981,6 +1981,74 @@ void CombatII::battle_after_move(int unit_index) {
     run_region_count_trigger();
 }
 
+// sub_46359(unit, edx=raw damage): the terrain-damage presentation. HP was already subtracted
+// by sub_17310. sub_45BFB prepares the slot-0 digit buffer from dmg/100 (truncated) and clears
+// the walk offset, sub_45ED2 sets the knockback from the unit's own facing ([+60h]>>24), then
+// 25 frames draw the digits (sub_45CCB) and shake (sub_45F29), each presenting (sub_5E9E8) and
+// waiting one timer tick (sub_499E4). sub_499DA(0x20) sets the next timer period and sub_12124
+// resets the pose.
+void CombatII::battle_terrain_damage_46359(int unit_index, int dmg) {
+    if (unit_index < 0 || (size_t)unit_index >= units_.size()) return;
+    auto& u = units_[(size_t)unit_index];
+    u.walk_off_x = u.walk_off_y = 0;                            // sub_45BFB: [65h]=[66h]=0
+    char digits[8] = {};
+    int ndig = 0;
+    if (dmg > 0) {
+        const int shown = dmg / 100;                            // idiv 100 (truncates)
+        ndig = snprintf(digits, sizeof(digits), "%d", shown);
+        if (ndig > 4) ndig = 4;                                 // sub_45CCB draws four cells
+    }
+    const int sx0 = (u.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X;   // sub_10971
+    const int sy0 = (u.y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y;   // sub_10988
+    int digit_y[5];
+    for (int k = 0; k < 5; k++) digit_y[k] = sy0 + 0x0A;        // word_F9708 = sub_10988+0Ah
+    setup_knockback_hit(u, u.facing & 3);                       // sub_45ED2([+60h]>>24)
+    static constexpr uint8_t kDmgColor[8] = {0x04, 0x10, 0x31, 0x51, 0x20, 0x01, 0x00, 0x00};
+    const int army = std::min(std::max(battle_effective_army(u), 0), 7);
+    const uint8_t color = kDmgColor[(size_t)army];
+    if (!small_font_tried_) load_small_font();
+    game_timer_set(3);                                          // mov eax,3; sub_1033B
+    for (int f = 0; f < 0x19 && !should_exit_ && !skip_cutscene_; f++) {
+        if ((size_t)unit_index >= units_.size()) break;
+        // sub_45F29(edx=slot 0): shake and hit pose. Apply it before the world pass so this
+        // frame's offsets are visible; the original redraws the unit after sub_45CCB.
+        apply_knockback_hit(units_[(size_t)unit_index], 0, f);
+        // sub_45CCB moves the cells before drawing them (same animation as the status numbers).
+        if (f < 5) digit_y[0] -= 2;
+        else if (f >= 0x14) digit_y[3] += 2;
+        else {
+            const int k = (f - 5) / 5;
+            if (k < 3) { digit_y[k] += 2; digit_y[k + 1] -= 2; }
+        }
+        render_battle_frame();
+        uint8_t* bb = video_.get_backbuffer();
+        // sub_45CCB tests cell 0 once for the vertical clip, then draws the four cells.
+        const int y0 = digit_y[0];
+        if (sx0 - 16 >= 0 && sx0 - 16 < 0x120 && y0 - 5 >= 0 && y0 - 5 < 0xB2) {
+            const int first = 4 - ndig;                         // right-aligned 4-cell field
+            for (int k = 0; k < ndig; k++) {
+                const int x = sx0 + 6 * (first + k), y = digit_y[first + k];
+                char one[2] = { digits[k], 0 };
+                if (small_font_loaded_) {
+                    draw_small_text(x + 1, y + 1, one, 0, 1);
+                    draw_small_text(x, y, one, color, 1);
+                } else if (bb && font_.is_loaded()) {
+                    font_.set_text_mode(4, 0x0000, 0xFF);
+                    font_.draw_string(bb, SCREEN_W, SCREEN_H, x + 1, y + 1, one);
+                    font_.set_text_mode(4, (uint16_t)(color << 8), 0xFF);
+                    font_.draw_string(bb, SCREEN_W, SCREEN_H, x, y, one);
+                }
+            }
+        }
+        render_overlay();
+        video_.present();                                       // sub_5E9E8
+        wait_game_tick();                                       // sub_499E4
+    }
+    game_timer_set(0x20);                                       // sub_499DA(20h): next period, no wait
+    if ((size_t)unit_index < units_.size())
+        reset_unit_pose(units_[(size_t)unit_index]);            // sub_12124
+}
+
 // sub_17310 (terrain damage/healing): called after a move by sub_16834+188, sub_40295 and
 // friends, right after sub_5401B.
 //   Returns 1 (no effect) for [15h]&80h, [14h]&1 and classes 4C/5C/5D. bx is derived from the
@@ -1988,11 +2056,10 @@ void CombatII::battle_after_move(int unit_index) {
 //   bx 0..5 is valid.
 //   div = 0x14 for bx 0/3/4 and 0x0A otherwise; esi = [4Ch]/div. For bx>1, sub_1762C(bx-2)
 //   scales esi by adjust/10.
-//   [48h] -= esi, then sub_53797 (mode 1); the sub_46359/sub_462A7 animation plays only inside
-//   the 12x12 viewport. [48h] <= 0 runs sub_1DB1D with no killer and returns 0, else 1.
-//   Deviation: the sub_46359/sub_462A7 presentation (timer, knockback, digits) is replaced by
-//   logging; HP accounting, triggers and death match. Healing clamps at max HP (loc_462BE) and
-//   the viewport is approximated by the 12x12 camera window.
+//   [48h] -= esi, then sub_53797 (mode 1); sub_46359 (damage digits/knockback) or sub_462A7
+//   (healing steps) plays only inside the 12x12 viewport. [48h] <= 0 runs sub_1DB1D with no
+//   killer and returns 0, else 1. Healing clamps at max HP (loc_462BE) and the viewport is
+//   approximated by the 12x12 camera window.
 int CombatII::battle_terrain_17310(int unit_index) {
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return 1;
     CombatUnitPlacement& u = units_[(size_t)unit_index];
@@ -2030,25 +2097,38 @@ int CombatII::battle_terrain_17310(int unit_index) {
         if (u.hp > u.max_hp) { u.hp = u.max_hp; u.hp_deficit = u.max_hp * 100 - new_raw; }
     }
     run_unit_hp_trigger(unit_index, -1, 1);                       // sub_53797(ebx=1)
-    if (should_exit_ || !units_[(size_t)unit_index].active) return 0;
+    if (should_exit_ || (size_t)unit_index >= units_.size() ||
+        !units_[(size_t)unit_index].active) return 0;
+    // The HP trigger can run a script and resize units_, so re-index instead of reusing u.
+    const CombatUnitPlacement& cur = units_[(size_t)unit_index];
     // Viewport (dword_BA83C/BA838, 12 cells) approximated by a 12x12 camera window; the
     // animation is skipped outside it.
-    const bool inside = (u.x >= cam_tile_x_ && u.x < cam_tile_x_ + 12 &&
-                         u.y >= cam_tile_y_ && u.y < cam_tile_y_ + 12);
+    const bool inside = (cur.x >= cam_tile_x_ && cur.x < cam_tile_x_ + 12 &&
+                         cur.y >= cam_tile_y_ && cur.y < cam_tile_y_ + 12);
     if (battle_trace_) {
         if (esi > 0) {
             fprintf(stderr, "COMBAT: terrain unit=%d (%d,%d) attr=%02X bx=%d div=%d dmg=%d hp_raw %d->%d%s\n",
-                    u.id, u.x, u.y, (unsigned)(raw & 0xFF), bx, div, esi,
+                    cur.id, cur.x, cur.y, (unsigned)(raw & 0xFF), bx, div, esi,
                     old_raw, battle_hp_raw(units_[(size_t)unit_index]),
-                    inside ? "" : " (outside viewport, sub_46359 skipped)");
+                    inside ? " (sub_46359)" : " (outside viewport, sub_46359 skipped)");
         } else if (esi < 0) {
             fprintf(stderr, "COMBAT: terrain unit=%d (%d,%d) attr=%02X bx=%d div=%d heal=%d hp_raw %d->%d%s\n",
-                    u.id, u.x, u.y, (unsigned)(raw & 0xFF), bx, div, -esi,
+                    cur.id, cur.x, cur.y, (unsigned)(raw & 0xFF), bx, div, -esi,
                     old_raw, battle_hp_raw(units_[(size_t)unit_index]),
-                    inside ? "" : " (outside viewport, sub_462A7 skipped)");
+                    inside ? " (sub_462A7)" : " (outside viewport, sub_462A7 skipped)");
         }
     }
-    // sub_46359/sub_462A7 presentation is replaced by logging (no timer, knockback or digits).
+    // loc_1743F/loc_17467: the viewport-gated presentation runs after the HP trigger and
+    // before the death check (damage), or after the HP update (healing, which tops up to max).
+    if (inside) {
+        if (esi > 0) {
+            battle_terrain_damage_46359(unit_index, esi);          // sub_46359
+            if (should_exit_ || !units_[(size_t)unit_index].active) return 0;
+        } else if (esi < 0) {
+            battle_heal_462a7(unit_index, -esi);                   // sub_462A7
+            if (should_exit_) return 0;
+        }
+    }
     if (battle_hp_raw(units_[(size_t)unit_index]) <= 0) {
         play_unit_death(unit_index, -1);                           // sub_1DB1D(eax=0)
         return 0;
@@ -2449,6 +2529,39 @@ bool CombatII::battle_quick_save_4f4ef() {
     fprintf(stderr, "COMBAT: quick save complete %s units=%zu scen=%s (sub_4F4EF)\n",
             path.c_str(), units_.size(), scen.c_str());
     return true;
+}
+
+// sub_4FCD9 (main_+DB): open genesis.qsv read-only, read 16 bytes and strcmp them against
+// unk_FDF68 (the current scenario name). Equal -> leave the file alone; missing/different ->
+// sub_4F4EF rewrites it. The port's qsv starts with "G2QSV2" + version + name length + name, so
+// the comparison reads that header instead of a fixed 16-byte field.
+bool CombatII::battle_verify_qsv_4fcd9() {
+    std::string path = battle_qsv_path();
+    if (path.empty()) path = std::string(GAME_DATA_DIR) + "/genesis.qsv";
+    bool match = false;
+    if (FILE* f = fopen(path.c_str(), "rb")) {
+        char magic[8] = {};
+        uint32_t version = 0, len = 0;
+        if (fread(magic, 1, sizeof(magic), f) == sizeof(magic) &&
+            memcmp(magic, "G2QSV2", 6) == 0 &&
+            qsv_read_u32(f, version) &&
+            qsv_read_u32(f, len) && len < 256) {
+            std::string name(len, '\0');
+            if (len == 0 || fread(&name[0], 1, len, f) == len)
+                match = (name == current_scenario_name_);           // strcmp_(unk_FDF68, buffer)
+        }
+        fclose(f);
+    }
+    if (match) {
+        if (battle_trace_)
+            fprintf(stderr, "COMBAT: sub_4FCD9 genesis.qsv matches '%s', keep\n",
+                    current_scenario_name_.c_str());
+        return true;
+    }
+    fprintf(stderr, "COMBAT: sub_4FCD9 genesis.qsv %s -> sub_4F4EF (%s)\n",
+            file_exists(path.c_str()) ? "differs" : "missing", path.c_str());
+    battle_quick_save_4f4ef();                                   // sub_4F4EF
+    return false;
 }
 
 bool CombatII::battle_quick_load_4fd25() {
@@ -3454,9 +3567,10 @@ void CombatII::battle_reset() {
             const size_t got = fread(b, 1, sizeof(b), fp);
             // Each field is a 1-byte read (a word read of the first two bytes misreads FDAEA).
             if (got >= 1) battle_instant_camera_ = b[0] != 0;                 // word_FDAEA
-            // word_FDAE8 (music) / word_FDAE6 (sfx) keep the system-menu state: the
-            // original assigns the cfg values here, but sub_4FF8E (game.cfg write) is not
-            // ported, so applying them would reset the user's menu toggles every battle.
+            // sub_4FE74 reads music/sfx here too. sub_4FF8E now writes game.cfg on module
+            // exit, so apply them to keep the system-menu toggles across battles.
+            if (got >= 2) battle_music_on_ = b[1] != 0;                      // word_FDAE8
+            if (got >= 3) battle_sfx_on_ = b[2] != 0;                        // word_FDAE6
             if (got >= 4) cfg_speed = b[3];                                  // speed
             fclose(fp);
         }
@@ -3467,8 +3581,35 @@ void CombatII::battle_reset() {
         battle_turn_interval_ = cfg_speed;
     }
     if (battle_trace_)
-        fprintf(stderr, "COMBAT: reset (sub_19652) time=0 seq=-1 divisor=%d state=0 instant_cam=%d\n",
-                (int)hud_time_divisor_, battle_instant_camera_ ? 1 : 0);
+        fprintf(stderr, "COMBAT: reset (sub_19652) time=0 seq=-1 divisor=%d state=0 instant_cam=%d music=%d sfx=%d\n",
+                (int)hud_time_divisor_, battle_instant_camera_ ? 1 : 0,
+                battle_music_on_ ? 1 : 0, battle_sfx_on_ ? 1 : 0);
+}
+
+// sub_4FF8E (sub_55EBC+93): open game.cfg with mode 0x202 (O_RDWR|O_CREAT, no truncate) and
+// write four bytes from the file start: word_FDAEA (instant camera), word_FDAE8 (music),
+// word_FDAE6 (sfx), then sub_1A11C -> byte_74138 (turn interval / time-gauge divisor).
+void CombatII::battle_write_game_cfg_4ff8e() {
+    std::string path = game_path("game.cfg");
+    if (path.empty()) path = std::string(GAME_DATA_DIR) + "/game.cfg";
+    FILE* f = fopen(path.c_str(), "r+b");                 // 0x202 keeps the remaining 6 bytes
+    if (!f) f = fopen(path.c_str(), "w+b");                // missing file: O_CREAT
+    if (!f) {
+        fprintf(stderr, "COMBAT: warning: cannot write game.cfg (%s)\n", path.c_str());
+        return;
+    }
+    const uint8_t b[4] = {
+        (uint8_t)(battle_instant_camera_ ? 1 : 0),           // word_FDAEA low byte
+        (uint8_t)(battle_music_on_ ? 1 : 0),                 // word_FDAE8
+        (uint8_t)(battle_sfx_on_ ? 1 : 0),                   // word_FDAE6
+        (uint8_t)hud_time_divisor_                           // sub_1A11C (byte_74138)
+    };
+    const bool ok = fwrite(b, 1, sizeof(b), f) == sizeof(b);
+    fclose(f);
+    if (!ok) fprintf(stderr, "COMBAT: warning: game.cfg write failed (%s)\n", path.c_str());
+    else if (battle_trace_)
+        fprintf(stderr, "COMBAT: game.cfg write (sub_4FF8E) instant=%d music=%d sfx=%d turn=%d\n",
+                (int)b[0], (int)b[1], (int)b[2], (int)b[3]);
 }
 
 // sub_18115: reads the first 0x1FF8 bytes of ITEM.DAT into unk_EDD88 (124 records of
@@ -3614,7 +3755,10 @@ int CombatII::battle_status_ailment_1992d(int unit_index, int slot, int* out_dam
                 inside ? "" : " (outside viewport)");
     }
     if (!inside) return -1;
-    // sub_45ED2: hit direction comes from [+63h] (facing).
+    // sub_45BFB prologue: clear the walk offset ([65h]/[66h]). The five-byte digit buffer is
+    // rebuilt for the F0648 slot by battle_status_damage_anim, which runs the same dmg/100 and
+    // right-alignment rules. sub_45ED2: hit direction comes from [+63h] (facing).
+    u.walk_off_x = u.walk_off_y = 0;
     setup_knockback_hit(u, u.facing & 3);
     return 1;
 }
@@ -3628,6 +3772,7 @@ void CombatII::battle_status_damage_anim(const std::vector<std::pair<int,int>>& 
     static constexpr uint8_t kDmgColor[8] = {0x04, 0x10, 0x31, 0x51, 0x20, 0x01, 0x00, 0x00};
     struct Popup {
         int idx;
+        int slot;                       // F0648 index passed to sub_45F29
         int x0, y0;
         char digits[8];
         int ndig;
@@ -3635,18 +3780,23 @@ void CombatII::battle_status_damage_anim(const std::vector<std::pair<int,int>>& 
         uint8_t color;
     };
     std::vector<Popup> pops;
+    int slot = 0;
     for (const auto& t : targets) {
         const int ti = t.first;
         if (ti < 0 || (size_t)ti >= units_.size()) continue;
         const auto& u = units_[(size_t)ti];
         Popup p{};
         p.idx = ti;
-        // sub_45BFB draws [48h] x100 damage in displayed HP units (rounded up).
-        const int shown = std::max(1, (t.second + 99) / 100);
-        p.x0 = (u.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X + 12;
-        p.y0 = (u.y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y + 10;
+        p.slot = slot++;
+        // sub_45BFB: `idiv 100` truncates, so raw 150 becomes "1" (not 2) and raw < 100
+        // becomes the single digit "0" (not "miss"). The five-byte buffer starts zeroed, so
+        // the written digits sit right-aligned in the four cells sub_45CCB draws.
+        const int shown = t.second / 100;
+        p.x0 = (u.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X;         // sub_10971
+        p.y0 = (u.y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y + 0x0A;  // sub_10988+0Ah
         snprintf(p.digits, sizeof(p.digits), "%d", shown);
         p.ndig = (int)strlen(p.digits);
+        if (p.ndig > 4) p.ndig = 4;                  // sub_45CCB: `cmp cx,4; jge`
         for (int j = 0; j < 5; ++j) p.digit_y[j] = p.y0;
         const int army = std::min(std::max(battle_effective_army(u), 0), 7);
         p.color = kDmgColor[(size_t)army];
@@ -3654,29 +3804,41 @@ void CombatII::battle_status_damage_anim(const std::vector<std::pair<int,int>>& 
     }
     game_timer_set(3);
     for (int f = 0; f < 0x19 && !should_exit_ && !skip_cutscene_; ++f) {
+        // sub_45F29(unit, edx = F0648 slot, bx = frame): shake and hit pose before the digits.
         for (auto& p : pops) {
             if ((size_t)p.idx >= units_.size()) continue;
-            auto& u = units_[(size_t)p.idx];
-            apply_knockback_hit(u, 0, f);                 // sub_45F29
-            if (f < 5) for (int j = 0; j < 5; ++j) p.digit_y[j] -= 2;
-            else if (f >= 0x14) for (int j = 0; j < 5; ++j) p.digit_y[j] += 2;
-            else { const int j = (f - 5) / 5; if (j < 5) p.digit_y[j] += 2; }
+            apply_knockback_hit(units_[(size_t)p.idx], p.slot, f);
         }
         render_battle_frame();
         uint8_t* bb = video_.get_backbuffer();
-        for (const auto& p : pops) {
+        for (auto& p : pops) {
+            // sub_45CCB updates digit_y before the clip tests:
+            //   f < 5  : cell 0 down by 2
+            //   5..19  : cell k up by 2 and cell k+1 down by 2, k = (f-5)/5
+            //   f >= 20: cell 3 up by 2
+            if (f < 5) p.digit_y[0] -= 2;
+            else if (f >= 0x14) p.digit_y[3] += 2;
+            else {
+                const int k = (f - 5) / 5;
+                if (k < 3) { p.digit_y[k] += 2; p.digit_y[k + 1] -= 2; }
+            }
+            // sub_45CCB clips the whole slot on cell 0 (x and y), then draws all four cells.
             if (p.x0 - 16 < 0 || p.x0 - 16 >= 0x120) continue;
-            char one[2] = { p.digits[0], 0 };
-            const int y = p.digit_y[0];
-            if (y - 5 < 0 || y - 5 >= 0xB2) continue;
-            if (small_font_loaded_) {
-                draw_small_text(p.x0 + 1, y + 1, one, 0, 1);
-                draw_small_text(p.x0, y, one, p.color, 1);
-            } else if (bb && font_.is_loaded()) {
-                font_.set_text_mode(4, 0x0000, 0xFF);
-                font_.draw_string(bb, SCREEN_W, SCREEN_H, p.x0 + 1, y + 1, one);
-                font_.set_text_mode(4, (uint16_t)(p.color << 8), 0xFF);
-                font_.draw_string(bb, SCREEN_W, SCREEN_H, p.x0, y, one);
+            const int y0 = p.digit_y[0];
+            if (y0 - 5 < 0 || y0 - 5 >= 0xB2) continue;
+            const int first = 4 - p.ndig;             // right-aligned 4-cell field
+            for (int k = 0; k < p.ndig; ++k) {
+                const int x = p.x0 + 6 * (first + k), y = p.digit_y[first + k];
+                char one[2] = { p.digits[k], 0 };
+                if (small_font_loaded_) {
+                    draw_small_text(x + 1, y + 1, one, 0, 1);
+                    draw_small_text(x, y, one, p.color, 1);
+                } else if (bb && font_.is_loaded()) {
+                    font_.set_text_mode(4, 0x0000, 0xFF);
+                    font_.draw_string(bb, SCREEN_W, SCREEN_H, x + 1, y + 1, one);
+                    font_.set_text_mode(4, (uint16_t)(p.color << 8), 0xFF);
+                    font_.draw_string(bb, SCREEN_W, SCREEN_H, x, y, one);
+                }
             }
         }
         render_overlay();

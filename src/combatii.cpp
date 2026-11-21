@@ -1184,24 +1184,6 @@ int CombatII::run(const std::string& scenario_param){
             kTimerHz, auto_advance_ ? 1 : 0);
 
     std::string param = effective_param;
-    // var_4 drives the loc_56066 branch: 1 takes sub_4FD25 (test battle), anything else takes
-    // sub_4FCD9 (normal save verification). Neither blocks entry into battle, so the port only
-    // logs.
-    if (var4_flag == 1) {
-        fprintf(stderr, "COMBAT: var_4==1 -> sub_4FD25 path (special/test battle)\n");
-    } else {
-        // sub_4FCD9: genesis.qsv verification. The original calls sub_4F4EF when the file is
-        // missing
-        // or its contents differ from unk_FDF68; the port only logs.
-        std::string qsv = game_path("genesis.qsv");
-        if (!file_exists(qsv.c_str())) qsv = game_path("GENESIS.QSV");
-        if (file_exists(qsv.c_str())) {
-            // Verification skipped, log only
-            fprintf(stderr, "COMBAT: var_4==0 -> sub_4FCD9 genesis.qsv exists, skip\n");
-        } else {
-            fprintf(stderr, "COMBAT: warning: var_4==0 -> genesis.qsv not found, would call sub_4F4EF (deferred)\n");
-        }
-    }
     std::string sce_name=param;
     bool has_sce = (sce_name.find(".SCE")!=std::string::npos || sce_name.find(".sce")!=std::string::npos);
     bool has_map = (sce_name.find(".MAP")!=std::string::npos || sce_name.find(".map")!=std::string::npos);
@@ -1243,6 +1225,13 @@ int CombatII::run(const std::string& scenario_param){
     // 4FD25/4FCD9 -> 49411 -> 5580F.
     battle_deploy_55518();
     if (should_exit_) { video_.clear(); return 0; }
+    // main_ loc_56032: sub_55518 -> sub_137D1 -> (var_4==1 ? sub_4FD25 : sub_4FCD9) -> 49411.
+    battle_roster_reset_137d1();
+    if (var4_flag == 1) {
+        fprintf(stderr, "COMBAT: var_4==1 -> sub_4FD25 path (special/test battle)\n");
+    } else {
+        battle_verify_qsv_4fcd9();
+    }
     show_scenario_condition();
     if (should_exit_) { video_.clear(); return 0; }
 
@@ -1381,6 +1370,8 @@ int CombatII::run(const std::string& scenario_param){
     }
     battle_loop_active_ = false;
     video_.clear();
+    // sub_55EBC tail (sub_4FF8E): persist the scroll/music/sfx/turn settings into game.cfg.
+    battle_write_game_cfg_4ff8e();
     if(!pending_command_.empty()) fprintf(stderr,"COMBAT: Transition -> %s\n", pending_command_.c_str());
     else write_dollar(" ");
     fprintf(stderr,"COMBAT: === Module end ===\n");

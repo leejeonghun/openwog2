@@ -1816,6 +1816,7 @@ private:
     bool run_army_wiped_trigger(int group);                   // sub_53F94
     void battle_after_move(int unit_index);                   // sub_5401B (contact triggers excluded)
     int battle_terrain_17310(int unit_index);                 // sub_17310 (terrain damage/heal: 0 = death, -2 equivalent, 1 = survived)
+    void battle_terrain_damage_46359(int unit_index, int dmg); // sub_46359 (terrain damage digits/knockback, 25 frames)
     void battle_remove_from_ready_queue(int unit_index);      // sub_197AD
     int  battle_unit_group(const CombatUnitPlacement& u) const;     // modeled effective [+0x0E]-1; unknown remaps fall back to raw+1
     int  battle_group_alive_count(int group) const;                 // active-vector count fallback; CC968 membership is not stored
@@ -2630,6 +2631,8 @@ private:
     int  battle_system_menu_4e0ee(int no_saveload = 0); // sub_4E0EE (ESC menu; a non-zero argument disables QUICK SAVE/LOAD). 2 = quick load, 7 = restart, 8 = title, -1 = cancel
     bool battle_quick_save_4f4ef();       // sub_4F4EF: genesis.qsv
     bool battle_quick_load_4fd25();       // sub_4FD25: restore genesis.qsv
+    bool battle_verify_qsv_4fcd9();       // sub_4FCD9: verify genesis.qsv and rewrite it when it differs
+    void battle_write_game_cfg_4ff8e();   // sub_4FF8E: game.cfg 4-byte tail (scroll/music/sfx/turn)
     // G2MSG start/quick-load banners (sub_44C05 + sub_44C75, records 0-2). The record bank is
     // g2msg_frames() from combatii_internal.h.
     uint16_t g2msg_progress_ = 0;         // word_75010 (sub_44C75 ticker count)
@@ -2828,6 +2831,7 @@ private:
     //   with [56h] != 0 (540CB).
     void battle_deploy_zone_parse(const uint8_t* data, size_t size);   // sub_4ED18: load E8F46+2 and the flag
     int  battle_deploy_55518();                                        // sub_55518
+    void battle_roster_reset_137d1();                                  // sub_137D1 (post-deploy CC990 [56h]/[5Ch] clear)
     bool battle_deploy_551e5(size_t roster_index, std::vector<int>& slot);  // sub_551E5
     void battle_deploy_54a82(const std::vector<size_t>& party, std::vector<int>& slot);  // sub_54A82 automatic placement
     int  battle_deploy_list(const std::vector<size_t>& party, std::vector<int>& slot, int& scroll, int& sel);  // sub_54C2C list screen (1 = selected, 0 = exit)
