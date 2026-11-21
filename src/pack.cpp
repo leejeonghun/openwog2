@@ -2023,13 +2023,13 @@ bool Pack::compute_dialog_placement_for_eve(int actor, DialogPlacement& out) con
     int nx, ny, nw, nh;
     if (!get_eve_actor_screen_box(actor, nx, ny, nw, nh)) return false;
     const EveActorState& st = eve_actors_[actor];
-    // loc_12BE2: unk_82938 = (tile - cam)*24 + fine, with no x_offset and no +5, unlike
-    // the sprite box nx returned above.
-    const int anchor_x = (st.tile_x - cam_tile_x_) * TOWN_TILE_W - cam_fine_x_ + st.fine_x;
-    // EVE computes unk_8293A as (tile - cam)*16 + fine with no -16 (loc_12BE2), and its
-    // tile_y is already decremented (p2 - 1). The shared helper subtracts the NPC's -16, so
-    // adding 1 makes (p2-cam)*16 - 16 equal the original EVE value.
-    return compute_dialog_placement_for_box(nx, ny, nw, nh, st.tile_y + 1, anchor_x, out);
+    // sub_24DA5 reads the stored unk_82938/unk_8293A anchors, not a value derived from
+    // the tile at dialogue time (they differ after a movement residual or a pan's last
+    // tick). tile_y + 1 cancels the helper's NPC -16 so extra_raw_y carries the exact
+    // stored Y.
+    const int derived_raw_y = (st.tile_y - cam_tile_y_) * TOWN_TILE_H - cam_fine_y_;
+    return compute_dialog_placement_for_box(nx, ny, nw, nh, st.tile_y + 1, st.screen_x, out,
+                                            st.screen_y - derived_raw_y);
 }
 
 // sub_186DC: dim the unk_59ABD mask (250x76) at (x, y). A mask byte of 0xFF is skipped;
@@ -2295,9 +2295,9 @@ void Pack::render_shadows() {
         for (int a = 0; a < MAX_EVE_ACTORS; a++) {
             const EveActorState& st = eve_actors_[a];
             if (!st.active) continue;
-            // Same formula as get_eve_actor_screen_box (unk_82938/unk_8293A).
-            int sx = (st.tile_x - cam_tile_x_) * TOWN_TILE_W - cam_fine_x_ + st.fine_x;
-            int sy = (st.tile_y - cam_tile_y_) * TOWN_TILE_H - cam_fine_y_ + st.fine_y;
+            // unk_82938/unk_8293A: the stored absolute screen position.
+            int sx = st.screen_x;
+            int sy = st.screen_y;
             // sub_13D04 clip: 0x0A < sx < 0x131 and sy < 0xC8.
             if (sx <= 0x0A || sx >= 0x131 || sy >= 0xC8) continue;
             blit_cursor_raw(sx - 8, sy + 9, shadow_sprite_);
@@ -2480,13 +2480,13 @@ void Pack::render_sprites_and_objects() {
     }
 
     // 3b. EVE cutscene actors (sub_12857 op13, CHARACTE/*.NC2, group 1), matching the
-    // unk_82934 (active) / 82938 / 8293A (screen position) / 840A6 (sprite) tables.
-    // loc_12BE2 uses (tile - cam)*24/16 + fine with no +5/-16 adjustment, as in the town.
+    // unk_82934 (active) / 82938 / 8293A (stored screen position) / 840A6 (sprite) tables.
+    // No +5/-16 adjustment, unlike town sprites.
     for (int a = 0; a < MAX_EVE_ACTORS; a++) {
         const EveActorState& st = eve_actors_[a];
         if (!st.active) continue;
-        int sx = (st.tile_x - cam_tile_x_) * TOWN_TILE_W - cam_fine_x_ + st.fine_x;
-        int sy = (st.tile_y - cam_tile_y_) * TOWN_TILE_H - cam_fine_y_ + st.fine_y;
+        int sx = st.screen_x;
+        int sy = st.screen_y;
         const NC2Frame* fr = nullptr;
         if (st.sprite_loaded) fr = st.sprite.frame(st.dir, st.frame_idx % 11);
         DrawSpriteEntry e_entry;
@@ -3454,6 +3454,8 @@ void Pack::eve_clear_actors() {
     eve_pan_frame_active_ = false;
     eve_pan_frame_dx_ = eve_pan_frame_dy_ = 0;
     eve_pan_vel_dx_ = eve_pan_vel_dy_ = 0;
+    eve_pan_tick_active_ = false;
+    eve_pan_tick_dx_ = eve_pan_tick_dy_ = 0;
 }
 
 // ---- op13: spawn an actor (loc_12BE2, 27 words) ----
@@ -3491,11 +3493,12 @@ void Pack::eve_op_spawn(int actor, const std::vector<uint16_t>& w, size_t base) 
     // (frame / 11) & 3.
     st.frame_idx = (int)(w[base + 5] & 0xFFFF);
     st.dir = (st.frame_idx / 11) & 3;
-    st.move_op = 0; // op13 sets unk_8293C = 1 and resets counter/fine (end of loc_12BE2)
+    st.move_op = 0; // op13 sets unk_8293C = 1 and resets counter/screen (end of loc_12BE2)
     st.move_counter = 0;
     st.move_speed = 1;
-    st.fine_x = 0;
-    st.fine_y = 0;
+    // loc_12BE2 rewrites unk_82938/unk_8293A from the spawn tile and the camera fine.
+    st.screen_x = (st.tile_x - cam_tile_x_) * TOWN_TILE_W - cam_fine_x_;
+    st.screen_y = (st.tile_y - cam_tile_y_) * TOWN_TILE_H - cam_fine_y_;
     st.name.clear();
     for (int k = 0; k < 20; k++) {
         char c = (char)(w[base + 6 + k] & 0xFF);
@@ -3560,7 +3563,8 @@ void Pack::eve_op_set_frame(int actor, int frame_idx) {
 // same actor turn because every command handler jumps to loc_1336C before the next actor.
 // Phase 2 adds speed to the screen position and picks walk frames from (counter >> 2) % 4
 // for op1-4 (op5-8 keep the frame). The tile advances when counter % (unit/speed) == 0
-// (non-zero) and once more at 0; the accumulated pixel offset is kept, not snapped to 0.
+// (non-zero) and once more at 0; the screen position keeps the pixel residual until the
+// next sub_126AC snap.
 // G2_PACK_AUTO teleports instead of animating so offscreen tests keep their speed.
 void Pack::eve_op_move(int actor, int op, int steps) {
     if (actor < 0 || actor >= MAX_EVE_ACTORS) return;
@@ -3573,37 +3577,45 @@ void Pack::eve_op_move(int actor, int op, int steps) {
     int ox = st.tile_x, oy = st.tile_y;
     bool auto_fast = (dbg_env("G2_PACK_AUTO"));
     if (auto_fast) {
-        // Test fast path: apply the final tile. Only op1-4 update direction and frame;
-        // op5-8 keep both (phase 2 at loc_1390D/13970/139DB/13A54 never writes unk_82936).
-        // Dialogue placement only reads the tile, so the result is equivalent.
+        // Test fast path: reproduce the phase-2 end state without animating. The
+        // primary stores ((unit/speed)*steps) in an 8-bit counter (loc_12A1C), and
+        // phase 2 runs that many speed-px steps (loc_1336C). It commits the tile
+        // whenever the decremented counter is a non-zero multiple of interval, plus
+        // once at 0 (loc_13547 and friends). A zero or wrapped-to-zero counter means
+        // phase 2 never runs. Only op1-4 update direction/frame; op5-8 keep both
+        // (loc_1390D/13970/139DB/13A54 never write unk_82936).
+        const bool is_y = (op == 1 || op == 2 || op == 5 || op == 6);
+        const int unit = is_y ? TOWN_TILE_H : TOWN_TILE_W;
+        const int speed = st.move_speed > 0 ? st.move_speed : 1;
+        const int interval = unit / speed; // 0 only for invalid speed > unit data
+        const int counter = (interval * steps) & 0xFF;
+        st.move_op = op;     // unk_7D7BC is written on every fetch
+        st.move_counter = 0; // the fast path consumes the movement immediately
+        int commits = 0;
         int dx = 0, dy = 0;
         switch (op) {
-        case 1: case 5: dy = -steps; break;
-        case 2: case 6: dy = +steps; break;
-        case 3: case 7: dx = -steps; break;
-        case 4: case 8: dx = +steps; break;
+        case 1: case 5: dy = -1; break;
+        case 2: case 6: dy = +1; break;
+        case 3: case 7: dx = -1; break;
+        case 4: case 8: dx = +1; break;
         default: break;
         }
-        st.tile_x += dx;
-        st.tile_y += dy;
-        if (op >= 1 && op <= 4) {
-            int dir = st.dir, frame = st.frame_idx;
-            switch (op) {
-            case 1: dir = 2; frame = 25; break;
-            case 2: dir = 0; frame = 3;  break;
-            case 3: dir = 1; frame = 14; break;
-            case 4: dir = 3; frame = 36; break;
-            default: break;
+        if (counter != 0 && interval > 0) {
+            commits = counter / interval + (counter % interval != 0 ? 1 : 0);
+            st.tile_x += dx * commits;
+            st.tile_y += dy * commits;
+            st.screen_x += dx * speed * counter;
+            st.screen_y += dy * speed * counter;
+            if (op >= 1 && op <= 4) {
+                static const int kFinalFrame[4] = {25, 3, 14, 36}; // counter 1 -> idx 0
+                st.frame_idx = kFinalFrame[op - 1];
+                st.dir = st.frame_idx / 11;
             }
-            st.dir = dir;
-            st.frame_idx = frame;
         }
-        st.move_op = 0;
-        st.move_counter = 0;
-        st.fine_x = 0;
-        st.fine_y = 0;
-        fprintf(stderr, "PACK: EVE actor%d op%d move steps=%d (%d,%d)->(%d,%d) dir=%d frame=%d [auto]\n",
-                actor, op, steps, ox, oy, st.tile_x, st.tile_y, st.dir, st.frame_idx);
+        fprintf(stderr, "PACK: EVE actor%d op%d move steps=%d counter=%d commits=%d (%d,%d)->(%d,%d) screen=(%d,%d) dir=%d frame=%d [auto]%s\n",
+                actor, op, steps, counter, commits, ox, oy, st.tile_x, st.tile_y,
+                st.screen_x, st.screen_y, st.dir, st.frame_idx,
+                counter == 0 ? " (phase2 skipped)" : "");
         return;
     }
     // loc_12A1C: the counter lives in a byte (unk_7D7EF), so values past 255 wrap to
@@ -3644,8 +3656,8 @@ bool Pack::eve_move_tick(int actor) {
     }
     // loc_133F3/loc_13574/loc_136D9/loc_1381C/1390D/13970/139DB/13A54:
     // unk_82938/unk_8293A += speed, before the counter is decremented.
-    st.fine_x += dx * speed;
-    st.fine_y += dy * speed;
+    st.screen_x += dx * speed;
+    st.screen_y += dy * speed;
     // Walk frame, op1-4 only, from the counter value before the decrement.
     // op5-8 never write unk_82936 (loc_1390D/13970/139DB/13A54).
     if (op <= 4) {
@@ -3661,23 +3673,18 @@ bool Pack::eve_move_tick(int actor) {
     }
     --st.move_counter;
     // loc_13xxx: the logical tile advances when counter % (unit/speed) == 0. The screen
-    // position keeps moving by speed each frame independently of the tile, so only the
-    // tile's worth is removed from the fine offset. It must not be snapped to 0: when
-    // speed does not divide the tile (e.g. 16/3 = 5), the residual is kept (loc_13547
-    // and friends decrement the tile without touching unk_82938/unk_8293A).
+    // position keeps moving by speed each frame independently of the tile (loc_13547 and
+    // friends change the tile without touching unk_82938/unk_8293A), so a non-integral
+    // speed leaves a residual until the next sub_126AC snaps the actor to its tile.
     int interval = unit / speed;
     if (interval < 1) interval = 1;   // speed > unit: the original would divide by zero
     if (st.move_counter != 0 && st.move_counter % interval == 0) {
         st.tile_x += dx;
         st.tile_y += dy;
-        if (dx) st.fine_x -= dx * unit;
-        if (dy) st.fine_y -= dy * unit;
     }
     if (st.move_counter == 0) {
         st.tile_x += dx;
         st.tile_y += dy;
-        if (dx) st.fine_x -= dx * unit;
-        if (dy) st.fine_y -= dy * unit;
         // loc_13B0E: unk_7D7BC keeps the last op; the zero counter is the only stop.
     }
     return true;
@@ -3690,13 +3697,38 @@ static int eve_shadow_floor_div(int a, int b) {
     return q;
 }
 
+// ---- sub_126AC: refresh every EVE actor's absolute screen position ----
+// The original walks 50 slots (edx 0..0x31); slot 50 is not updated. For each slot:
+//   moving (unk_7D7BC in 1..8 && unk_7D7EF != 0):
+//       unk_82938 += velY, unk_8293A -= velX
+//   waiting:
+//       unk_82938 = (tileX - camTileX) * 24 + camFineX + velY
+//       unk_8293A = (tileY - camTileY) * 16 + camFineY - velX
+// loc_13AC9 stores velX = dy and velY = -dx, so both cases become -dx/-dy here.
+// The port keeps the positive-fine camera convention used by the renderer
+// (screen = (tile - cam) * size - cam_fine), hence the signs below. Waiting actors
+// therefore lose any movement residual; moving actors only receive the pan step.
+void Pack::eve_update_actor_screens() {
+    const int dx = eve_pan_tick_active_ ? eve_pan_tick_dx_ : 0;
+    const int dy = eve_pan_tick_active_ ? eve_pan_tick_dy_ : 0;
+    for (int a = 0; a < 50; a++) {
+        EveActorState& st = eve_actors_[a];
+        const bool moving = st.move_counter != 0 && st.move_op >= 1 && st.move_op <= 8;
+        if (moving) {
+            st.screen_x -= dx;
+            st.screen_y -= dy;
+        } else {
+            st.screen_x = (st.tile_x - cam_tile_x_) * TOWN_TILE_W - cam_fine_x_ - dx;
+            st.screen_y = (st.tile_y - cam_tile_y_) * TOWN_TILE_H - cam_fine_y_ - dy;
+        }
+    }
+}
+
 // ---- op15: absolute camera (loc_12D97, then sub_126AC) ----
 // loc_12D97 sets the camera tiles to (x=p0, y=p1) with no clamping and leaves fine alone;
-// the renderer skips tiles outside the map. sub_126AC then walks 50 actors and recomputes
-// unk_82938/unk_8293A from (tile - cam)*size + fine. The port recomputes the same value in
-// get_eve_actor_screen_box on every render, so moving actors (type 1..8 with a nonzero
-// unk_7D7EF counter, which the original adjusts to keep the screen continuous) stay
-// continuous through the shared fine offsets. The walk is kept for parity.
+// the renderer skips tiles outside the map. sub_126AC then walks 50 actors and rewrites
+// unk_82938/unk_8293A from (tile - cam)*size + camera fine. Waiting actors snap to their
+// tile; actors with op 1..8 and a nonzero unk_7D7EF counter only receive the pan step.
 void Pack::eve_op_camera_snap(int tx, int ty) {
     // Keep the original camera representation. If no pan shadow exists yet, derive one
     // from the current port camera; otherwise preserve its fine value exactly as loc_12D97
@@ -3713,11 +3745,8 @@ void Pack::eve_op_camera_snap(int tx, int ty) {
     eve_pan_shadow_tile_x_ = (int16_t)tx;
     eve_pan_shadow_tile_y_ = (int16_t)ty;
     eve_pan_publish_shadow();
-    for (int a = 0; a < 50; a++) {
-        const EveActorState& st = eve_actors_[a];
-        if (!st.active) continue;
-        (void)st; // screen position is derived on demand; see above
-    }
+    // loc_12D97 tail: sub_126AC.
+    eve_update_actor_screens();
 }
 
 // ---- op23: relative camera pan (loc_13063 phase 1, loc_13AC9 phase 2, sub_21E29 tail) ----
@@ -3726,8 +3755,9 @@ void Pack::eve_op_camera_snap(int tx, int ty) {
 // word_7D88A/word_7D888; phase 2 copies that pair into 15BA1A. On every actor turn phase 2
 // decrements that actor's counter; after the VM has run all actors, sub_13B8D calls
 // sub_21E29 once to integrate the camera, Y before X. Other actors keep running while the
-// pan is in progress. On the last frame (counter 1 -> 0) 15BA1A is cleared before
-// sub_21E29, so the camera integrates count - 1 times; wraps are discarded.
+// pan is in progress. On the last frame (counter 1 -> 0) sub_126AC still moves the
+// actors, then 15BA1A is cleared before sub_21E29, so the camera integrates count - 1
+// times; wraps are discarded.
 // The original's fine sign is the opposite of the port's, so the original convention is
 // integrated in shadow variables and converted back through world-space floor division,
 // which keeps the rendered world identical.
@@ -3796,24 +3826,31 @@ void Pack::eve_op_camera_pan(int actor, int count, int dx, int dy) {
     }
 }
 
-// One phase-2 turn for an actor's op23 camera pan (loc_13AC9). The original decrements
-// unk_7D7EF here and clears the global velocity when it reaches zero. The actual camera
-// integration is deferred to eve_camera_pan_apply_frame() so it runs once after all actors.
+// One phase-2 turn for an actor's op23 camera pan (loc_13AC9). The original sets 15BA1A
+// from the command velocity, calls sub_126AC, then decrements unk_7D7EF and clears the
+// global velocity when it reaches zero. The camera integration itself is deferred to
+// eve_camera_pan_apply_frame() so it runs once after all actors, but the actor screen
+// positions move here. On the last tick they take one more step while the camera does not.
 bool Pack::eve_camera_pan_tick(int actor) {
     if (actor < 0 || actor >= MAX_EVE_ACTORS) return false;
     EveActorState& st = eve_actors_[actor];
     if (st.pan_counter <= 0) return false;
+    eve_pan_tick_active_ = true;
+    eve_pan_tick_dx_ = eve_pan_vel_dx_;
+    eve_pan_tick_dy_ = eve_pan_vel_dy_;
+    eve_update_actor_screens();
     --st.pan_counter;
     if (st.pan_counter > 0) {
         eve_pan_frame_active_ = true;
-        // loc_13AC9 copies the global word_7D88A/word_7D888 into 15BA1A on every tick.
-        eve_pan_frame_dx_ = eve_pan_vel_dx_;
-        eve_pan_frame_dy_ = eve_pan_vel_dy_;
+        eve_pan_frame_dx_ = eve_pan_tick_dx_;
+        eve_pan_frame_dy_ = eve_pan_tick_dy_;
     } else {
         // loc_13AC9 clears 15BA1A when the counter reaches zero. A finishing pan must
         // clear an earlier actor's velocity too, matching the single global word.
         eve_pan_frame_active_ = false;
         eve_pan_frame_dx_ = eve_pan_frame_dy_ = 0;
+        eve_pan_tick_active_ = false;
+        eve_pan_tick_dx_ = eve_pan_tick_dy_ = 0;
         fprintf(stderr, "PACK: EVE actor%d op23 camera pan count=%d vel=(%d,%d) (%d,%d)->(%d,%d) fine=(%d,%d)%s\n",
                 actor, st.pan_total, eve_pan_vel_dx_, eve_pan_vel_dy_,
                 st.pan_start_x, st.pan_start_y,
@@ -3885,11 +3922,10 @@ bool Pack::get_eve_actor_screen_box(int actor, int& out_left, int& out_top,
     if (actor < 0 || actor >= MAX_EVE_ACTORS) return false;
     const EveActorState& st = eve_actors_[actor];
     if (!st.active) return false;
-    // loc_12BE2: unk_82938 = (tile - cam)*24 + fine and unk_8293A = (tile - cam)*16 + fine,
-    // with no +5/-16 adjustment unlike town sprites. fine is the sub-tile offset from phase 2
-    // movement.
-    int sx = (st.tile_x - cam_tile_x_) * TOWN_TILE_W - cam_fine_x_ + st.fine_x;
-    int sy = (st.tile_y - cam_tile_y_) * TOWN_TILE_H - cam_fine_y_ + st.fine_y;
+    // unk_82938/unk_8293A are absolute screen positions stored by op13/op9, phase-2
+    // movement and sub_126AC, with no +5/-16 adjustment unlike town sprites.
+    const int sx = st.screen_x;
+    const int sy = st.screen_y;
     const NC2Frame* fr = nullptr;
     if (st.sprite_loaded) fr = st.sprite.frame(st.dir, st.frame_idx % 11);
     if (fr && fr->w > 0 && fr->h > 0) {
@@ -4192,12 +4228,14 @@ bool Pack::run_eve_script(int event_id) {
                         break;
                     }
                     case 9: {
-                        // loc_12AA0: set the actor tile directly (no Y-1 unlike op13); the
-                        // screen position is recomputed as (tile - cam)*size + fine.
+                        // loc_12AA0: set the actor tile directly (no Y-1 unlike op13) and
+                        // recompute the stored screen position from it.
                         if (a < MAX_EVE_ACTORS && L >= 4) {
-                            eve_actors_[a].tile_x = w[i + 2];
-                            eve_actors_[a].tile_y = w[i + 3];
-                            eve_actors_[a].fine_x = eve_actors_[a].fine_y = 0;
+                            EveActorState& st = eve_actors_[a];
+                            st.tile_x = w[i + 2];
+                            st.tile_y = w[i + 3];
+                            st.screen_x = (st.tile_x - cam_tile_x_) * TOWN_TILE_W - cam_fine_x_;
+                            st.screen_y = (st.tile_y - cam_tile_y_) * TOWN_TILE_H - cam_fine_y_;
                         }
                         saw_visual = true;
                         break;
@@ -4376,7 +4414,9 @@ bool Pack::run_eve_script(int event_id) {
         // sub_13B8D loc_13C80: every 60 EVE frames call sub_399AC. The first frame also
         // applies the saved palette (sub_20118) and sets word_7D78C = 1; the port renders
         // every frame, so only the tick is kept.
-        if (frame > 0 && frame % 60 == 0) bgm_tick();
+        // loc_13C80 increments the frame counter before the modulo test, so the tick
+        // fires right after frame 59 (not after frame 60).
+        if ((frame + 1) % 60 == 0) bgm_tick();
     }
     // loc_13CAE: the original leaves the frame loop immediately. An actor still mid-move
     // at total (283.EVE actor 0 has one phase-2 step left: counter 1 at speed 2) is

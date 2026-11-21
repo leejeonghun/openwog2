@@ -461,13 +461,17 @@ private:
         // The primary op sets counter = (16 or 24) / speed * steps. Each actor
         // turn then moves speed px, cycles the walk frame with (counter >> 2) % 4,
         // and commits the tile when counter % interval == 0 (!= 0) or counter
-        // reaches 0. fine is the pixel offset from the tile origin (starts at 0):
-        // screen = (tile - cam) * size - cam_fine + fine. Speeds that do not divide
-        // the tile keep the residual (e.g. 16/3 leaves -1 px per tile step).
+        // reaches 0. screen_x/screen_y are the original's absolute unk_82938/
+        // unk_8293A values: phase 2 adds speed to them and the tile commit leaves the
+        // pixel residual in place. sub_126AC snaps a waiting actor back to its tile
+        // origin, so a speed that does not divide the tile keeps the residual only
+        // until the next op15/op23 tick (e.g. 16/3 leaves 1 px).
         int move_op = 0;              // last op (unk_7D7BC); phase 2 is gated by move_counter
         int move_counter = 0;         // remaining phase-2 steps (unk_7D7EF)
         int move_speed = 1;           // unk_8293C (op13 sets 1, op27 changes it)
-        int fine_x = 0, fine_y = 0;   // offset from tile origin (may keep a residual)
+        // Absolute screen position (unk_82938 = X, unk_8293A = Y). op13/op9 initialise
+        // it from (tile - cam) * size - cam_fine; movement and sub_126AC update it.
+        int screen_x = 0, screen_y = 0;
         // ---- op23 camera pan state (actor-scoped counter; global camera step) ----
         // The original stores the frame count in the actor's unk_7D7EF byte. The command
         // velocity is global (word_7D88A/word_7D888) and phase 2 copies it into 15BA1A.
@@ -498,7 +502,16 @@ private:
     // the actor record. Every active op23 phase-2 tick copies this pair into 15BA1A, so
     // the most recently issued op23 command wins if multiple actors pan at once.
     int eve_pan_vel_dx_ = 0, eve_pan_vel_dy_ = 0;
+    // word_15BA1A during the current frame (loc_13AC9). Each op23 phase-2 tick copies
+    // the command velocity here, calls sub_126AC, then clears both words when its
+    // counter reaches zero. op15's sub_126AC call sees the same lingering value.
+    bool eve_pan_tick_active_ = false;
+    int eve_pan_tick_dx_ = 0, eve_pan_tick_dy_ = 0;
     void eve_clear_actors();
+    // sub_126AC: rewrite every actor's stored screen position. Waiting actors snap to
+    // (tile - cam) * size + camera fine; actors with op 1..8 and a non-zero counter get
+    // the pan step added instead. The original loops 50 slots (0..0x31), not slot 50.
+    void eve_update_actor_screens();
     void eve_op_spawn(int actor, const std::vector<uint16_t>& w, size_t base);
     void eve_op_hide(int actor);
     void eve_op_set_dir(int actor, int dir_byte);
@@ -513,14 +526,15 @@ private:
     // Secondary (once per actor turn): screen += speed; op1-4 cycle the walk frame
     // with (counter >> 2) % 4 using op1 [25,24,25,26], op2 [3,2,3,4],
     // op3 [14,13,14,15], op4 [36,35,36,37]; op5-8 keep their frame. The tile
-    // commits when counter % interval == 0 (!= 0) or counter == 0, and the fine
-    // offset keeps the pixel residual instead of snapping to 0.
+    // commits when counter % interval == 0 (!= 0) or counter == 0, while the stored
+    // screen position keeps the pixel residual until the next sub_126AC snap.
     void eve_op_move(int actor, int op, int steps);
     // One phase-2 step (speed px) for one actor (loc_1336C..13AB2). Returns true if
     // the actor was moving (counter > 0) when called. The draw-active flag is not
     // tested here; the original checks it only at loc_13B0E, after the move.
     bool eve_move_tick(int actor);
-    // Op15 absolute camera (loc_12D97): set cam_tile = (x, y) directly
+    // Op15 absolute camera (loc_12D97): set cam_tile = (x, y) directly, then
+    // sub_126AC recomputes every actor's stored screen position.
     void eve_op_camera_snap(int tx, int ty);
     // ---- op23 relative camera (loc_13063 primary + loc_13AC9 secondary + sub_21E29 tail) ----
     // [fire,23,count,dx,dy]: dx and dy are speeds in px per frame. Evidence: the
@@ -530,8 +544,9 @@ private:
     // actor's counter; phase 2 decrements it once per actor turn, and sub_21E29
     // integrates the camera once after all actors have run (Y then X). Other
     // actors keep running during the pan.
-    // On the last frame counter goes 1 -> 0, 15BA1A is cleared before 21E29, so
-    // the camera integrates count-1 times (271 has count 30 -> 29, world -54 px).
+    // On the last frame counter goes 1 -> 0: sub_126AC still applies that step to every
+    // actor, then 15BA1A is cleared before 21E29, so the camera integrates count-1 times
+    // while the actors keep the extra step until the next sub_126AC snap.
     // The wrap drops the remainder instead of carrying it (X: fine > 24 ->
     // tile--, fine = 0; fine < -24 -> tile++, fine = 0; Y uses 16 the same
     // way). The original's fine sign is opposite to the port
