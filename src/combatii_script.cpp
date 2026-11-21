@@ -589,10 +589,20 @@ CombatII::VmResult CombatII::run_vm(uint32_t offset) {
             if (script_trace_) fprintf(stderr, "COMBAT: vm weather = %u\n", wv);
             break;
         }
-        case VM_BGM:   // sub_52DA4: [u8] -> byte_FF0B8
-        case VM_BGM2: { // sub_52D7D: [u8] -> byte_FF0B7
+        case VM_BGM:   // sub_52DA4: [u8] -> byte_FF0B8, then 5CD0D(0)+4F3BD (audio-only) + 4F427
+        case VM_BGM2: { // sub_52D7D: [u8] -> byte_FF0B7 after sub_5AF1B, then 4F369
             uint8_t val = c.u8();
             if (!c.ok) { abort_range(); break; }
+            if (cmd == VM_BGM) {
+                battle_sfx_id_ = val;                    // byte_FF0B8
+                // sub_52DA4 first calls sub_5CD0D(0) and sub_4F3BD; both only touch the
+                // SB/CD layer (no sample bank in this port), so only 4F427's guard is modeled.
+                battle_sfx_preview_4f427();
+            } else {
+                battle_bgm_active_ = false;              // sub_5AF1B: unconditional CD stop
+                battle_bgm_id_ = val;                    // byte_FF0B7
+                battle_music_start_4f369();              // sub_52D7D tail
+            }
             if (script_trace_) fprintf(stderr, "COMBAT: vm %s = %u\n", cmd == VM_BGM ? "bgm" : "bgm/sfx", val);
             break;
         }

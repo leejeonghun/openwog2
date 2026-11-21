@@ -2502,10 +2502,10 @@ private:
     // 35FC2 (stormaxe), 377A6 (shu) and 39A49 (rain) in combatii_wbody_*.cpp (the latter six own
     // collection, damage and the tail inside their anim functions).
     // battle_weapon_302e6 plays the SSP (4F460) according to the sub_302E6 dispatch table.
-    // Screen sweep, diamond, front and nearest collection approximate 1A1F8/1A452/1AC08/49ABC;
-    // the 4A483 cursor selection is approximated automatically.
-    int battle_weapon_collect_screen(int unit_index, int cap, int x_shift = 0); // 1A1F8 screen 12x12 sweep (F0648 approximation)
-    int battle_weapon_collect_diamond(int unit_index, int radius); // 1AC08/1AC59 diamond (manhattan)
+    // Screen sweep/diamond/front go through the g2range iterators (1A1F8/1AC08/49ABC); the
+    // 4A483 cursor selection is the port's click-based battle_pick_tx_/ty_ path.
+    int battle_weapon_collect_screen(int unit_index, int cap); // 1A1F8 12x12 sweep from the camera tile
+    int battle_weapon_collect_diamond(int unit_index, int radius); // 1AC08/1AC59 + 1A1F8
     // F1474 idx 13..24 (2F80B..30049): Range-module collectors (1A452/1AC08/1A1F8), the 2E896
     // knockback, 2ED9A centre selection and the 2EF4A body.
     int battle_weapon_2cbfb(int unit_index, int delta);              // sub_2CBFB (16-bit)
@@ -2626,9 +2626,17 @@ private:
     std::string current_scenario_name_;   // last load_scenario filename (quick save header)
     bool battle_music_on_ = true;         // word_FDAE8
     bool battle_sfx_on_ = true;           // word_FDAE6
+    int  battle_bgm_id_ = 0;              // byte_FF0B7 (VM 0x13); sub_4F369 skips values >= 0x12
+    int  battle_sfx_id_ = 0;              // byte_FF0B8 (VM 0x77); sub_4F427/4F450 gate on > 0
+    bool battle_bgm_active_ = false;      // port state for sub_5AEB5/sub_5AF1B (CD layer is state-only)
+    int  battle_bgm_current_track_ = 0;   // track selected by sub_4F369 (byte_FF0B7 + 2)
     int  battle_scroll_speed_ = 4;        // word_FDAEA: 0 -> 4, 1 -> 8
     int  battle_turn_interval_ = 10;      // sub_4DE0A TURN interval (2..30); byte_74138 initial value is 0x0A
     int  battle_system_menu_4e0ee(int no_saveload = 0); // sub_4E0EE (ESC menu; a non-zero argument disables QUICK SAVE/LOAD). 2 = quick load, 7 = restart, 8 = title, -1 = cancel
+    void battle_music_start_4f369();      // sub_4F369: restart BGM (state-only CD layer)
+    void battle_music_stop_4f3ae();       // sub_4F3AE: stop BGM
+    void battle_sfx_preview_4f427();      // sub_4F427: start the preview SFX
+    void battle_sfx_stop_4f450();         // sub_4F450: stop SFX channel 0
     bool battle_quick_save_4f4ef();       // sub_4F4EF: genesis.qsv
     bool battle_quick_load_4fd25();       // sub_4FD25: restore genesis.qsv
     bool battle_verify_qsv_4fcd9();       // sub_4FCD9: verify genesis.qsv and rewrite it when it differs
