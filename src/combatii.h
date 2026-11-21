@@ -2232,6 +2232,14 @@ private:
     int  battle_spell_pick_single(int unit_index, int tx, int ty, int range_add, int mode); // 28982/2AE44
     std::vector<int> battle_spell_diamond(int unit_index, int cx, int cy, int radius,
                                           int mode, bool undead_only = false);    // 28A97/2AF53/2AFE0
+    // sub_28540: 1B7BF(1,1,0) + 13F8A + 1B7FA from the caster's front tile, plus 13D02 on
+    // the caster's own tile when the handler's expectation byte is 0. Returns the E8F46 grid.
+    std::vector<int16_t> battle_spell_range_grid(int unit_index, int range_add, bool mark_self);
+    bool battle_spell_range_ok(int tx, int ty) const;                 // sub_13CBD on E8F46
+    int  battle_magic_aim_range_add(int r_code) const;                 // sub_28465's ecx per handler
+    bool battle_magic_aim_marks_self(int r_code) const;                // 28982 push 0 / 2AE44 / 2B031
+    void battle_magic_aim_paint(int unit_index, int r_code);            // 28540 reach / 28A97 area
+    void battle_spell_paint_area(int unit_index, int r_code, int cx, int cy); // 28A97/28C8A/2AF53
     int battle_spell_28ed6(int unit_index, int row, int k, int tx, int ty);        // 28ED6/28F0D/28F4C
     int battle_spell_29273(int unit_index, int bit, int k, int tx, int ty);        // 29273/29636/29675
     int battle_spell_2a1c6(int unit_index, int kind, int k);                       // 2A1C6/2A3E4/2A21A
