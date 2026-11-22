@@ -379,6 +379,9 @@ struct VmEvent {
     uint8_t attacker_ref_sel = 0, attacker_ref_id = 0; // [sel][idx] of the attacker record
     int attacker_mode = 0;                // var_14[0] - 0 normal, 1 -> dword_F0B8A+2=1 (special/skill), >=2 -> pose
     std::vector<VmAttackTarget> attack_targets;
+    // A target record that sub_501BA could not resolve at parse time. sub_51C74 aborts the
+    // whole command on any miss, so playback must not animate the attacker alone.
+    bool attack_missing_target = false;
     // Hp (0x0A sub_5211D)
     int hp_unit = -1;
     int hp_delta = 0;                     // 0 = instant death (sub_1DB1D), 0x7FFF = full heal, negative = damage
@@ -2657,6 +2660,7 @@ private:
     bool battle_sfx_on_ = true;           // word_FDAE6
     int  battle_bgm_id_ = 0;              // byte_FF0B7 (VM 0x13); sub_4F369 skips values >= 0x12
     int  battle_sfx_id_ = 0;              // byte_FF0B8 (VM 0x77); sub_4F427/4F450 gate on > 0
+    std::string battle_sfx_sample_path_;  // slot 0 loaded by sub_4F3BD (sub_5CA62); 4F427 starts it
     bool battle_bgm_active_ = false;      // port state for sub_5AEB5/sub_5AF1B (CD layer is state-only)
     int  battle_bgm_current_track_ = 0;   // track selected by sub_4F369 (byte_FF0B7 + 2)
     int  battle_scroll_speed_ = 4;        // word_FDAEA: 0 -> 4, 1 -> 8

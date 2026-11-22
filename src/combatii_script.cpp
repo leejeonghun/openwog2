@@ -2,6 +2,7 @@
 // Split out of combatii.cpp; behavior is unchanged.
 #include <algorithm>
 #include "combatii.h"
+#include "audio.h"
 #include "devutil.h"
 #include "combatii_internal.h"
 #include "combat_class_names.h"
@@ -301,6 +302,10 @@ CombatII::DialogueSpeakerInfo CombatII::battle_dialogue_speaker_507be(uint8_t se
     } else {
         ui = find_unit_index_ctx(sel, idx, forced_context);
     }
+    // loc_50837: when the sel>9 list (and the previous-speaker reuse) leaves ecx == 0, the
+    // original jumps straight to loc_508DF without trying sub_500ED. The hidden-speaker path
+    // (loc_50854) is reached only from sel<=9 or from a non-zero sel>9 candidate.
+    if (signed_sel > 9 && ui < 0) return out;
     if (ui >= 0) {
         const auto& u = units_[(size_t)ui];
         out.found = true;
@@ -321,9 +326,11 @@ CombatII::DialogueSpeakerInfo CombatII::battle_dialogue_speaker_507be(uint8_t se
     if (!rec && live >= 0) rec = &units_[(size_t)live];
     if (!rec || rec->owner_87 == 0) return out;
     // `mov ax,word_FDF7E; add eax,6; ... mov ax,word_FDF80; add eax,6; call sub_1124A`.
-    // word_FDF80/FDF7E are the camera tile words, so +6 is the tile at the screen centre.
-    const int centred_x = cam_tile_x_ + 6;
-    const int centred_y = cam_tile_y_ + 6;
+    // word_FDF80/FDF7E are written only by the SCE loader (sub_4ED18) and quick load
+    // (sub_4F85C); camera scrolling never updates them. They hold the initial SCE camera
+    // tile, not the current cam_tile_*.
+    const int centred_x = (int)sce_cam_x_ + 6;
+    const int centred_y = (int)sce_cam_y_ + 6;
     camera_center_on(centred_x, centred_y);   // sub_1124A
     if (should_exit_) return out;
     // `mov al,byte ptr dword_BA83C; add al,6; mov [esi],al` (+ the high word for [esi+1]).
@@ -781,7 +788,14 @@ CombatII::VmResult CombatII::run_vm(uint32_t offset) {
                 // loc_51C8F: after sel/idx (esi=+2) a missing unit does `lea eax,[esi+1]`,
                 // consuming only the 3 bytes up to mode. The unit list is stateful, so the
                 // reference is resolved again at playback; ui is only the parse-time hint.
-                if (ui < 0) { unit_missing = true; break; }
+                if (ui < 0) {
+                    // A missing target record aborts the whole 0x07 command before any
+                    // animation. Keep the event but stamp it so playback does not animate
+                    // the attacker alone. (The attacker ref is deferred and re-resolved.)
+                    if (entries > 0) ev.attack_missing_target = true;
+                    unit_missing = true;
+                    break;
+                }
                 if (entries == 0) {
                     ev.attacker_unit = ui; ev.attacker_mode = mode;
                     entries++;
@@ -3959,9 +3973,11 @@ void CombatII::play_vm_events(const std::vector<VmEvent>& events) {
             present_cutscene_frame();
             break;
         case VmEventType::Bgm:
-            // sub_52DA4: byte_FF0B8 = value, sub_5CD0D(0) + sub_4F3BD (off_75480 sample
-            // load/start), then sub_4F427's word_FDAE6 gate. Deferred from parse time so a
-            // display-only block scan does not start the sample.
+            // sub_52DA4: sub_5CD0D(0) runs before byte_FF0B8 is read, then sub_4F3BD (sample
+            // load) and sub_4F427's word_FDAE6 gate. Deferred from parse time so a display-only
+            // block scan does not start/stop the sample.
+            if (battle_trace_) fprintf(stderr, "COMBAT: sfx stop channel=0 (sub_52DA4 -> 5CD0D)\n");
+            Audio::stop_channel0();                  // sub_5CD0D(0), also for value 0
             battle_sfx_id_ = ev.value;               // byte_FF0B8
             battle_sfx_start_4f3bd();
             battle_sfx_preview_4f427();
@@ -3975,19 +3991,31 @@ void CombatII::play_vm_events(const std::vector<VmEvent>& events) {
         case VmEventType::Attack:
         case VmEventType::UnitPose: {
             // sub_51C74 resolves the attacker and each target with sub_501BA when the command
-            // runs. A missing attacker leaves `lea eax,[esi+1]` (no animation), so do nothing.
+            // runs. Either miss returns through `lea eax,[esi+1]` before the animation, so a
+            // single unresolved record drops the entire 0x07 command.
+            if (ev.attack_missing_target) {
+                if (script_trace_)
+                    fprintf(stderr, "COMBAT: vm event-combat dropped (target missing at parse)\n");
+                break;
+            }
             const int ai = resolve_vm_unit_ref(ev.attacker_ref_sel, ev.attacker_ref_id,
                                                ev.forced_target_context);
             if (ai < 0 || (size_t)ai >= units_.size()) break;
             VmEvent combat = ev;
             combat.attacker_unit = ai;
             combat.attack_targets.clear();
+            bool target_missing = false;
             for (const VmAttackTarget& t : ev.attack_targets) {
                 const int ti = resolve_vm_unit_ref(t.ref_sel, t.ref_id, ev.forced_target_context);
-                if (ti < 0 || (size_t)ti >= units_.size()) continue;
+                if (ti < 0 || (size_t)ti >= units_.size()) { target_missing = true; break; }
                 VmAttackTarget rt = t;
                 rt.unit_index = ti;
                 combat.attack_targets.push_back(rt);
+            }
+            if (target_missing) {
+                if (script_trace_)
+                    fprintf(stderr, "COMBAT: vm event-combat dropped (target missing at playback)\n");
+                break;
             }
             // loc_51DFE/loc_51E0F: sub_1E61D (attacker) [+ sub_1EF5C]; loc_51E34: pose.
             if (ev.type == VmEventType::Attack) play_attack_sequence(combat);

@@ -155,20 +155,22 @@ Mix_Chunk* Audio::play_voc(const std::string& filepath, int volume) {
     return chunk;
 }
 
+static Mix_Chunk* cached_chunk(const std::string& filepath) {
+    auto it = g_chunk_cache.find(filepath);
+    if (it != g_chunk_cache.end()) return it->second;
+    Mix_Chunk* chunk = load_chunk_from_file(filepath);
+    if (!chunk) return nullptr;
+    g_chunk_cache[filepath] = chunk;
+    return chunk;
+}
+
 bool Audio::play_cached(const std::string& filepath, int volume) {
     if (!initialized_) {
         if (!init()) return false;
     }
 
-    Mix_Chunk* chunk = nullptr;
-    auto it = g_chunk_cache.find(filepath);
-    if (it != g_chunk_cache.end()) {
-        chunk = it->second;
-    } else {
-        chunk = load_chunk_from_file(filepath);
-        if (!chunk) return false;
-        g_chunk_cache[filepath] = chunk;
-    }
+    Mix_Chunk* chunk = cached_chunk(filepath);
+    if (!chunk) return false;
 
     // sub_5CB97: play only on a free channel in 2..7; no free channel -> drop the sound.
     int channel = -1;
@@ -178,6 +180,25 @@ bool Audio::play_cached(const std::string& filepath, int volume) {
     if (channel < 0) return false;
     Mix_VolumeChunk(chunk, volume);
     return Mix_PlayChannel(channel, chunk, 0) >= 0;
+}
+
+bool Audio::play_cached_loop_channel0(const std::string& filepath, int volume) {
+    if (!initialized_) {
+        if (!init()) return false;
+    }
+
+    Mix_Chunk* chunk = cached_chunk(filepath);
+    if (!chunk) return false;
+    Mix_HaltChannel(0);
+    Mix_VolumeChunk(chunk, volume);
+    // sub_5CC20: loop count 3E7h is never decremented by the mixer's `cmp ...,3E7h`
+    // special case, so the sample repeats until 5CD0D(0) stops channel 0.
+    return Mix_PlayChannel(0, chunk, -1) >= 0;
+}
+
+void Audio::stop_channel0() {
+    if (!initialized_) return;
+    Mix_HaltChannel(0);
 }
 
 void Audio::stop_sfx_channels() {

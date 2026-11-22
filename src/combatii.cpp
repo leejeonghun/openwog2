@@ -1,6 +1,7 @@
 // Combatii: core module (entry point, main loop, timer/ISR, camera, frame/UI shell, IPC).
 #include "combatii.h"
 #include "combatii_internal.h"
+#include "audio.h"
 
 // Video/Input are the single instances owned by gene2.cpp, so the window survives module switches.
 CombatII::CombatII(Video& video, Input& input) : video_(video), input_(input) {}
@@ -1267,7 +1268,7 @@ int CombatII::run(const std::string& scenario_param){
     if (should_exit_) { video_.clear(); return 0; }
 
     execute_cutscene();
-    if(should_exit_){ video_.clear(); return 0; }
+    if(should_exit_){ Audio::stop_channel0(); video_.clear(); return 0; }
 
     bool running=true;
     fprintf(stderr, "COMBAT: cutscene done -> battle viewer loop (tick period %d game ticks%s)\n",
@@ -1400,6 +1401,10 @@ int CombatII::run(const std::string& scenario_param){
             battle_resume_key();
     }
     battle_loop_active_ = false;
+    // COMBATII.EXE exits the process after the battle (sub_61CFF -> _exit_), which cuts the
+    // channel-0 sample. The port returns to MAIN with the audio subsystem still open, so the
+    // looping sub_4F427 sample has to be stopped explicitly.
+    Audio::stop_channel0();
     video_.clear();
     // sub_55EBC tail (sub_4FF8E): persist the scroll/music/sfx/turn settings into game.cfg.
     battle_write_game_cfg_4ff8e();

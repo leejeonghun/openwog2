@@ -523,38 +523,41 @@ void CombatII::battle_music_stop_4f3ae() {
 }
 
 // sub_4F3BD: byte_FF0B8 > 0 -> sub_5CD0D(0) (stop SFX channel 0), copy
-// off_75480[unk_FF0B5>>24] into the MAGICSPR name buffer, then sub_5CA62 loads and starts it.
-// unk_FF0B5+3 is byte_FF0B8, so the table index is the SFX id itself (sar 18h sign-extends the
-// byte). off_75480 = {"OPTION 보기", "rain-out.bsp", "stream.bsp", "wat-fall.bsp", "wind.bsp"}.
-// The original loads into sample slot 0 and sub_4F427 starts that slot; the port starts the file
-// directly on the SFX layer (sub_4F427's word_FDAE6 gate is 4F427's part of the pair).
+// off_75480[unk_FF0B5>>24] into the MAGICSPR name buffer, then sub_5CA62 loads it into sample
+// slot 0. unk_FF0B5+3 is byte_FF0B8, so the table index is the SFX id itself (sar 18h
+// sign-extends the byte). off_75480's six contiguous pointers are {"OPTION 보기",
+// "rain-out.bsp", "stream.bsp", "wat-fall.bsp", "wind.bsp", "sea.bsp"}; the sixth is also
+// labelled off_75494 because sub_54743 references it directly.
+// sub_4F427 starts slot 0; the port keeps the loaded path and starts it on channel 0 there.
 void CombatII::battle_sfx_start_4f3bd() {
     const int id = (int8_t)battle_sfx_id_;
     if (id <= 0) return;                                  // cmp byte_FF0B8,0 / jle
-    if (!battle_sfx_on_) return;                          // sub_4F427: cmp word_FDAE6,1 / jnz
     static const char* const kSamples[] = {
-        "OPTION 보기", "rain-out.bsp", "stream.bsp", "wat-fall.bsp", "wind.bsp",
+        "OPTION 보기", "rain-out.bsp", "stream.bsp", "wat-fall.bsp", "wind.bsp", "sea.bsp",
     };
     if (id >= (int)(sizeof(kSamples) / sizeof(kSamples[0]))) {
         if (battle_trace_) fprintf(stderr, "COMBAT: sfx sample id=%d outside off_75480 (4F3BD)\n", id);
         return;
     }
-    const std::string path = game_path((std::string("MAGICSPR/") + kSamples[id]).c_str());
+    Audio::stop_channel0();                               // sub_5CD0D(0)
+    battle_sfx_sample_path_ = game_path((std::string("MAGICSPR/") + kSamples[id]).c_str());
     if (battle_trace_)
-        fprintf(stderr, "COMBAT: sfx sample id=%d '%s' (sub_4F3BD -> 5CA62 -> 5CC20)\n",
+        fprintf(stderr, "COMBAT: sfx sample id=%d '%s' (sub_4F3BD -> 5CA62 slot 0)\n",
                 id, kSamples[id]);
-    Audio::play_cached(path);
 }
 
 void CombatII::battle_sfx_preview_4f427() {
     if ((int8_t)battle_sfx_id_ <= 0) return;              // cmp byte_FF0B8,0 / jle (signed)
     if (!battle_sfx_on_) return;                          // cmp word_FDAE6,1 / jnz
+    if (battle_sfx_sample_path_.empty()) return;          // slot 0 was never loaded
     if (battle_trace_)
-        fprintf(stderr, "COMBAT: sfx start sample=0 channel=10 (sub_4F427, no sample bank)\n");
+        fprintf(stderr, "COMBAT: sfx start sample=0 channel=0 loop=3E7 (sub_4F427 -> 5CC20)\n");
+    Audio::play_cached_loop_channel0(battle_sfx_sample_path_);
 }
 
 void CombatII::battle_sfx_stop_4f450() {
     if ((int8_t)battle_sfx_id_ <= 0) return;              // cmp byte_FF0B8,0 / jle (signed)
+    Audio::stop_channel0();                               // sub_5CD0D(0)
     if (battle_trace_) fprintf(stderr, "COMBAT: sfx stop channel=0 (sub_4F450)\n");
 }
 
