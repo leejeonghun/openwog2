@@ -14,9 +14,10 @@
 //     xo/yo from the file header, so battle_fx_blit(frame, x + fr.xo, y + fr.yo) has the same
 //     effect. (The code below passes x/y and adds xo/yo where it needs them.)
 //   - Colour-table setup (611AA/61147) and the 12BEE/454D5/5E9E8 side calls that never reach the
-//     screen directly (tint LUT setup, scroll correction, palette fade preparation) are already
-//     covered by port helpers or folded into frame rendering, so they are skipped; each function
-//     notes what it leaves out.
+//     screen directly (tint LUT setup, palette fade preparation) are already covered by port
+//     helpers or folded into frame rendering, so they are skipped; each function notes what it
+//     leaves out. The heal driver's own edge-follow camera correction is implemented in
+//     battle_fx_2476e below.
 //   - Randomness uses combat_rand(n), the sub_499BD equivalent (the sequence differs from DOS rand).
 #include "combatii.h"
 #include "combatii_internal.h"
@@ -53,8 +54,9 @@ inline void ring_point(int angle, int radius, int cx, int cy, int& px, int& py) 
 //   15/12/9/6/3/0 plus the new head. While var_4C/var_10 remain set, the direction is remapped
 //   through dword_1FE3E and 499E4 waits one tick. On arrival it runs 4F4CD(0x32) -> 1033B(5)
 //   -> 15 frames of frame (i%6)+0Ch over the target -> 1FFCD and restores the resting camera
-//   fine values. The camera-scroll correction inside the sub-step (dword_7001C/BA838) is still
-//   not modelled; the head is converted with the camera that 1124A selected.
+//   fine values; the camera tile stays where the follow left it. If the head approaches a
+//   screen edge, each sub-step nudges the camera fine by 2/4px and rebases the camera tile when
+//   the fine offset wraps (loc_24C11..loc_24D98).
 int CombatII::battle_fx_2476e(int unit_index, int tx, int ty, int k) {
     (void)k;
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return 0;
@@ -167,6 +169,31 @@ int CombatII::battle_fx_2476e(int unit_index, int tx, int ty, int k) {
             point_x = base_x + ((int16_t)fx >> 4);                       // var_14
             point_y = base_y + (fy >> 4);                                // var_3C
 
+            // loc_24C11..loc_24D98: keep the head inside the central band. The original
+            // compares the previous trail head with the current head to choose a 2px (slow)
+            // or 4px (fast) nudge. It keeps the camera tile in local var_18/var_1C and passes
+            // it to sub_454B3; the port updates the camera members, which the renderer reads.
+            // The right/down wrap tests load dword_70018+2 / dword_BA834+2 as dwords; their
+            // high words are dword_7001C / dword_BA838, i.e. cam_fine_x_ / cam_fine_y_.
+            const int prev_dx = std::abs(trail[0].x - head_x);
+            const int prev_dy = std::abs(trail[0].y - head_y);
+            const int nudge_x = (prev_dx < 3) ? 2 : 4;
+            const int nudge_y = (prev_dy < 3) ? 2 : 4;
+            if (head_x < 0x5A && cam_tile_x_ > 0) {                      // loc_24C11
+                cam_fine_x_ += nudge_x;
+                if (cam_fine_x_ >= 0x10) { cam_fine_x_ = -8; --cam_tile_x_; }
+            } else if (head_x > 0xE6 && cam_tile_x_ + 12 < (int)map_w_) { // loc_24C49
+                cam_fine_x_ -= nudge_x;
+                if (cam_fine_x_ <= -8) { cam_fine_x_ = 16; ++cam_tile_x_; }
+            }
+            if (head_y < 0x5A && cam_tile_y_ > 0) {                      // loc_24CC7
+                cam_fine_y_ += nudge_y;
+                if (cam_fine_y_ >= 0) { cam_fine_y_ = -15; --cam_tile_y_; }
+            } else if (head_y > 0x6E && cam_tile_y_ + 13 < (int)map_h_) { // loc_24D25
+                cam_fine_y_ -= nudge_y;
+                if (cam_fine_y_ <= -15) { cam_fine_y_ = 0; ++cam_tile_y_; }
+            }
+
             // loc_24DB0 converts the updated world point to screen, then loc_24D9D shifts the
             // trail and pushes the previous head.
             const int new_x = point_x - cam_tile_x_ * TOWN_TILE_W + cam_fine_x_ + 8;
@@ -210,6 +237,14 @@ int CombatII::battle_fx_2476e(int unit_index, int tx, int ty, int k) {
         break;
     }
     if (should_exit_) { battle_nsp_release(); return 1; }
+    // loc_24F91 recomputes the target centre after the camera may have followed the head.
+    // The scrolled camera tile is intentionally kept; only the fine offsets are restored below.
+    if (ti >= 0 && (size_t)ti < units_.size()) {
+        unit_screen_center(units_[(size_t)ti], ex, ey);
+    } else if (tile_ok) {
+        ex = (tx - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X + 12;
+        ey = (ty - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y + 2;
+    }
     sfx(0x32);                                                           // sub_4F4CD(0x32)
     game_timer_set(5);                                                   // sub_1033B(5)
     for (int i = 0; i < 15 && !should_exit_; ++i) {                      // loc_24FCA (di<0Fh)
