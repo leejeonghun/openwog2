@@ -357,7 +357,7 @@ int CombatII::battle_fx_241f7(int unit_index, int tx, int ty, int k) {
 //     - At frames 0 and 8: palette upload (5F9E9) -> wait -> second upload (5F9AE) + sfx(0x32).
 //     - When frame % 16 == 0, push all 16 particles away from the caster (x 0x18, y 0x10).
 //     - frame < 8  -> particles 0..7 with frames (f, f+8)
-//       frame < 16 -> particles 8..15 with the same two frames
+//       frame < 16 -> particles 8..15 with frames (f-8, f)
 //       otherwise  -> particles 0..15 with frames (f%8, f%8+8)
 //       Off-screen positions (x <= -50 or y >= 200) are skipped. Ends with 1FFCD.
 //   Port: one pal_load_range(0, 0x100, master) covers both 5F9E9 and 5F9AE (see sub_241F7).
@@ -393,10 +393,17 @@ int CombatII::battle_fx_24466(int unit_index, int tx, int ty, int k) {
             }
         }
         int first = 0, last = 16;
-        if (frame < 8)       last = 8;                                 // particles 0..7
-        else if (frame < 16) { first = 8; last = 16; }                 // particles 8..15
-        int f1 = frame, f2 = frame + 8;
-        if (frame >= 16) { f1 = frame % 8; f2 = f1 + 8; }               // `idiv 8` -> dx
+        int f1 = 0, f2 = 0;
+        if (frame < 8) {                                               // loc_245EC: particles 0..7
+            first = 0; last = 8;
+            f1 = frame; f2 = frame + 8;
+        } else if (frame < 16) {                                       // loc_24645: particles 8..15, var_4 = frame-8
+            first = 8; last = 16;
+            f1 = frame - 8; f2 = frame;
+        } else {                                                       // loc_246B3: particles 0..15
+            first = 0; last = 16;
+            f1 = frame % 8; f2 = f1 + 8;                               // `idiv 8` -> dx
+        }
         f1 = fx_clamp_frame(f1, nframes);
         f2 = fx_clamp_frame(f2, nframes);
         for (int i = first; i < last; ++i) {

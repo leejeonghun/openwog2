@@ -14,9 +14,10 @@
 //   6. 28422(0) -> 11EE4 -> 119B6 -> morale +10 -> [1Eh]=0 / [15h]=0 -> 1DAEE/197AD ->
 //      1137A/1134F(D6620)/113E4 -> 53E0F -> 53F94 -> 53C12 -> 44DF3 (caster leaves).
 //
-// Division of work: the gameplay side (steps 2-6, healing and exit) is ported in
-// battle_item_3c12d (combatii_battle.cpp); this file owns the visuals, i.e. from the
-// 4F460("heal.ssp") call of step 3 through the 2A75A effect of step 5, in the same order.
+// Division of work: the gameplay side (steps 2-6, healing, 2A75A Heal Wind/Sun Light, and
+// exit) is ported in battle_item_3c12d (combatii_battle.cpp); this file owns the step-3
+// wide-heal visual (4F460("heal.ssp") + 253DC) only. Calling 2A75A here would duplicate the
+// handler's Heal Wind / Sun Light effects before 2ACCB runs.
 //
 // Port mapping: 45559 -> present_cutscene_frame, 48612 -> battle_unit_label,
 // 28422 -> battle_spell_auto_, 4F460 -> battle_ssp_play, 253DC -> battle_fx_253dc
@@ -52,27 +53,9 @@ int CombatII::battle_fx_3c12d(int unit_index, int tx, int ty, int k) {
     tx = (int)(int8_t)u.x;
     ty = (int)(int8_t)u.y;
 
-    // Step 2 di: mov eax,[esi+4Ch]; mov edx,[esi+48h]; sub eax,0C8h; cmp eax,edx; jge -> 0;
-    //   otherwise cmp byte [esi+2Bh],3Ch; jbe -> 1; else 2.
-    int di;
-    if (battle_max_hp_raw(u) - 0xC8 >= battle_hp_raw(u)) di = 0;
-    else di = (u.combat_level_2b > 0x3C) ? 2 : 1;
-
     // Step 3: 4F460("heal.ssp", 32h, 5) then the 253DC(x, y, 1Eh) wide-heal effect.
+    //   2A75A(edx=2/1) for di>0 / di>1 runs once after 2ACCB inside battle_item_3c12d.
     battle_ssp_play("heal.ssp", 0x32);                           // 4F460("heal.ssp", 32h)
     battle_fx_253dc(unit_index, tx, ty, 0x1E);                   // sub_253DC(eax=x, edx=y, ebx=1Eh)
-    if (should_exit_) return 1;
-
-    // Step 4, di>0: Heal Wind effect (battle_item_2a75a_fx plays the SSP and driver at the
-    // 2A75A site).
-    if (di > 0) {
-        battle_item_2a75a_fx(unit_index, 3, 2, tx, ty);          // sub_2A75A(edx=2, ebx=3)
-        if (should_exit_) return 1;
-    }
-    // Step 5, di>1: Sun Light effect.
-    if (di > 1) {
-        battle_item_2a75a_fx(unit_index, 4, 1, tx, ty);          // sub_2A75A(edx=1, ebx=4)
-        if (should_exit_) return 1;
-    }
     return 1;
 }

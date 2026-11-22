@@ -23,7 +23,7 @@
 //   (3) Seed five particles: Y = -(sub_499BD(82h)+32h) ~ -50..-179, X = sub_499BD(118h)+14h
 //       ~ 20..299, age 0, budget var_4 = 0x28 (40). sub_1033B(3).
 //   (4) Main loop (var_4 > 0):
-//       - per particle: age++; at 20 (0x14) respawn - all five points get
+//       - per particle: compare pre-increment age == 20 (0x14), age++; at 20 respawn - all five points get
 //         Y = spawnY+0Ah, X = spawnX+0Ah, live = 1; age = 0; spawn Y/X are redrawn
 //         (Y negative, X positive); budget--.
 //       - spawnY += 0Ah; camera shake toggles dword_BA838 (0 <-> -6);
@@ -94,9 +94,9 @@ int CombatII::battle_fx_22d18(int unit_index, int tx, int ty, int k) {
     // (4) main loop (loc_22DF2)
     while (budget > 0 && !should_exit_) {
         for (int i = 0; i < 5 && !should_exit_; ++i) {
-            const int a = age[i] + 1;
-            age[i] = (int16_t)a;
-            if (a == 0x14) {                                      // `cmp dx,14h`
+            const int old_age = age[i];
+            age[i] = (int16_t)(old_age + 1);
+            if (old_age == 0x14) {                                // `cmp dx,14h` (pre-increment age)
                 const int16_t bx0 = spawn_x[i];
                 const int16_t by0 = spawn_y[i];
                 for (int b = 0; b < 5; ++b) {                     // loc_22E3B

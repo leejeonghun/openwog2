@@ -300,10 +300,10 @@ int CombatII::battle_fx_25591(int unit_index, int tx, int ty, int k) {
     return 1;
 }
 
-// sub_261FC(eax/edx=caster tile, ebx=angle): powerup.nsp attack-up effect.
-//   Places five sprites along the target centre (x-0x28 + i*0x0A, a horizontal row of five).
-//   The frame runs 0..3 once and then stays at 4 (unk_F0DDA = table start+4*0Ch), drawn with the
-//   5F305 tint. In the same places five embers rise 4 px per frame using frame 5.
+// sub_261FC(eax/edx=caster tile, ebx=level): powerup.nsp attack-up effect.
+//   Draws frame 0..3 once then 4 (unk_F0DDA) ONCE at the target centre + xo/yo with 5F305 tint.
+//   Five embers at x = cx + dword_1FE5A[i] ({0,-10,10,5,-5}), y = cy - 0x28 + i*0x0A rise 4 px
+//   per frame using 1FFFE(frame 5+k), wrapping below cy - 0x32 back to cy.
 //   30 frames, 1033B(4), 4F4CD(0x32).
 int CombatII::battle_fx_261fc(int unit_index, int tx, int ty, int k) {
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return 0;
@@ -317,22 +317,31 @@ int CombatII::battle_fx_261fc(int unit_index, int tx, int ty, int k) {
         cx = (tx - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X + 12;
         cy = (ty - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y + 8;
     }
+    static constexpr int kOffsetX[5] = {0, -10, 10, 5, -5};             // dword_1FE5A (ASM 22906)
+    int spark_x[5], spark_y[5];
+    for (int i = 0; i < 5; ++i) {
+        spark_x[i] = cx + kOffsetX[i];                                   // var_24[i]
+        spark_y[i] = cy - 0x28 + i * 0x0A;                               // var_18[i]
+    }
+    const int top = spark_y[0] - 0x0A;                                   // var_4 = cy - 0x32
+    const int bottom = spark_y[4];                                       // var_8 = cy
     sfx(0x32);                                                           // sub_4F4CD(0x32)
     game_timer_set(4);                                                   // sub_1033B(4)
-    (void)k;
     const int shade = 0x28;                                              // 61147(eax=1, edx=28h)
-    int spark_y[5];
-    const int top = cy - 0x1E, bottom = cy;
-    for (int i = 0; i < 5; ++i) spark_y[i] = cy + (i - 2) * 4;            // dword_1FE58 layout (approx.)
+    const int ember_f = 5 + (int)(int16_t)(k & 0xFFFF);                  // [esp+30h+var_32] sar 10h + 5
     for (int t = 0; t < 0x1E && !should_exit_; ++t) {                    // `cmp ax,1Eh`
         const int f = (t < 4) ? t : 4;                                   // fixed at +4*0Ch
+        if (f < nframes) {
+            const MagicFxFrame& fr = magic_frames_[(size_t)f];
+            battle_fx_blit_tinted(f, cx + fr.xo, cy + fr.yo, shade, {0x01}); // sub_5F305 once
+        }
         for (int i = 0; i < 5; ++i) {
-            const int x = cx - 0x28 + i * 0x0A;                          // `sub 28h; add 0Ah`
-            if (f < nframes) battle_fx_blit_tinted(f, x, cy, shade, {0x01}); // sub_5F305
-            // Rising ember: frame 5, y -= 4, wrapped to the bottom when it leaves the top
+            if (ember_f >= 0 && ember_f < nframes) {
+                const MagicFxFrame& fr = magic_frames_[(size_t)ember_f];
+                battle_fx_blit(ember_f, spark_x[i] + fr.xo, spark_y[i] + fr.yo); // sub_1FFFE
+            }
             spark_y[i] -= 4;
             if (spark_y[i] < top) spark_y[i] = bottom;
-            if (5 < nframes) battle_fx_blit(5, x + 2, spark_y[i]);       // sub_1FFFE
         }
         battle_fx_present();
         wait_game_tick();
@@ -342,10 +351,12 @@ int CombatII::battle_fx_261fc(int unit_index, int tx, int ty, int k) {
 }
 
 // sub_26391(eax/edx=caster tile, bl=variant): speedup.nsp falling embers (agility up).
-//   Drops three (var edi<3) particles downward from above the target (y-0..2, each offset by +4)
-//   while drawing frame = 0x12 + (y%3). 40 frames (0x28), 1033B(7), 4F4CD(0x32) at start.
+//   1124A -> 11DB2/135EB(cx, cy) -> loc_263D1 computes py[0..2] via sub_10988(cy - i) + 4
+//   (16px vertical spacing). 40 frames (0x28), 1033B(7), 4F4CD(0x32):
+//     - main sprite k*6 + (t%6) at (cx, cy - t/2) alternates under (t%2==0) / over (t%2!=0) 12BEE
+//     - 3 embers: py[i]++ (if old_py > cy: py[i] = cy + main.yo - t/2), frame 0x12 + py[i]%3 at
+//       (cx + 4 - i*6, py[i]) via 1FFFE (+xo/yo), followed by 454D5 + 5E9E8 + 499E4.
 int CombatII::battle_fx_26391(int unit_index, int tx, int ty, int k) {
-    (void)k;
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return 0;
     if (!battle_nsp_load("speedup.nsp") || magic_frames_.empty()) return 0;
     const int nframes = (int)magic_frames_.size();
@@ -357,19 +368,40 @@ int CombatII::battle_fx_26391(int unit_index, int tx, int ty, int k) {
         cx = (tx - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X + 12;
         cy = (ty - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y + 8;
     }
+    // ASM 30980-30996: sub_135EB stores cy in [esp+0], then loc_263D1 calls sub_10988(cy - i) + 4.
+    int py[3];
+    for (int i = 0; i < 3; ++i)
+        py[i] = ((int)(int16_t)(cy - i) - (int)(int16_t)cam_tile_y_) * TOWN_TILE_H + (int)(int16_t)cam_fine_y_ + 8;
     game_timer_set(7);                                                   // sub_1033B(7)
     sfx(0x32);                                                           // sub_4F4CD(0x32)
-    int py[3];
-    for (int i = 0; i < 3; ++i) py[i] = cy - (i * 4) + 4;                 // 10988(i)+4 layout (approx.)
+    const int variant = (int)(int8_t)(k & 0xFF);                         // `sar eax, 18h` on var_4
     for (int t = 0; t < 0x28 && !should_exit_; ++t) {                    // `cmp bx,28h`
-        for (int i = 0; i < 3; ++i) {
-            const int f = 0x12 + (py[i] % 3);                            // `idiv 3; add 12h`
-            if (f < nframes) battle_fx_blit(f, cx - (py[i] / 2), py[i]);
-            py[i] += 6 + i * 2;                                          // fall downward
-            if (py[i] <= cy) py[i] = cy - 0x20;                          // restart above the target
+        const int main_f = variant * 6 + (t % 6);
+        int main_xo = 0, main_yo = 0;
+        if (main_f >= 0 && main_f < nframes) {
+            main_xo = magic_frames_[(size_t)main_f].xo;
+            main_yo = magic_frames_[(size_t)main_f].yo;
+            if ((t % 2) == 0)
+                battle_fx_blit_under_units(main_f, cx + main_xo, cy - (t >> 1) + main_yo);
+            else
+                battle_fx_blit(main_f, cx + main_xo, cy - (t >> 1) + main_yo);
         }
-        battle_fx_present();
-        wait_game_tick();
+        for (int i = 0; i < 3; ++i) {
+            const int old_py = py[i];
+            py[i] = old_py + 1;
+            if (old_py > cy) py[i] = cy + main_yo - (t >> 1);
+            const int f = 0x12 + (py[i] % 3);                            // `idiv 3; add 12h`
+            if (f >= 0 && f < nframes) {
+                const MagicFxFrame& fr = magic_frames_[(size_t)f];
+                battle_fx_blit(f, cx + 4 - i * 6 + fr.xo, py[i] + fr.yo); // sub_1FFFE
+            }
+        }
+        battle_hud_time_ = battle_time_;                                 // 454D5 frame time
+        render_battle_map(false, false, true);                           // sub_10AEB + sub_12BEE
+        battle_fx_flush();
+        battle_fx_overlay();                                             // sub_454D5
+        battle_fx_commit();                                              // sub_5E9E8
+        wait_game_tick();                                                // sub_499E4
     }
     battle_nsp_release();                                                // sub_1FFCD
     return 1;
@@ -405,9 +437,10 @@ int CombatII::battle_fx_26584(int unit_index, int tx, int ty, int k) {
     return 1;
 }
 
-// sub_26672(eax/edx=caster tile, ebx=direction): bless.nsp blessing effect.
-//   Uses the same row of five as 261FC (centre x-0x28 + i*0x0A) drawn with the 5F305 tint, and
-//   above it five embers rise 4 px per frame using frame (i%3)*3+5.
+// sub_26672(eax/edx=caster tile, ebx=level): bless.nsp blessing effect.
+//   Draws frame 0..3 once then 4 (unk_F0DDA) ONCE at the target centre + xo/yo with 5F305 tint.
+//   Five embers at x = cx + dword_1FE64[i] ({0,-10,7,5,-5}), y = cy - 0x28 + i*0x0A fall +4 px
+//   per frame using 5EE51(frame k*3 + 5 + (i%3)), wrapping > cy back to cy - 0x32.
 //   30 frames, 1033B(4), 4F4CD(0x32).
 int CombatII::battle_fx_26672(int unit_index, int tx, int ty, int k) {
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return 0;
@@ -421,22 +454,29 @@ int CombatII::battle_fx_26672(int unit_index, int tx, int ty, int k) {
         cx = (tx - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X + 12;
         cy = (ty - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y + 8;
     }
+    static constexpr int kOffsetX[5] = {0, -10, 7, 5, -5};              // dword_1FE64 (ASM 22908)
+    int spark_x[5], spark_y[5];
+    for (int i = 0; i < 5; ++i) {
+        spark_x[i] = cx + kOffsetX[i];                                   // var_18[i]
+        spark_y[i] = cy - 0x28 + i * 0x0A;                               // var_24[i]
+    }
+    const int top = spark_y[0] - 0x0A;                                   // edi = cy - 0x32
+    const int bottom = spark_y[4];                                       // var_4 = cy
     sfx(0x32);                                                           // sub_4F4CD(0x32)
     game_timer_set(4);                                                   // sub_1033B(4)
-    (void)k;
     const int shade = 0x28;                                              // 61147(eax=1, edx=28h)
-    int spark_y[5];
-    const int top = cy - 0x28, bottom = cy;
-    for (int i = 0; i < 5; ++i) spark_y[i] = cy + (i - 2) * 4;
+    const int level = (int)(int16_t)(k & 0xFFFF);                        // [esp+30h+var_32] sar 10h
     for (int t = 0; t < 0x1E && !should_exit_; ++t) {
         const int f = (t < 4) ? t : 4;                                   // fixed at +4*0Ch
+        if (f < nframes) {
+            const MagicFxFrame& fr = magic_frames_[(size_t)f];
+            battle_fx_blit_tinted(f, cx + fr.xo, cy + fr.yo, shade, {0x01}); // sub_5F305 once
+        }
         for (int i = 0; i < 5; ++i) {
-            const int x = cx - 0x28 + i * 0x0A;
-            if (f < nframes) battle_fx_blit_tinted(f, x, cy, shade, {0x01}); // sub_5F305
-            const int fr = (i % 3) * 3 + 5;                              // `lea [eax+eax*2]; +5`
-            spark_y[i] -= 4;                                             // `sub eax,4`
-            if (spark_y[i] < top) spark_y[i] = bottom;                   // wrap back to var_8
-            if (fr < nframes) battle_fx_blit(fr, x + 2, spark_y[i]);     // sub_5EE51
+            const int fr = level * 3 + 5 + (i % 3);                      // ASM 31295-31305
+            if (fr >= 0 && fr < nframes) battle_fx_blit(fr, spark_x[i], spark_y[i]); // sub_5EE51
+            spark_y[i] += 4;                                             // `add eax,4`
+            if (spark_y[i] > bottom) spark_y[i] = top;                   // `cmp ax,dx; jle` -> edi
         }
         battle_fx_present();
         wait_game_tick();

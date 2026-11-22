@@ -2939,7 +2939,8 @@ bool CombatII::battle_item_full_select(int unit_index, int new_item) {
     int last_mx = input_.get_mouse_x(), last_my = input_.get_mouse_y();
 
     auto draw = [&]() {
-        const auto& u = units_[(size_t)unit_index];
+        const auto& base_u = units_[(size_t)unit_index];
+        const auto& u = base_u.stored_77 ? *base_u.stored_77 : base_u;
         render_battle_frame();                                      // sub_454B3
         render_dialog_dimming(0x10, 0x78, 0x130 - 0x10, 0xBD - 0x78);   // sub_6104A(0) + sub_5EDDE(0x10,0x78,0x130,0xBD)
         render_dialog_dimming(0x10, 0x7D, 0x130 - 0x10, 0xB8 - 0x7D);   // sub_5EDDE(0x10,0x7D,0x130,0xB8)
@@ -3003,21 +3004,24 @@ bool CombatII::battle_item_full_select(int unit_index, int new_item) {
     }
     present_cutscene_frame();                                      // loc_18AEA: sub_45559
     if (result != 1) return false;
-    const int slot_item = (int)units_[(size_t)unit_index].inv_5f;
+    auto& base_u = units_[(size_t)unit_index];
+    auto& target_u = base_u.stored_77 ? *base_u.stored_77 : base_u;
+    const int slot_item = (int)target_u.inv_5f;
     if (sel == 0) {
         battle_stash_add(new_item);                                // sub_4ECE4(new item)
     } else {
         battle_stash_add(slot_item);                               // sub_4ECE4([unit+5Fh])
-        units_[(size_t)unit_index].inv_5f = (uint8_t)new_item;     // [unit+5Fh] = new item
+        target_u.inv_5f = (uint8_t)new_item;                       // [unit+5Fh] = new item
     }
     if (battle_trace_)
-        fprintf(stderr, "COMBAT: item full unit=%d new=%d choice=%d (sub_1888D)\n", units_[(size_t)unit_index].id, new_item, sel);
+        fprintf(stderr, "COMBAT: item full unit=%d new=%d choice=%d (sub_1888D)\n", target_u.id, new_item, sel);
     return true;
 }
 
 // sub_18B2E: execute a tile event. The index from sub_187B1 grants the item/exp/money and
 // marks the event consumed.
-//   [0x77] link x/y copy (the port only checks linked_class and skips; chapters 1-7 have no links).
+//   [0x77] link x/y copy (ASM 12870-12878): stored_77->x = u.x, stored_77->y = u.y, and var_8
+//   switches to stored_77 for item slots/messages.
 //   Item (state<0x96): fill [0x5E] then [0x5F]; when both are full sub_1888D asks the player and
 //   a cancel leaves the event unconsumed.
 //     Shows EDD88[(item-1)*66+1] name + "] ..." through sub_482A5 (the port logs and draws UI text).
@@ -3033,23 +3037,28 @@ void CombatII::battle_tile_18b2e(int unit_index, int event_index) {
     if (!u.active) return;
     BattleTileEvent& e = battle_tile_events_[(size_t)event_index];
     const uint8_t item = e.state; // byte_F0382 (sub_187B1 filters 0/FF)
-    // [0x77] link copy: the port only checks linked_class and skips when one exists.
-    if (u.linked_class >= 0 && battle_trace_)
-        fprintf(stderr, "COMBAT: tile event[%d] unit=%d linked copy (sub_18B2E [77h] Tripwire, skipped)\n",
+    // [0x77] link copy (ASM 12870-12878): [edx] = u.x, [edx+1] = u.y, var_8 = edx.
+    if (u.stored_77) {
+        u.stored_77->x = u.x;
+        u.stored_77->y = u.y;
+    } else if (u.linked_class >= 0 && battle_trace_) {
+        fprintf(stderr, "COMBAT: tile event[%d] unit=%d linked copy (sub_18B2E [77h] Tripwire, no stored_77)\n",
                 event_index, u.id);
+    }
+    CombatUnitPlacement& target_u = u.stored_77 ? *u.stored_77 : u; // var_8
     // ---- Item (dl < 0x96) ----
     if (item < 0x96) {
-        if (u.inv_5e == 0) {
-            u.inv_5e = item; // mov [edx+5Eh],al
-        } else if (u.inv_5f == 0) {
-            u.inv_5f = item; // mov [edx+5Fh],al
+        if (target_u.inv_5e == 0) {
+            target_u.inv_5e = item; // mov [edx+5Eh],al
+        } else if (target_u.inv_5f == 0) {
+            target_u.inv_5f = item; // mov [edx+5Fh],al
         } else {
             // sub_1888D: full-bag two-choice dialog. A cancel (0) leaves the event unconsumed (jz
             // loc_18D2E).
             if (!battle_item_full_select(unit_index, (int)item)) {
                 if (battle_trace_)
                     fprintf(stderr, "COMBAT: tile event[%d] unit=%d item=%u slots full - cancelled, not consumed (sub_1888D)\n",
-                            event_index, u.id, (unsigned)item);
+                            event_index, target_u.id, (unsigned)item);
                 return;
             }
         }
@@ -3064,14 +3073,14 @@ void CombatII::battle_tile_18b2e(int unit_index, int event_index) {
         }
         if (battle_trace_)
             fprintf(stderr, "COMBAT: tile event[%d] unit=%d got item=%u (%s) inv=(%u,%u) (sub_18B2E item)\n",
-                    event_index, u.id, (unsigned)item, Font::johab_to_utf8(iname_raw).c_str(),
-                    (unsigned)u.inv_5e, (unsigned)u.inv_5f);
+                    event_index, target_u.id, (unsigned)item, Font::johab_to_utf8(iname_raw).c_str(),
+                    (unsigned)target_u.inv_5e, (unsigned)target_u.inv_5f);
         std::string msg = "\n[";                                  // unk_7707F
         msg += iname_raw;
         msg += "] ";                                              // aBcb_1 (0x77082)
         msg += "\xD2\x42\x97\x62";
         msg += "!\n";
-        battle_unit_message(unit_index, msg);                     // sub_482A5
+        battle_unit_message(target_u, msg);                       // sub_482A5(var_8, msg)
     }
     // ---- exp/money display and exp gain (F0383/F0385) ----
     {
@@ -3091,7 +3100,7 @@ void CombatII::battle_tile_18b2e(int unit_index, int event_index) {
             msg += std::to_string((unsigned)e.money);
             msg += "ELD \xD2\x42\x97\x62!\n";                      // aEldBcb_0 (0x7709E)
         }
-        if (!msg.empty()) battle_unit_message(unit_index, msg);   // sub_482A5
+        if (!msg.empty()) battle_unit_message(target_u, msg);     // sub_482A5(var_8, msg)
     }
     if (e.exp != 0) {
         // Mov al, byte ptr [var_4]: only the LOW byte of the F0383 word is added.

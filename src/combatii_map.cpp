@@ -2885,16 +2885,15 @@ void CombatII::apply_weather_palette(bool animate) {
             delta[i][ch] = (int)target[i][ch] - (int)weather_cur_palette_[i][ch];
     const bool changed = memcmp(target, weather_cur_palette_, sizeof(target)) != 0;
     if (animate && changed && !auto_advance_) {
-        // 51 steps x one vertical retrace each = about 0.7s. As in the original, low indices reach
-        // the target later, which produces the palette ramp.
+        // 51 steps x one vertical retrace each = about 0.7s. sub_49A3E calls
+        // sub_5FD1C(f, 0x100, unk_F9188, unk_FABE0, f), so step f only writes DAC entries
+        // [f, 256) with factor f while [0, f) retain the values from earlier steps.
         for (int f = 0; f <= 100; f += 2) {
-            for (int i = 0; i < 256; ++i) {
+            for (int i = f; i < 256; ++i) {
                 uint8_t v[3];
                 for (int ch = 0; ch < 3; ++ch) {
-                    int factor = (i < f) ? f : i;            // result of the [i,256) range write
-                    if (factor > 100) factor = 100;          // 64h clamp inside sub_5FD1C
                     int base = weather_cur_palette_[i][ch];
-                    v[ch] = (uint8_t)std::clamp(base + delta[i][ch] * factor / 100, 0, 63);
+                    v[ch] = (uint8_t)std::clamp(base + delta[i][ch] * f / 100, 0, 63);
                 }
                 palette_set_entry((uint8_t)i, v[0], v[1], v[2]);
             }
@@ -2902,7 +2901,7 @@ void CombatII::apply_weather_palette(bool animate) {
             SDL_Delay(14);                                   // sub_5E943 (vertical retrace)
         }
     }
-    // sub_5F9AE(0, 0x100, unk_12824C): commit the final palette to the DAC.
+    // sub_44F30 (ASM 71388-71400): copy unk_12824C -> unk_F9188 and commit [0, 256) via sub_5F9AE.
     memcpy(weather_cur_palette_, target, sizeof(target));
     for (int i = 0; i < 256; ++i)
         palette_set_entry((uint8_t)i, target[i][0], target[i][1], target[i][2]);
@@ -2927,8 +2926,8 @@ void CombatII::weather_tick_phase() {
 //   The two row positions (loc_451E6..loc_45251, verified): with edi = 16*(camY%12) - fineY,
 //     0 < edi < 96  -> yA = 4-edi,   yB = 100-edi   (loc_4523A path)
 //     edi > 96      -> yA = 100-edi, yB = 196-edi   (loc_45228 path)
-//     edi == 0 / 96 -> yA = 4,       yB = 100       (equivalent loc_453A6 path)
-//   In all three cases yB = yA + 96 and yA = 4 - (edi % 96).
+//     edi <= 0 / 96 -> yA = 4,       yB = 100       (loc_4524A / loc_4522F -> loc_453A6 path)
+//   In all non-negative cases yB = yA + 96 and yA = 4 - (edi % 96); edi <= 0 fixes yA = 4.
 //
 //   Row counts: sub_5F42D takes ecx as the row count (edi / edi-96) while sub_5F3FD has none,
 //   but once the count is exhausted control falls into loc_5F491 (unlimited) and keeps drawing
@@ -2951,9 +2950,10 @@ void CombatII::render_weather_layer() {
     if (x0 >= 144) { xstart = 144 - x0; frame1 = A + 1; }
     else           { xstart = -x0;      frame2 = A + 1; }
     xstart += 16;
-    // Two rows (loc_451E6..loc_45251): yA = 4 - (edi % 96), yB = yA + 96.
+    // Two rows (loc_451E6..loc_45251): edi <= 0 takes loc_4524A -> loc_453A6 (yA = 4, yB = 100);
+    // positive edi uses yA = 4 - (edi % 96), yB = yA + 96.
     const int edi = 16 * (cam_tile_y_ % 12) - cam_fine_y_;
-    const int ystart = 4 - (edi % 96);
+    const int ystart = (edi <= 0) ? 4 : 4 - (edi % 96);
     const SpriteEntry* f1 = weather_sprites_.get(frame1 % nframes);
     const SpriteEntry* f2 = weather_sprites_.get(frame2 % nframes);
     if (!f1 || !f1->pixel_data) return;

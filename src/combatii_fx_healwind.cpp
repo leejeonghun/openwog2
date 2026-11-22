@@ -104,23 +104,19 @@ int CombatII::battle_fx_25c88(int unit_index, int tx, int ty, int k) {
 //        vx = rand(0x15)-0x0A, vy = rand(0x15)-0x0A.
 //      - Every slot (loc_26004): a slot with vx == 0 or vy == 0 is skipped as-is (the original
 //        leaves it dead for good). Outside Y (5,0xBE) or X (5,0x13B) the slot is respawned at
-//        once: vx = vy = 0, X = entry[+4]+0xAB, Y = entry[+6]+0x65, centre y++, and
-//        nTarget += 4-(k+1) unless nTarget == 0x60. Otherwise frame = (nTarget+i)%5 + 3 blits
+//        once: vx = vy = 0, X = entry[+4]+0xAB, Y = entry[+6]+0x65, nTarget++, and
+//        pal_pct += 4-(k+1) unless pal_pct == 0x60. Otherwise frame = (nTarget+i)%5 + 3 blits
 //        with 1FFFE(eax = X, edx = Y), then X += vx and Y += vy.
 //        Each slot plays 4F4CD(0x33) when rand(0x0A) == 0.
-//      - Frame ends with 5E9E8 + 5E943 + 5FD1C(pct) + 499E4.
+//      - Frame ends with 5E9E8 + 5E943 + centre y-- + 5FD1C(pal_pct) + 499E4.
 //   6. Exit: 45559, then 5FD1C from pct 100 down by 4 while pct > 4, 1FFCD, 1124A(caster).
 // Port map: 1FEA4 -> battle_nsp_load, 1FFCD -> battle_nsp_release, 1FFFE -> battle_fx_blit,
 //   454B3+5E9E8 -> battle_fx_present, 499E4/5E943 -> wait_game_tick, 499BD -> combat_rand,
 //   1033B -> game_timer_set, 4F4CD -> sfx, 45559 -> present_cutscene_frame,
 //   5FC21+5FD1C -> pal_shift_fade (same delta and formula), 1124A -> camera_center_on.
 // Deviations:
-//   - The per-frame 5FD1C of the main loop runs at pct = 0 after step 4, i.e. no change; the
-//     original reads the same slot, so the call is omitted.
-//   - Slot revive uses the low word of the centre-y dword while the original's overlapping IDA
-//     view reads the high word; the port reads the sprite position the particle is born at.
-//   - `4 - (k+1)` comes from `mov al, byte [esp+574h+var_8]` with displacement 4, i.e.
-//     var_4 = k+1; the revive count is therefore always 25 regardless of the stage count.
+//   - None on the 0x560/0x564/0x568 stack slots: [esp+0x560] is sprite_y (decremented once per
+//     frame), [esp+0x564] is nTarget (incremented on respawn), and [esp+0x568] is pal_pct.
 #include "combatii.h"
 #include "combatii_internal.h"
 
@@ -151,20 +147,21 @@ int CombatII::battle_fx_25dfe(int unit_index, int k) {
     // Step 4 dim: pct 100 -> 10 in steps of 0x0A; the original leaves the loop at 0.
     for (int pct = 0x64; pct > 0; pct -= 0x0A) pal_shift_fade(pct);
 
-    int n_target = 0;                                                          // var_C low
-    int sprite_y = 0x6E;                                                       // var_10 low
+    int n_target = 0;                                                          // [esp+0x564]
+    int pal_pct = 0;                                                           // [esp+0x568]
+    int sprite_y = 0x6E;                                                       // [esp+0x560]
     for (int guard = 0; guard < 0x4000 && !should_exit_; ++guard) {
         if (n_target >= slot_count) break;                                     // `cmp ecx,eax; jge`
         const int central = n_target % 3;                                      // remainder of `idiv 3`
-        // Centre sprite: 1FFFE(eax = 0xAB, edx = centre y).
-        if (central < nframes) battle_fx_blit(central, 0xAB, sprite_y);
         const MagicFxFrame& cfr = magic_frames_[(size_t)(central < nframes ? central : 0)];
+        // Centre sprite: 1FFFE(eax = 0xAB, edx = centre y).
+        if (central < nframes) battle_fx_blit(central, 0xAB + cfr.xo, sprite_y + cfr.yo);
 
         // Revive exactly one empty slot (loc_25F89 leaves for loc_25FFD).
         for (int i = 0; i < slot_count; ++i) {
             if (vx[(size_t)i] != 0 || vy[(size_t)i] != 0) continue;
             px[(size_t)i] = 0xAB;                                              // X = 0ABh
-            py[(size_t)i] = sprite_y;                                          // Y = centre y
+            py[(size_t)i] = sprite_y;                                          // Y = [esp+0x560]
             vx[(size_t)i] = combat_rand(0x15) - 0x0A;
             vy[(size_t)i] = combat_rand(0x15) - 0x0A;
             break;
@@ -175,21 +172,26 @@ int CombatII::battle_fx_25dfe(int unit_index, int k) {
             const size_t si = (size_t)i;
             if (vx[si] == 0 || vy[si] == 0) continue;                          // dead slot
             if (py[si] > 0xBE || py[si] < 5 || px[si] < 5 || px[si] > 0x13B) {
-                // loc_260CE: respawn at once - move by the entry's xo/yo and advance nTarget.
+                // loc_260CE: respawn at once - move by the entry's xo/yo and advance nTarget/pal_pct.
                 vx[si] = 0;
                 vy[si] = 0;
                 px[si] = 0xAB + cfr.xo;                                        // [+4]
                 py[si] = 0x65 + cfr.yo;                                        // [+6]
-                ++sprite_y;                                                    // `inc [var_10]`
-                if (n_target != 0x60) n_target += 4 - stages;                   // `4-(k+1)`
+                ++n_target;                                                    // `inc [esp+0x564]`
+                if (pal_pct != 0x60) pal_pct += 4 - stages;                    // [esp+0x568] += 4-(k+1)
             } else {
                 const int f = ((n_target + i) % 5) + 3;                        // (nTarget+i)%5 + 3
-                if (f < nframes) battle_fx_blit(f, px[si], py[si]);            // 1FFFE(eax=X, edx=Y)
+                if (f < nframes) {
+                    const MagicFxFrame& fr = magic_frames_[(size_t)f];
+                    battle_fx_blit(f, px[si] + fr.xo, py[si] + fr.yo);         // 1FFFE(eax=X, edx=Y)
+                }
                 px[si] += vx[si];
                 py[si] += vy[si];
             }
             if (combat_rand(0x0A) == 0) sfx(0x33);                             // 4F4CD(33h)
         }
+        --sprite_y;                                                            // ASM 30787-30793: dec [esp+0x560]
+        pal_shift_fade(pal_pct);                                               // sub_5FD1C([esp+0x568])
         battle_fx_present();                                                   // 454B3 + 5E9E8
         wait_game_tick();                                                      // 5E943 + 499E4
     }
