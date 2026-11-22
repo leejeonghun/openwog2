@@ -384,6 +384,7 @@ struct VmEvent {
     int hp_delta = 0;                     // 0 = instant death (sub_1DB1D), 0x7FFF = full heal, negative = damage
     int hp_dir = 0;                       // tail byte = knockback direction (sub_45ED2 dl)
     int hp_killer = -1;                   // sub_1DB1D killer (units_ index, -1 = none); the other side of the death event at HP<=0
+    bool hp_defer_death = false;          // true when caller handles sub_1ED45 (1DB1D / 53797) after damage presentation
     // Item (0x06 sub_5196F): [kind][item]. The receiver is resolved when the event plays
     // (forced target, otherwise the sub_499BD(3) random walk of the CC968 list), so
     // forced_target_context carries the parse-time dword_11024C value.
@@ -2138,7 +2139,7 @@ private:
     bool battle_attack_input(int unit_index);                // target-phase input (true = input handled)
     void battle_attack_cancel();                             // 1F738 returned 0 (the caller returns to the ring)
     int  battle_attack_execute(int unit_index);              // late sub_1F738 -> 0/1/2
-    int  battle_resolve_list(int attacker_index, bool declare, std::vector<std::pair<int, BattleAttackRoll>>* out); // sub_1DDF0 (+1E61D/1EF5C/1ED45)
+    int  battle_resolve_list(int attacker_index, bool declare, std::vector<std::pair<int, BattleAttackRoll>>* out, bool apply_1ebfe = false); // sub_1DDF0 (+1E61D/1EBFE/1EF5C/1ED45)
     void battle_attack_finish(int unit_index, int ret);      // handles the sub_4D442 id 0 result
     void render_attack_range();                              // sub_44D67(1) range shading
     g2range::Env battle_range_env_make();                    // BattleUnit -> g2range::Env callbacks

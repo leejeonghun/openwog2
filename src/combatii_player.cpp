@@ -391,16 +391,24 @@ int CombatII::battle_attack_execute(int unit_index) {
             if (battle_range_collect(ui) == 0) break;
             ++di;
         }
+        // loc_1F96A: sub_1ED45 runs once more on the final sub_1D124 target list after the loop.
+        if ((size_t)ui < units_.size() && units_[(size_t)ui].active) {
+            const std::vector<int> final_targets = battle_target_list_;
+            for (int t : final_targets) {
+                if (t < 0 || (size_t)t >= units_.size() || !units_[(size_t)t].active) continue;
+                if (units_[(size_t)t].hp <= 0) {
+                    play_unit_death(t, ui);
+                } else if (units_[(size_t)ui].active && units_[(size_t)ui].hp > 0) {
+                    run_unit_hp_trigger(t, ui, 1);
+                }
+                if (should_exit_) return 0;
+            }
+        }
     } else {
-        const int r = battle_resolve_list(ui, true, &hits);
+        const int r = battle_resolve_list(ui, true, &hits, true);
         if (should_exit_) return 0;
         if (r == -1) return 2;
         if (r == -2) return 1;
-        // sub_1EBFE: physical-hit status effect on each target.
-        for (const auto& h : hits) {
-            battle_apply_1ebfe(ui, h.first, h.second.hit_kind, h.second.result);
-            if (should_exit_) return 0;
-        }
         if (!var4) battle_counterattack_list(ui);       // sub_1EF9A
         if (should_exit_) return 0;
         for (int t : battle_target_list_) battle_clear_ailment_flags(t, -1);  // sub_1E2B1
@@ -427,7 +435,8 @@ int CombatII::battle_attack_execute(int unit_index) {
 // Returns 1 normally, -1 when the attacker died after the declaration, -2 when no target is left.
 // declare == false is a counterattack (edx = 0).
 int CombatII::battle_resolve_list(int attacker_index, bool declare,
-                                  std::vector<std::pair<int, BattleAttackRoll>>* out) {
+                                  std::vector<std::pair<int, BattleAttackRoll>>* out,
+                                  bool apply_1ebfe) {
     if (out) out->clear();
     if (attacker_index < 0 || (size_t)attacker_index >= units_.size()) return -1;
     auto alive = [&](int i) {
@@ -501,6 +510,7 @@ int CombatII::battle_resolve_list(int attacker_index, bool declare,
                 hp.hp_delta = delta;
                 hp.hp_dir = units_[(size_t)attacker_index].facing;
                 hp.hp_killer = attacker_index;
+                hp.hp_defer_death = true;
                 play_hp_change(hp);
             }
         } else if (battle_trace_) {
@@ -509,10 +519,22 @@ int CombatII::battle_resolve_list(int attacker_index, bool declare,
         }
         if (should_exit_) return 1;
     }
-    // sub_1ED45: targets that survived get the hit event (mode 1).
+    // sub_1EBFE: physical-hit status effect on each target (runs before sub_1ED45).
+    if (apply_1ebfe) {
+        for (const auto& r : rolls) {
+            battle_apply_1ebfe(attacker_index, r.first, r.second.hit_kind, r.second.result);
+            if (should_exit_) return 1;
+        }
+    }
+    // sub_1ED45: HP <= 0 -> sub_1DB1D (death), surviving targets -> sub_53797(mode 1).
     for (const auto& r : rolls) {
         const int t = r.first;
-        if (alive(t) && alive(attacker_index)) run_unit_hp_trigger(t, attacker_index, 1);
+        if (t < 0 || (size_t)t >= units_.size() || !units_[(size_t)t].active) continue;
+        if (units_[(size_t)t].hp <= 0) {
+            play_unit_death(t, attacker_index);
+        } else if (alive(attacker_index)) {
+            run_unit_hp_trigger(t, attacker_index, 1);
+        }
         if (should_exit_) return 1;
     }
     if (out) *out = rolls;

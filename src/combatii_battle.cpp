@@ -1016,8 +1016,9 @@ int CombatII::battle_damage(int attacker_index, int target_index, int hit_kind, 
     //      +defense*15%; hostile: -defense*15% (walk sub_1AC08/1AC59, test with sub_1201D).
     if (area_mode != 0) {
         // sub_1D770 ASM 19731: `mov edx, [esi+44h]; sar edx,10h` takes the high word of
-        // dword[+44h] = [+46h] (defense). Then `shl eax,4; sub eax,edx; idiv 64h` = defense*15/100.
-        const int step = (int16_t)tgt.combat_value_46 * 15 / 100;
+        // dword[+44h] = [+46h] (defense, including any temporary guard bonus added by sub_1DDF0).
+        // Then `shl eax,4; sub eax,edx; idiv 64h` = defense*15/100.
+        const int step = (int16_t)tgt_def * 15 / 100;
         static constexpr int kDx[5] = { 0, -1, 0, 1, 0 };
         static constexpr int kDy[5] = { -1, 0, 0, 0, 1 };
         for (int k = 0; k < 5; ++k) {
@@ -1946,7 +1947,7 @@ void CombatII::play_hp_change(const VmEvent& ev) {
         wait_game_tick();
     }
     reset_unit_pose(U);                                    // sub_12124
-    if (U.hp <= 0) play_unit_death(ev.hp_unit, ev.hp_killer);            // `cmp [esi+48h],0; jg; call sub_1DB1D`
+    if (!ev.hp_defer_death && U.hp <= 0) play_unit_death(ev.hp_unit, ev.hp_killer);            // `cmp [esi+48h],0; jg; call sub_1DB1D`
 }
 
 // sub_197AD(unit) -> sub_19718: remove from the ready queue (dword_F041C) and zero the gauge.
@@ -2486,7 +2487,7 @@ void CombatII::battle_blackbox_close() {}
 // records, queues, camera, clock, tile events, BLACKBOX memory blocks) in the same file.
 namespace {
 // The 0x88 record pack/unpack helpers are defined further down (blackbox write).
-void battle_pack_unit_record(const CombatUnitPlacement& u, uint8_t rec[0x88]);
+void battle_pack_unit_record(const CombatUnitPlacement& u, uint8_t rec[0x88], bool include_owner = false);
 CombatUnitPlacement battle_unpack_unit_record(const uint8_t* rec);
 std::string battle_qsv_path() {
     std::string p = std::string(GAME_DATA_DIR) + "/genesis.qsv";
@@ -2514,7 +2515,8 @@ bool CombatII::battle_quick_save_4f4ef() {
     // V4 appends the two morale words (dword_F0BA0 / +2): sub_4F4EF writes them right after
     // F0420/422/424 and sub_4F85C reads them back. V5 appends the eight 100-byte trigger fire
     // flag arrays in the exact sub_4F4EF order (they live in genesis.qsv, not BLACKBOX.DAT).
-    ok = ok && qsv_write_u32(f, 5);
+    // V6 appends byte_BA84D (weather_), byte_FF0B7 (battle_bgm_id_), byte_FF0B8 (battle_sfx_id_).
+    ok = ok && qsv_write_u32(f, 6);
     const std::string& scen = current_scenario_name_;
     ok = ok && qsv_write_u32(f, (uint32_t)scen.size());
     if (ok && !scen.empty()) ok = fwrite(scen.data(), 1, scen.size(), f) == scen.size();
@@ -2539,7 +2541,7 @@ bool CombatII::battle_quick_save_4f4ef() {
     for (const auto& u : units_) {
         if (!ok) break;
         uint8_t rec[0x88];
-        battle_pack_unit_record(u, rec);
+        battle_pack_unit_record(u, rec, true);
         ok = fwrite(rec, 1, sizeof(rec), f) == sizeof(rec);
         ok = ok && qsv_write_u32(f, u.list_seq);
         ok = ok && qsv_write_u32(f, u.active ? 1u : 0u);
@@ -2594,6 +2596,14 @@ bool CombatII::battle_quick_save_4f4ef() {
         uint8_t morale_flags[100] = {};                           // byte_1104B0
         morale_flags[0] = morale_trigger_fired_;
         if (ok) ok = fwrite(morale_flags, 1, sizeof(morale_flags), f) == sizeof(morale_flags);
+    }
+    {
+        const uint8_t media[3] = {
+            weather_,
+            (uint8_t)(int8_t)battle_bgm_id_,
+            (uint8_t)(int8_t)battle_sfx_id_,
+        };
+        if (ok) ok = fwrite(media, 1, sizeof(media), f) == sizeof(media);
     }
     fclose(f);
     if (!ok) {
@@ -2680,7 +2690,7 @@ bool CombatII::battle_quick_load_4fd25() {
     uint32_t scen_len = 0, uw = 0;
     int32_t i32 = 0;
     ok = ok && qsv_read_u32(f, h.version) &&
-         (h.version == 2 || h.version == 3 || h.version == 4 || h.version == 5) &&
+         (h.version >= 2 && h.version <= 6) &&
          qsv_read_u32(f, scen_len) && scen_len < 256;
     if (ok && scen_len) {
         h.scen.resize(scen_len);
@@ -2724,7 +2734,7 @@ bool CombatII::battle_quick_load_4fd25() {
         char m2[8] = {};
         auto skip_u32 = [&](uint32_t& v) { return qsv_read_u32(f, v); };
         if (fread(m2, 1, 8, f) != 8 || memcmp(m2, "G2QSV2", 6) != 0 ||
-            !skip_u32(uw) || (uw != 2 && uw != 3 && uw != 4 && uw != 5) ||
+            !skip_u32(uw) || (uw < 2 || uw > 6) ||
             !skip_u32(uw) || uw >= 256) {
             fclose(f); return fail("quick load header corrupt (" + path + ")");
         }
@@ -2807,6 +2817,18 @@ bool CombatII::battle_quick_load_4fd25() {
         read_flags(morale_flags, sizeof(morale_flags));
         if (ok) morale_trigger_fired_ = morale_flags[0];
     }
+    uint8_t qsv_weather = weather_;
+    int8_t qsv_bgm_id = (int8_t)battle_bgm_id_;
+    int8_t qsv_sfx_id = (int8_t)battle_sfx_id_;
+    if (ok && tail_ok && h.version >= 6) {
+        uint8_t media[3] = {};
+        ok = fread(media, 1, sizeof(media), f) == sizeof(media);
+        if (ok) {
+            qsv_weather = media[0];
+            qsv_bgm_id = (int8_t)media[1];
+            qsv_sfx_id = (int8_t)media[2];
+        }
+    }
     fclose(f);
     if (!ok || !tail_ok)
         return fail("quick load body corrupt (" + path + ")");
@@ -2877,6 +2899,16 @@ bool CombatII::battle_quick_load_4fd25() {
         morale_lo_ = (int16_t)(uint16_t)tail[15];
         morale_hi_ = (int16_t)(uint16_t)tail[16];
     }
+    if (h.version >= 6) {
+        weather_ = qsv_weather;
+        battle_bgm_id_ = (int)qsv_bgm_id;
+        battle_sfx_id_ = (int)qsv_sfx_id;
+    }
+    // sub_4F85C calls sub_4F3BD; sub_4FD25 then calls sub_44F30, sub_11FC4, sub_4F369, sub_4F427.
+    battle_sfx_start_4f3bd();
+    apply_weather_palette(false);
+    battle_music_start_4f369();
+    battle_sfx_preview_4f427();
     present_cutscene_frame();
     video_.present();                       // screen refresh after sub_4A321
     fprintf(stderr, "COMBAT: quick load complete %s units=%zu scen=%s (sub_4FD25)\n",
@@ -5463,13 +5495,11 @@ bool CombatII::battle_player_input() {
         back_to_ring(); // si=0 -> TP < 10 -> end turn
         return false;
     }
-    // G = guard (10): [57h] += 20 (cap 500), TP = 0, end turn (-3).
+    // G = guard (10): if (s16)[57h] < 500, [57h] += 20 (no clamp), TP = 0, end turn (-3).
     if (input_.is_test_key_pressed(SDLK_g)) {
         if (!has_menu(10)) { if (battle_trace_) fprintf(stderr, "COMBAT: guard not offered unit=%d\n", u.id); return false; }
-        if (u.combat_acc57 < 500) {
+        if ((int16_t)u.combat_acc57 < 500)
             u.combat_acc57 = (uint16_t)(u.combat_acc57 + 20);
-            if (u.combat_acc57 > 500) u.combat_acc57 = 500;
-        }
         battle_tp_set(0); // sub_1A0BF(0)
         if (battle_trace_) fprintf(stderr, "COMBAT: guard unit=%d acc57=%u (si=-3)\n", u.id, (unsigned)u.combat_acc57);
         battle_player_end_turn(false); // TP < 10 -> 4D95A end (keeps [57h])
@@ -6781,9 +6811,6 @@ void CombatII::battle_clear_ailment_flags(int a_index, int b_index) {
 //   cx==3: [1Eh] |= 0x10, [23h] = 100; with [0Eh]==1 (raw) and [56h]==0xFF -> 19718 (queue
 //   removal only).
 //   cx==-2: [1Eh] |= 0x80, [27h] = 100 (no 1762C gate).
-// Deviation: the original writes these fields even for targets whose death has not been
-// processed yet (before 1ED45); the port resolves death first and skips inactive or HP 0
-// targets, which would not be observable after the removal anyway.
 void CombatII::battle_apply_1ebfe(int attacker_index, int target_index, int hit_kind, int result) {
     if (hit_kind == 0) {
         if (battle_trace_ && attacker_index >= 0 && (size_t)attacker_index < units_.size() &&
@@ -6796,7 +6823,7 @@ void CombatII::battle_apply_1ebfe(int attacker_index, int target_index, int hit_
         (size_t)attacker_index >= units_.size() || (size_t)target_index >= units_.size()) return;
     const auto& att = units_[(size_t)attacker_index];
     auto& tgt = units_[(size_t)target_index];
-    if (!att.active || !tgt.active || tgt.hp <= 0) return;
+    if (!att.active || !tgt.active) return;
     if (result == 2) {
         if (battle_trace_)
             fprintf(stderr, "COMBAT: 1ebfe skip unit=%d target=%d (dodge)\n", att.id, tgt.id);
@@ -6902,7 +6929,7 @@ inline int summon_tbyte(int row, int off) {
 //   the fields it models; unmodelled fields such as name and equipment keep their file
 //   values (the original writes the whole in-memory record).
 namespace {
-void battle_pack_unit_record(const CombatUnitPlacement& u, uint8_t rec[0x88]) {
+void battle_pack_unit_record(const CombatUnitPlacement& u, uint8_t rec[0x88], bool include_owner) {
     std::memset(rec, 0, 0x88);
     auto w16 = [&](int o, int v) { rec[o] = (uint8_t)(v & 0xFF); rec[o + 1] = (uint8_t)((v >> 8) & 0xFF); };
     auto w32 = [&](int o, int v) {
@@ -6962,7 +6989,7 @@ void battle_pack_unit_record(const CombatUnitPlacement& u, uint8_t rec[0x88]) {
     rec[0x7F] = u.ai_field_7f; rec[0x80] = u.ai_field_80; rec[0x81] = u.ai_field_81;
     rec[0x82] = (uint8_t)u.ai_mode; rec[0x83] = u.auto_battle; rec[0x84] = u.flags_84;
     w16(0x85, u.reward_money_85);
-    rec[0x87] = 0; // owner keeps its existing value on the BLACKBOX write
+    rec[0x87] = include_owner ? u.owner_87 : 0; // BLACKBOX write preserves existing [+87h]; qsv stores u.owner_87
 }
 
 CombatUnitPlacement battle_unpack_unit_record(const uint8_t* rec) {

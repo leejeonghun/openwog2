@@ -800,13 +800,12 @@ void CombatII::battle_ai_apply_second(int unit_index, int second_id) {
         case 3:
         case 4:
         case 5: {
-            // loc_4D2E6: wc>=6 skips, wc==5 && second>4 sets [6Ch]=5, else [6Dh]=second-3.
-            if (wc >= 6) break;
+            // loc_4D2E6: wc==5 && second>4 sets [6Ch]=5 and falls through; wc>=6 skips [6Dh]=second-3.
             if (wc == 5 && second_id > 4) {
                 u.ai_decision_state = 5;
                 if (battle_trace_) fprintf(stderr, "COMBAT: wc5 second>4 [6Ch]=5\n");
-                break;
             }
+            if (wc >= 6) break;
             u.ai_field_6d = (uint8_t)(second_id - 3);
             if (battle_trace_) fprintf(stderr, "COMBAT: [6Dh]=%u\n", (unsigned)u.ai_field_6d);
             break;
@@ -1008,11 +1007,9 @@ bool CombatII::battle_ring_dispatch(int unit_index, int menu_id) {
             back_to_ring();
             return true;
         }
-        case 10: { // loc_4D517: [57h] += 20 (cap 500), TP=0, ends with -3
-            if (u.combat_acc57 < 500) {
+        case 10: { // loc_4D517: if (s16)[57h] < 500, [57h] += 20 (no clamp), TP=0, ends with -3
+            if ((int16_t)u.combat_acc57 < 500)
                 u.combat_acc57 = (uint16_t)(u.combat_acc57 + 20);
-                if (u.combat_acc57 > 500) u.combat_acc57 = 500;
-            }
             battle_tp_set(0);
             if (battle_trace_) fprintf(stderr, "COMBAT: guard unit=%d acc57=%u (si=-3)\n", u.id, (unsigned)u.combat_acc57);
             ring_close_anim();

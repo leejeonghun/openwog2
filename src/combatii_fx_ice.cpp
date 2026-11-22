@@ -79,6 +79,16 @@ int CombatII::battle_fx_22172(int unit_index, int tx, int ty, int k) {
     if (!battle_nsp_load("icemiss.nsp") || !battle_fx_loaded()) return 0;
     const int nframes = battle_fx_frame_count();
     CombatUnitPlacement& caster = units_[(size_t)unit_index];
+    if ((uint8_t)caster.facing <= 3) {                                 // sub_200DE(caster, 3)
+        int cam_tx = (int)(int8_t)caster.x, cam_ty = (int)(int8_t)caster.y;
+        switch (caster.facing & 3) {
+            case 0: cam_ty += 3; break;
+            case 1: cam_tx -= 3; break;
+            case 2: cam_ty -= 3; break;
+            default: cam_tx += 3; break;
+        }
+        camera_center_on(cam_tx, cam_ty);
+    }
 
     int x = 0, y = 0;
     unit_screen_center(caster, x, y);          // sub_10971 / sub_10988
@@ -157,6 +167,16 @@ int CombatII::battle_fx_22486(int unit_index, int tx, int ty, int k) {
     if (!battle_nsp_load("diamondd.nsp") || !battle_fx_loaded()) return 0;
     const int nframes = battle_fx_frame_count();
     CombatUnitPlacement& caster = units_[(size_t)unit_index];
+    if ((uint8_t)caster.facing <= 3) {                                 // sub_200DE(caster, 3)
+        int cam_tx = (int)(int8_t)caster.x, cam_ty = (int)(int8_t)caster.y;
+        switch (caster.facing & 3) {
+            case 0: cam_ty += 3; break;
+            case 1: cam_tx -= 3; break;
+            case 2: cam_ty -= 3; break;
+            default: cam_tx += 3; break;
+        }
+        camera_center_on(cam_tx, cam_ty);
+    }
 
     int ex = 0, ey = 0;
     const bool tile_ok = (tx >= 0 && ty >= 0 && tx < (int)map_w_ && ty < (int)map_h_);
@@ -211,6 +231,16 @@ int CombatII::battle_fx_23882(int unit_index, int tx, int ty, int k) {
     if (!battle_nsp_load("lbolt.nsp") || !battle_fx_loaded()) return 0;
     const int nframes = battle_fx_frame_count();
     CombatUnitPlacement& caster = units_[(size_t)unit_index];
+    if ((uint8_t)caster.facing <= 3) {                                 // sub_200DE(caster, 3)
+        int cam_tx = (int)(int8_t)caster.x, cam_ty = (int)(int8_t)caster.y;
+        switch (caster.facing & 3) {
+            case 0: cam_ty += 3; break;
+            case 1: cam_tx -= 3; break;
+            case 2: cam_ty -= 3; break;
+            default: cam_tx += 3; break;
+        }
+        camera_center_on(cam_tx, cam_ty);
+    }
 
     int x = 0, y = 0;
     unit_screen_center(caster, x, y);                                  // sub_10971 / sub_10988
@@ -286,7 +316,9 @@ int CombatII::battle_fx_241f7(int unit_index, int tx, int ty, int k) {
         }
     }
     game_timer_set(5);                                                 // sub_1033B(5)
-    const int total = (k & 0xFF) * 32 + 11;                            // shl eax,5 / add eax,0Bh
+    const int k_plus1 = (k & 0xFF) + 1;                                // inc ah -> dl + 1
+    const int total = k_plus1 * 32 + 11;                               // shl eax,5 / add eax,0Bh
+    const int particle_count = std::min(16, k_plus1 * 8);              // loc_24400: shl edx,3
     int tick = 0;
     for (int frame = 0; frame < total && !should_exit_; ++frame, ++tick) {
         if (tick % 5 == 0) {                                           // var_10 % 5 == 0
@@ -296,7 +328,7 @@ int CombatII::battle_fx_241f7(int unit_index, int tx, int ty, int k) {
             sfx(0x32);                                                 // 4F4CD(32h)
             wait_game_tick();
         }
-        for (int i = 0; i < 16; ++i) {
+        for (int i = 0; i < particle_count; ++i) {
             if (frame < i * 4) continue;                               // `cmp edx, ebx` (i*4) / jl
             const int p = phase[i];
             if (p >= 12) continue;

@@ -403,8 +403,10 @@ void CombatII::battle_deploy_54a82(const std::vector<size_t>& party, std::vector
         int ci = slot[ri];
         if (ci >= 0 && (size_t)ci < units_.size()) units_[(size_t)ci] = nu;
         else { units_.push_back(nu); slot[ri] = (int)units_.size() - 1; }
+        camera_center_on(x, y);                                          // sub_1124A(x, y)
         if (battle_trace_)
             fprintf(stderr, "COMBAT: deploy auto id=%d at (%d,%d) facing=%d\n", nu.id, x, y, (int)sce_deploy_facing_);
+        if (should_exit_) break;
         cur = next(cur + 1);
         if (cur == n) break;
         ++done;
