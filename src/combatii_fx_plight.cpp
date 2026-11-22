@@ -37,7 +37,8 @@
 //
 // Port mapping: 1FEA4 -> battle_nsp_load, 1FFCD -> battle_nsp_release,
 //   1FFFE -> battle_fx_blit (the caller adds the entry's xo/yo), 5F305 -> battle_fx_blit_tinted,
-//   454B3 + 454D5 + 5E9E8 -> battle_fx_present, 45559 -> present_cutscene_frame,
+//   454B3 -> battle_fx_454b3, 454D5 + 5E9E8 -> battle_fx_present_454d5,
+//   45559 -> present_cutscene_frame,
 //   499E4 -> wait_game_tick, 1033B -> game_timer_set, 499BD -> combat_rand,
 //   dword_BA838 -> cam_fine_y_, dword_7001C -> cam_fine_x_.
 //
@@ -93,6 +94,7 @@ int CombatII::battle_fx_22d18(int unit_index, int tx, int ty, int k) {
 
     // (4) main loop (loc_22DF2)
     while (budget > 0 && !should_exit_) {
+        battle_fx_454b3();                                       // sub_454B3 (world + fall-through sub_454D5)
         for (int i = 0; i < 5 && !should_exit_; ++i) {
             const int old_age = age[i];
             age[i] = (int16_t)(old_age + 1);
@@ -150,7 +152,7 @@ int CombatII::battle_fx_22d18(int unit_index, int tx, int ty, int k) {
                 battle_fx_blit(f, point_x[i] + fr.xo, point_y[i] + fr.yo);   // sub_1FFFE
             }
         }
-        battle_fx_present();                                     // 454B3 + 454D5 + 5E9E8
+        battle_fx_present_454d5();                               // sub_454D5 + sub_5E9E8 (second overlay)
         wait_game_tick();                                        // 499E4
     }
 

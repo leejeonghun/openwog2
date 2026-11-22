@@ -26,15 +26,11 @@
 // Port mapping: 5F945 -> pal_snapshot_range, 5F9AE -> pal_load_range,
 //   the internal R-cycle loop (21EBD..21EDC) -> pal_cycle_entries (same formula),
 //   1FFFE -> battle_fx_blit, 5F570 -> battle_fx_blit_scaled(expand_only),
-//   454B3+454D5+5E9E8 -> battle_fx_present, 499E4 -> wait_game_tick,
+//   454B3 (world + fall-through 454D5) -> battle_fx_454b3,
+//   454D5+5E9E8 -> battle_fx_present_454d5, 499E4 -> wait_game_tick,
 //   1FEA4 -> battle_nsp_load, 1FFCD -> battle_nsp_release.
 //
 // Approximations:
-//   - the original draws 454B3 (background) first and changes the palette afterwards. The port
-//     applies the palette first and battle_fx_present draws background + sprites in one pass
-//     (same frame result).
-//   - the original records the camera shake per meteor and applies it to the NEXT frame's
-//     454B3; the port applies the last value to the same frame (one-frame phase shift).
 //   - the caller (sub_2A75A) passes a 12x12 sweep coordinate, while the port centres 1124A on
 //     the target tile (tx, ty).
 #include "combatii.h"
@@ -60,6 +56,7 @@ int CombatII::battle_fx_21e16(int unit_index, int tx, int ty, int k) {
     int16_t pending_shake = cam_fine_y_;
     while (spawned < 0x15 && !should_exit_) {                        // `cmp [var_4],15h; jge`
         cam_fine_y_ = pending_shake;                                 // 454B3 reads the previous frame
+        battle_fx_454b3();                                           // sub_454B3 (world + fall-through 454D5)
         // (1) palette advance (loc_21EBD) + DAC update (sub_5F9AE)
         pal_cycle_entries(pal, 0x100);
         pal_load_range(0, 0x100, pal);
@@ -102,7 +99,7 @@ int CombatII::battle_fx_21e16(int unit_index, int tx, int ty, int k) {
                 }
             }
         }
-        battle_fx_present();                                         // 454B3+454D5+5E9E8
+        battle_fx_present_454d5();                                   // sub_454D5 + sub_5E9E8 (second overlay)
         wait_game_tick();                                            // sub_499E4
     }
     pal_load_range(0, 0x100, &battle_master_palette_[0][0]);                // 5F9AE(unk_12824C)

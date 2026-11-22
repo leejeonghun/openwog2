@@ -5,8 +5,9 @@
 //   sub_1FEA4           -> battle_nsp_load("<file>.nsp"); appending uses the local lambda here
 //   sub_1FFFE / sub_5EE51 -> battle_fx_blit(frame, x + frame.xo, y + frame.yo)
 //   sub_5F305 / sub_5F29D -> battle_fx_blit_tinted / battle_fx_blit_tinted_unclipped
-//   sub_454B3 + sub_5E9E8 -> battle_fx_present()
-//   sub_454D5           -> covered by the renderer's overlay pass
+//   sub_454B3           -> battle_fx_454b3() (world + fall-through sub_454D5)
+//   sub_454B3 + sub_5E9E8 -> battle_fx_present_454b3()
+//   sub_454D5 + sub_5E9E8 -> battle_fx_present_454d5()
 //   sub_499E4           -> wait_game_tick()
 //   sub_1033B           -> game_timer_set()
 //   sub_499BD / rand_    -> combat_rand()
@@ -394,11 +395,12 @@ int CombatII::battle_fx_570a1(int unit_index, int tx, int ty, int k) {
     int back_x = 0x188;                              // var_C ([esp+0Ch])
     for (int x = -0x48; x != 4; x += 4) {             // loc_57143 (`cmp cx,4; jnz`)
         if (should_exit_) break;
+        battle_fx_454b3();                           // sub_454B3 (world + fall-through sub_454D5)
         const int p = ((sweep_i++ / 2) % 7);         // `sub eax,edx; sar 1; idiv 7`
         fx_blit_f(0x53 + p, x, 0x64);                // sub_56217
         fx_blit_f(0x4C + p, back_x, 0x64);           // sub_56217 (second x)
         back_x -= 4;                                 // sub ebx,4
-        battle_fx_present();                         // 454B3 + 454D5 + 5E9E8
+        battle_fx_present_454d5();                   // sub_454D5 + sub_5E9E8 (second overlay)
         wait_game_tick();                            // 499E4
     }
     if (should_exit_) { battle_nsp_release(); return 1; }
@@ -413,6 +415,7 @@ int CombatII::battle_fx_570a1(int unit_index, int tx, int ty, int k) {
     bool done = false;
     for (int guard = 0; guard < 0x400 && !should_exit_ && !done; ++guard) {
         // sub_10AEB + sub_12BEE, then shake camera fine y by rand%3-1.
+        render_battle_map();                                 // sub_10AEB + sub_12BEE
         cam_fine_y_ = (int16_t)(combat_rand(3) - 1);         // word dword_BA838
         pal_ramp_step(0x4B, 0x32);                           // sub_562C1(4Bh,32h); the result is unused
         // loc_5724A: slots 0..0x4D, the only pass that counts kills.
@@ -485,22 +488,24 @@ int CombatII::battle_fx_570a1(int unit_index, int tx, int ty, int k) {
             }
         }
         if (done) break;
-        battle_fx_present();                             // 454D5 + 5E9E8
+        battle_fx_present_454d5();                       // sub_454D5 + sub_5E9E8
         wait_game_tick();                                // 499E4
         if (guard % 6 == 5) sfx(0x33);                   // every 6 frames (var_10 == 5)
     }
     if (should_exit_) { battle_nsp_release(); return 1; }
 
+    battle_fx_flush();                                   // the break path leaves its last draws queued
     // (3) Keep only 0x4E/0x4F until the ramp reaches 0 (loc_57630).
     cam_fine_y_ = 0;                                     // loc_57620: mov word ptr dword_BA838, 0
     for (int guard = 0; guard < 0x100 && !should_exit_; ++guard) {
+        render_battle_map();                                 // sub_10AEB + sub_12BEE
         for (int i = 0x4E; i < 0x50; ++i) {
             ProParticle& p = g_pro[i];
             fx_blit_f(p.base + p.frame, p.x, p.y);
             ++p.frame;
             if (p.frame >= p.cycle) p.frame = 0;
         }
-        battle_fx_present();
+        battle_fx_present_454d5();                       // sub_454D5 + sub_5E9E8
         wait_game_tick();
         if (pal_ramp_step(0x4B, 0) == 0) break;          // `test ax,ax; jnz`: exit when it returns 0
     }
@@ -512,11 +517,12 @@ int CombatII::battle_fx_570a1(int unit_index, int tx, int ty, int k) {
     int back_i = 0;                                      // var_14 (frame counter)
     for (int x = 0; x != -0x4C; x -= 4) {                // loc_576D1 (`cmp cx,0FFB4h`)
         if (should_exit_) break;
+        battle_fx_454b3();                               // sub_454B3 (world + fall-through sub_454D5)
         const int i = back_i++;
         const int p = ((i / 2) % 7);
         fx_blit_f(0x53 + p, x, 0x64);
         fx_blit_f(0x4C + p, 0x140 + i * 4, 0x64);        // di: 0x140, 0x144, ...
-        battle_fx_present();                             // 454B3 + 454D5 + 5E9E8
+        battle_fx_present_454d5();                       // sub_454D5 + sub_5E9E8 (second overlay)
         wait_game_tick();                                // 499E4
     }
     battle_nsp_release();                                // sub_1FFCD

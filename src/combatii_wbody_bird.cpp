@@ -44,8 +44,8 @@
 //       5E9E8 + 499E4 -> 103A0 -> 1FFCD -> 1.
 //
 // Port mapping: 1FEA4->battle_nsp_load, 1FFCD->battle_nsp_release, 5EE51->battle_fx_blit
-//   (the renderer does not add xo/yo, so this file does), 454B3+12E01+454D5+5E9E8->
-//   battle_fx_present, 499E4->wait_game_tick, 1033B->game_timer_set, 103A8/103A0->
+//   (the renderer does not add xo/yo, so this file does), 454B3->battle_fx_world_dim,
+//   5E9E8->battle_fx_commit, 499E4->wait_game_tick, 1033B->game_timer_set, 103A8/103A0->
 //   weather_tick_enabled_, 4F4CD->sfx, 44D6E->battle_dim_row0_, 44D89/44D75->
 //   battle_highlight_add/clear, 30824->fx_pal_mix(0x60, 0x100, colour, pct),
 //   5F9AE->pal_load_range, 2CAF7->battle_weapon_2caf7_loop, [1Eh]/[1Fh]->
@@ -229,7 +229,7 @@ int CombatII::battle_fx_308ee_anim(int unit_index) {
     battle_weapon_2caf7_loop(unit_index, 2, 0x2710);                     // sub_2CAF7(mul=2, add=2710h)
     pal_load_range(0, 256, &battle_master_palette_[0][0]);               // sub_5F9AE(unk_12824C)
     battle_dim_row0_ = false;                                            // sub_44D6E(0)
-    battle_fx_present();                                                 // 5E9E8 (includes 454B3)
+    battle_fx_commit();                                                  // sub_5E9E8 only (tail has no 454B3/454D5)
     wait_game_tick();                                                    // sub_499E4
     weather_tick_enabled_ = true;                                        // sub_103A0
     battle_nsp_release();                                                // sub_1FFCD

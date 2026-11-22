@@ -34,8 +34,9 @@
 //
 // Port mapping: sub_1FEA4 -> battle_nsp_load, sub_1FFCD -> battle_nsp_release,
 //   sub_1FFFE -> battle_fx_blit (frame xo/yo added here, as sub_1FFFE does),
-//   sub_5F305 -> battle_fx_blit_tinted, sub_454B3+sub_454D5+sub_5E9E8 ->
-//   battle_fx_present, sub_10364 -> wait_game_tick, sub_1033B -> game_timer_set,
+//   sub_5F305 -> battle_fx_blit_tinted, sub_454B3 -> battle_fx_454b3,
+//   sub_454D5+sub_5E9E8 -> battle_fx_present_454d5, sub_10364 -> wait_game_tick,
+//   sub_1033B -> game_timer_set,
 //   sub_4F4CD -> sfx, sub_499BD -> combat_rand,
 //   sub_5FA2C -> pal_scale_range(0, 0x100, master, pct),
 //   sub_45559 -> present_cutscene_frame; sub_61115/sub_103A8 are omitted.
@@ -94,6 +95,7 @@ int CombatII::battle_fx_21be8(int unit_index, int tx, int ty, int k) {
 
     // (7) explosion
     while (budget > 0 && !should_exit_) {                        // `test si,si; jle`
+        battle_fx_454b3();                                       // sub_454B3 (world + fall-through sub_454D5)
         for (int i = 0; i < 7 && !should_exit_; ++i) {           // loc_21D1A
             const int old = pframe[i];                            // var_14[i]
             pframe[i] = (int16_t)(old + 1);
@@ -113,7 +115,7 @@ int CombatII::battle_fx_21be8(int unit_index, int tx, int ty, int k) {
                 battle_fx_blit(f, px[i] + fr.xo, py[i] + fr.yo);
             }
         }
-        battle_fx_present();                                     // 454D5 + 5E9E8
+        battle_fx_present_454d5();                               // sub_454D5 + sub_5E9E8 (second overlay)
         wait_game_tick();                                        // sub_10364 wait
     }
 
