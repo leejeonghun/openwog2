@@ -2040,21 +2040,14 @@ void CombatII::render_battle_map(bool magic_pass, bool overlay_only, bool skip_m
     // sub_50216's spawn-drop sprites are collected here but drawn only after the map+weather
     // pass by render_battle_drop_layer().
     drop_draws_.clear();
-    // sub_1FFFE queued for the gap between sub_10AEB (base tiles) and sub_12BEE (tops + units).
-    // 26B1F's confuse frame 0 belongs under the units, so it is drawn here rather than through
-    // the battle_fx_blit queue (which the caller flushes after this pass).
+    // Sprites queued for the gap between sub_10AEB (base tiles) and sub_12BEE (tops + units).
+    // 26B1F's confuse frame 0, sub_56BD4's chain and sub_229CC's early diamond frames belong
+    // under the units, so they are drawn here in call order rather than through the
+    // battle_fx_blit queue (which the caller flushes after this pass).
     auto under_units_blit = [&]() {
-        if (battle_fx_under_units_pending_) {
-            battle_fx_under_units_pending_ = false;
-            fx_blit_nsp_5ee51(battle_fx_under_units_frame_,
-                              battle_fx_under_units_x_, battle_fx_under_units_y_);
-        }
-        // sub_5EFB9 variant of the same gap (sub_59675's bstar frames).
-        if (battle_fx_under_units_clip_pending_) {
-            battle_fx_under_units_clip_pending_ = false;
-            fx_blit_nsp(battle_fx_under_units_clip_frame_,
-                        battle_fx_under_units_clip_x_, battle_fx_under_units_clip_y_);
-        }
+        for (const MagicFxDraw& d : magic_fx_under_units_draws_)
+            battle_fx_draw_magic_effect(d);
+        magic_fx_under_units_draws_.clear();
     };
     if (!overlay_only) {
         // Always draw FPM behind tiles when available (sub_10AEB order: sub_5EAE3 FPM first, then tiles

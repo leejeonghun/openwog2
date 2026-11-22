@@ -65,7 +65,7 @@ void CombatII::battle_fx_silhouette_13669(int unit_index, int color) {
 //     {10AEB; 12BEE when flag==1; 1FFFE(frame = i % frame count); 12BEE when flag==0;
 //      454D5; 5E9E8; 499E4} -> 1FFCD.
 //   Port: N is k+8 from the handler sub-index (same as the X.Blade caller), repeat 1, flag 1.
-//   12BEE/10AEB are not ported, so each frame's present_cutscene_frame stands in for them.
+//   render_battle_map draws 10AEB+12BEE, then the queued 1FFFE is flushed before 454D5.
 int CombatII::battle_fx_204e8(int unit_index, int tx, int ty, int k) {
     (void)unit_index;
     const int n = k + 8;                                    // magic8..magic10
@@ -86,8 +86,9 @@ int CombatII::battle_fx_204e8(int unit_index, int tx, int ty, int k) {
     const int total = std::min(0x400, nframes * 1);          // repeat count 1
     for (int i = 0; i < total && !should_exit_; ++i) {
         const int f = std::min(nframes - 1, i % nframes);
+        render_battle_map(false, false, true);              // sub_10AEB + sub_12BEE (flag == 1)
         battle_fx_blit(f, cx + magic_frames_[(size_t)f].xo, cy + magic_frames_[(size_t)f].yo);
-        battle_fx_present();                                // sub_454D5 + sub_5E9E8
+        battle_fx_present_454d5();                          // sub_454D5 + sub_5E9E8
         wait_game_tick();                                   // sub_499E4
     }
     battle_nsp_release();                                   // sub_1FFCD
@@ -114,8 +115,9 @@ int CombatII::battle_fx_2262c(int unit_index, int tx, int ty, int k) {
     const int total = std::min(0x400, nframes * 2);          // push 2 (repeat count)
     for (int i = 0; i < total && !should_exit_; ++i) {
         const int f = std::min(nframes - 1, i % nframes);
+        render_battle_map(false, false, true);              // sub_10AEB + sub_12BEE (flag == 1)
         battle_fx_blit(f, ax + magic_frames_[(size_t)f].xo, ay + magic_frames_[(size_t)f].yo);
-        battle_fx_present();
+        battle_fx_present_454d5();                          // sub_454D5 + sub_5E9E8
         wait_game_tick();
     }
     battle_nsp_release();
@@ -199,13 +201,15 @@ int CombatII::battle_fx_5637d(int unit_index, int tx, int ty, int k) {
     game_timer_set(5);                                      // sub_1033B(5)
     for (int i = 0; i < 0x1E && !should_exit_; ++i) {        // (1) 30 frames
         draw_1fffe((i % 0x0E) + 6, cx, cy);
-        battle_fx_present();
+        render_battle_map(false, false, true);              // sub_10AEB + sub_12BEE
+        battle_fx_present_454d5();                          // sub_454D5 + sub_5E9E8
         wait_game_tick();
     }
     game_timer_set(0x0F);                                   // (2) sub_1033B(0Fh)
     for (int i = 0; i < 6 && !should_exit_; ++i) {
         draw_561f4(i, cx, cy);                              // 561F4(frame = i)
-        battle_fx_present();
+        render_battle_map(false, false, true);              // sub_10AEB + sub_12BEE
+        battle_fx_present_454d5();                          // sub_454D5 + sub_5E9E8
         wait_game_tick();
     }
     game_timer_set(0x0A);                                   // (3) 1033B(0Ah)
@@ -236,7 +240,8 @@ int CombatII::battle_fx_5637d(int unit_index, int tx, int ty, int k) {
             draw_561f4(p.base + p.frame, p.x, p.y);         // loc_56594
             p.y = (int16_t)(p.y + 2);
         }
-        battle_fx_present();                                // 454D5 + 5E9E8
+        render_battle_map(false, false, true);              // sub_10AEB + sub_12BEE
+        battle_fx_present_454d5();                          // 454D5 + 5E9E8
         wait_game_tick();                                   // 499E4
     }
     battle_nsp_release();
@@ -317,11 +322,17 @@ int CombatII::battle_fx_229cc(int unit_index, int tx, int ty, int k) {
         f = std::max(0, std::min(nframes - 1, f));
         battle_fx_blit(f, ax + magic_frames_[(size_t)f].xo, ay + magic_frames_[(size_t)f].yo);
     };
+    auto under = [&](int f) {
+        f = std::max(0, std::min(nframes - 1, f));
+        battle_fx_blit_under_units(f, ax + magic_frames_[(size_t)f].xo,
+                                      ay + magic_frames_[(size_t)f].yo);
+    };
     for (int i = 0; i < 0x19 && !should_exit_; ++i) {        // 25 frames (cx < 19h)
-        if (i > 7) blit((i & 1) + 7);                       // alternating 7/8
-        if (i > 0x0A) blit(9 + ((i - 8) % 4));
-        else blit(i + 1);
-        battle_fx_present();                                // sub_454D5 + sub_5E9E8
+        if (i > 7) under((i & 1) + 7);                      // alternating 7/8, before 12BEE
+        if (i > 0x0A) blit(9 + ((i - 8) % 4));              // after 12BEE
+        else under(i + 1);                                  // still before 12BEE
+        render_battle_map(false, false, true);              // sub_10AEB + sub_12BEE
+        battle_fx_present_454d5();                          // sub_454D5 + sub_5E9E8
         wait_game_tick();
     }
     battle_nsp_release();                                   // sub_1FFCD
@@ -365,27 +376,30 @@ int CombatII::battle_fx_2690b(int unit_index, int tx, int ty, int k) {
     // step goes just before battle_fx_present to show the rotated colours on the same frame.
     // (1) edi = 0x3C, -4 per frame (15 frames); 5F611 shrink, width r, height r/2.
     for (int r = 0x3C; r > 0 && !should_exit_; r -= 4) {
-        battle_fx_blit_scaled(0, cx + r / 2 + fr.xo, cy + r / 4 + fr.yo,
-                              r, r / 2, false, true);        // sub_5F611
+        battle_fx_blit_scaled_under_units(0, cx + r / 2 + fr.xo, cy + r / 4 + fr.yo,
+                                          r, r / 2, false, true);  // sub_5F611 (before 12BEE)
+        render_battle_map(false, false, true);              // sub_10AEB + sub_12BEE
         pal_scroll_step();                                  // sub_602E3
-        battle_fx_present();                                // sub_454D5 + sub_5E9E8
+        battle_fx_present_454d5();                          // sub_454D5 + sub_5E9E8
         wait_game_tick();
     }
     if (flag > 0) {
         // (2) 5F570 expand: size starts at 2, +flag*4 per frame, until < flag*3Ch.
         const int limit = flag * 0x3C;
         for (int sz = 2; sz < limit && !should_exit_; sz += flag * 4) {
-            battle_fx_blit_scaled(0, cx - sz / 2 + fr.xo, cy - sz / 4 + fr.yo,
-                                  sz, sz / 2, true);         // sub_5F570
+            battle_fx_blit_scaled_under_units(0, cx - sz / 2 + fr.xo, cy - sz / 4 + fr.yo,
+                                              sz, sz / 2, true, false);  // sub_5F570 (before 12BEE)
+            render_battle_map(false, false, true);          // sub_10AEB + sub_12BEE
             pal_scroll_step();                              // sub_602E3
-            battle_fx_present();
+            battle_fx_present_454d5();
             wait_game_tick();
         }
     } else if (!should_exit_) {
         // (3) loc_26AB6: one 1FFFE frame at the centre.
-        battle_fx_blit(0, cx + fr.xo, cy + fr.yo);
+        battle_fx_blit_under_units(0, cx + fr.xo, cy + fr.yo);
+        render_battle_map(false, false, true);              // sub_10AEB + sub_12BEE
         pal_scroll_step();                                  // sub_602E3
-        battle_fx_present();
+        battle_fx_present_454d5();
         wait_game_tick();
     }
     // (4) 30 palette-scroll frames (602E3 + 499E4, no redraw); re-present the same backbuffer so
@@ -435,7 +449,7 @@ int CombatII::battle_fx_275a4(int unit_index, int tx, int ty, int k) {
                 battle_fx_blit(g, cx + magic_frames_[(size_t)g].xo,
                                   cy + magic_frames_[(size_t)g].yo);
         }
-        battle_fx_present();                                // sub_5E9E8
+        battle_fx_present_454b3();                          // sub_454B3 + sub_5E9E8
         wait_game_tick();
     }
     battle_nsp_release();
@@ -550,7 +564,10 @@ int CombatII::battle_fx_59675(int target_index) {
     // (1) 13 frames as the star lands and stays above the unit
     for (int i = 0; i <= 0x0C && !should_exit_; ++i) {
         clipped(i, ax, ay);
-        battle_fx_present();                                // sub_5E9E8 (stands in for 12BEE/12F2A)
+        battle_fx_redraw_unit(target_index);                // sub_12F2A after 12BEE
+        render_battle_map(false, false, true);              // sub_10AEB + sub_12BEE
+        battle_fx_flush();                                  // sub_12E01
+        battle_fx_commit();                                 // sub_5E9E8
         wait_game_tick();
     }
     if (should_exit_) { battle_nsp_release(); return 1; }
@@ -562,21 +579,27 @@ int CombatII::battle_fx_59675(int target_index) {
         clipped(12, ax, ay);                                // fixed F0E3E/F0E42 frame
         tinted_u(13 + k, ax, base_y);
         column(18 + k, base_y, bottom);
-        battle_fx_present();
+        render_battle_map(false, false, true);              // sub_10AEB + sub_12BEE
+        battle_fx_flush();                                  // sub_12E01
+        battle_fx_commit();                                 // sub_5E9E8
         wait_game_tick();
     }
     for (int n = 0; n < 15 && !should_exit_; ++n) {         // loc_59863 hold
         clipped(12, ax, ay);
         tinted_u(17, ax, base_y);
         column(22, base_y, bottom);
-        battle_fx_present();
+        render_battle_map(false, false, true);              // sub_10AEB + sub_12BEE
+        battle_fx_flush();                                  // sub_12E01
+        battle_fx_commit();                                 // sub_5E9E8
         wait_game_tick();
     }
     for (int k = 0; k < 4 && !should_exit_; ++k) {          // loc_59943 closing sweep
         clipped(12 - k, ax, ay);
         tinted_u(16 - k, ax, base_y);
         column(21 - k, base_y, bottom);
-        battle_fx_present();
+        render_battle_map(false, false, true);              // sub_10AEB + sub_12BEE
+        battle_fx_flush();                                  // sub_12E01
+        battle_fx_commit();                                 // sub_5E9E8
         wait_game_tick();
     }
     if (!should_exit_) {

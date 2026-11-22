@@ -13,11 +13,12 @@
 // Deviations, all replaced inside this file:
 //  - Palette ramps use the shared runtime: 5623E -> pal_ramp_set_width, 562C1 -> pal_ramp_step,
 //    56245/5FA2C -> pal_ramp_apply. The four ramped drivers reproduce the ASM's pre-loop
-//    562C1(4Bh,0) fade-in and tail 562C1(4Bh,0) fade-out with battle_fx_present() +
-//    video_.wait_presented() per step (5FD1C waits for the retrace 5E943; wait_game_tick()
-//    would wait a whole 1033B period instead).
-//  - sub_10AEB/sub_12BEE (redraw map and units) are replaced by battle_fx_present(), which draws
-//    the complete battle frame.
+//    562C1(4Bh,0) fade-in and tail 562C1(4Bh,0) fade-out with video_.present() +
+//    video_.wait_presented() per step (the DAC ramp needs the existing buffer shown; 5FD1C
+//    waits for the retrace 5E943; wait_game_tick() would wait a whole 1033B period instead).
+//  - sub_10AEB/sub_12BEE map passes use render_battle_map(); loops that start at 454B3 and end
+//    with 5E9E8 use battle_fx_present_454b3(), and their 454D5+5E9E8 tails use
+//    battle_fx_present_454d5().
 //  - sub_56102/sub_561F4/sub_5EFB9/sub_5F29D (frame offsets and the 480-stride blitter) are
 //    replaced by battle_fx_blit with the frame's xo/yo added (dx_draw_off).
 //  - 1FEA4 appends to the table instead of replacing it: 56BD4 loads explosio(0..12), then
@@ -159,13 +160,14 @@ int CombatII::battle_fx_5666e(int unit_index, int tx, int ty, int k) {
     for (;;) {
         if (should_exit_) break;
         const int ramp = pal_ramp_step(0x4B, 0);
-        battle_fx_present();
+        video_.present();
         video_.wait_presented();                 // sub_5E943 (one display frame)
         if (ramp == 1) break;
     }
     int spawned = 5, ticks = 5;          // ASM var_10 (kill count) and var_8 both start at 5
     for (int guard = 0; guard < 0x800 && !should_exit_; ++guard) {
         pal_ramp_step(0x4B, 0x32);                 // sub_562C1 (3% ramp per frame)
+        render_battle_map(false, false, true);     // sub_10AEB + sub_12BEE
         for (int i = 0; i < FX_SLOTS && !should_exit_; ++i) {
             FxParticle& p = fx_slot[i];
             if (p.state == 0) {
@@ -188,16 +190,21 @@ int CombatII::battle_fx_5666e(int unit_index, int tx, int ty, int k) {
         if (spawned > 0x12C) break;                  // var_10 > 300 -> draw the final frame
         if (ticks % 5 == 0) sfx(0x32);               // 4F4CD(32h) every 5 frames (ASM 95528)
         ++ticks;
-        battle_fx_present();                         // sub_454D5 + sub_5E9E8
+        battle_fx_present_454d5();                   // sub_454D5 + sub_5E9E8
         wait_game_tick();                            // sub_499E4
     }
-    if (!should_exit_) battle_fx_present();          // loc_56858: one last frame
+    if (!should_exit_) {
+        // The break skipped 454D5, so the original's last 1FFFE pixels are still in the buffer
+        // when 454B3 redraws the world over them; flush first so the same pass covers them.
+        battle_fx_flush();
+        battle_fx_present_454b3();                   // loc_56858: sub_454B3 + sub_5E9E8
+    }
     // loc_56873: tail 562C1(4Bh,0) fade-out (the original stops at 2-3% and does not flush;
     // the port presents each step so the captured palette follows the fade).
     for (;;) {
         if (should_exit_) break;
         const int ramp = pal_ramp_step(0x4B, 0);
-        battle_fx_present();
+        video_.present();
         video_.wait_presented();                 // sub_5E943
         if (ramp == 0) break;
     }
@@ -224,7 +231,7 @@ int CombatII::battle_fx_56896(int unit_index, int tx, int ty, int k) {
     for (;;) {                                   // loc_568F0 fade-in (5E943 per step)
         if (should_exit_) break;
         const int ramp = pal_ramp_step(0x4B, 0);
-        battle_fx_present();
+        video_.present();
         video_.wait_presented();
         if (ramp == 1) break;
     }
@@ -232,6 +239,7 @@ int CombatII::battle_fx_56896(int unit_index, int tx, int ty, int k) {
     bool done = false;
     for (int guard = 0; guard < 0x2000 && !should_exit_ && !done; ++guard) {
         pal_ramp_step(0x4B, 0x32);                 // sub_562C1 (3% ramp per frame)
+        render_battle_map(false, false, true);     // sub_10AEB + sub_12BEE
         // Group A: slots 0..0x4F
         for (int i = 0; i < 0x50 && !should_exit_; ++i) {
             FxParticle& p = fx_slot[i];
@@ -270,14 +278,18 @@ int CombatII::battle_fx_56896(int unit_index, int tx, int ty, int k) {
         if (ticks % 5 == 0) sfx(0x32);               // remainder of `idiv ebp(5)` is 0
         if (fx_rand_mod(10) == 0) sfx(0x33);         // 499BD(0A) == 0
         ++ticks;
-        battle_fx_present();
+        battle_fx_present_454d5();                   // sub_454D5 + sub_5E9E8
         wait_game_tick();
     }
-    if (!should_exit_) battle_fx_present();          // loc_56B96: final frame
+    if (!should_exit_) {
+        // loc_56B96 is reached before 454D5, so 454B3 overwrites that frame's 1FFFE draws.
+        battle_fx_flush();
+        battle_fx_present_454b3();                   // loc_56B96: sub_454B3 + sub_5E9E8
+    }
     for (;;) {                                   // loc_56BB1 fade-out
         if (should_exit_) break;
         const int ramp = pal_ramp_step(0x4B, 0);
-        battle_fx_present();
+        video_.present();
         video_.wait_presented();
         if (ramp == 0) break;
     }
@@ -308,7 +320,7 @@ int CombatII::battle_fx_56bd4(int unit_index, int tx, int ty, int k) {
     for (;;) {                                   // loc_56C3A fade-in (5E943 per step)
         if (should_exit_) break;
         const int ramp = pal_ramp_step(0x4B, 0);
-        battle_fx_present();
+        video_.present();
         video_.wait_presented();
         if (ramp == 1) break;
     }
@@ -327,15 +339,18 @@ int CombatII::battle_fx_56bd4(int unit_index, int tx, int ty, int k) {
             FxParticle& p = fx_slot[i];
             if (p.state != 1) continue;
             const int f = p.base + p.frame;
-            battle_fx_blit(f, p.x, p.y);
-            battle_fx_blit(f, p.x + 0x78, p.y);
-            battle_fx_blit(f, p.x + 0xF0, p.y);
+            battle_fx_blit_under_units(f, p.x, p.y);
+            battle_fx_blit_under_units(f, p.x + 0x78, p.y);
+            battle_fx_blit_under_units(f, p.x + 0xF0, p.y);
             ++p.age;
             if (p.age > 0x28) { fx_kill(i); continue; }
             ++p.frame;
             if (p.frame == p.cycle) p.frame = 0;
             p.y = (int16_t)(p.y - 6);
         }
+        // ASM 95861-95928: the chain is drawn after 10AEB and before 12BEE, so the queued
+        // copies are consumed inside this pass, under the units.
+        render_battle_map(false, false, true);     // sub_10AEB + sub_12BEE
         // (3a) slots 0..0x4F: 56896 group-A rule
         for (int i = 0; i < 0x50 && !should_exit_; ++i) {
             FxParticle& p = fx_slot[i];
@@ -373,14 +388,18 @@ int CombatII::battle_fx_56bd4(int unit_index, int tx, int ty, int k) {
         if (ticks % 5 == 0) sfx(0x32 + 2 * fx_rand_mod(2));  // 499BD(2) -> 32h/34h
         if (fx_rand_mod(10) == 0) sfx(0x33);
         ++ticks;
-        battle_fx_present();
+        battle_fx_present_454d5();                   // sub_454D5 + sub_5E9E8
         wait_game_tick();
     }
-    if (!should_exit_) battle_fx_present();          // loc_57041: final frame
+    if (!should_exit_) {
+        // loc_57041 is reached before 454D5, so 454B3 overwrites that frame's 1FFFE draws.
+        battle_fx_flush();
+        battle_fx_present_454b3();                   // loc_57041: sub_454B3 + sub_5E9E8
+    }
     for (;;) {                                   // loc_5705C fade-out
         if (should_exit_) break;
         const int ramp = pal_ramp_step(0x4B, 0);
-        battle_fx_present();
+        video_.present();
         video_.wait_presented();
         if (ramp == 0) break;
     }
@@ -464,9 +483,12 @@ int CombatII::battle_fx_57766(int unit_index, int tx, int ty, int k) {
         for (int i = 0; i < 0x0A; ++i) if (fx_slot[i].state == 1) any_alive = true;
         if (no_more && !any_alive) break;
         if (++ticks % 6 == 0) sfx(0x32);             // 32h when the var_8 counter reaches 5
-        battle_fx_present();                         // sub_5E9E8
+        battle_fx_present_454b3();                   // sub_454B3 + sub_5E9E8
         wait_game_tick();                            // sub_499E4
     }
+    // The ASM exits before 5E9E8 when no particle is alive, leaving the last 1FFFE pixels in
+    // the buffer for the next world pass to overwrite; flush without presenting.
+    battle_fx_flush();
     battle_nsp_release();                            // sub_1FFCD
     fx_particles_free();                             // sub_5615D
     return 1;
@@ -555,9 +577,11 @@ int CombatII::battle_fx_57ac4(int unit_index, int tx, int ty, int k) {
         if (no_more && !any_alive) break;
         if (++ticks % 6 == 0) sfx(0x32);
         if (fx_rand_mod(10) == 0) sfx(0x33);
-        battle_fx_present();
+        battle_fx_present_454b3();                   // sub_454B3 + sub_5E9E8
         wait_game_tick();
     }
+    // loc_57EB5 exits before 5E9E8; the next 454B3 must cover the last trail draws.
+    battle_fx_flush();
     battle_nsp_release();
     fx_particles_free();
     return 1;
@@ -592,6 +616,7 @@ int CombatII::battle_fx_57f18(int unit_index, int tx, int ty, int k) {
     for (;;) {                                   // loc_57FDE: 562C1(4Bh,0) only, no 5E9E8
         if (should_exit_) break;
         const int ramp = pal_ramp_step(0x4B, 0);
+        video_.present();                        // show the DAC ramp on the existing buffer
         video_.wait_presented();                 // sub_5E943 inside 5FD1C
         if (ramp == 1) break;
     }
@@ -686,9 +711,11 @@ int CombatII::battle_fx_57f18(int unit_index, int tx, int ty, int k) {
         if (no_more && !any_alive) break;
         if (fx_rand_mod(10) == 0) sfx(0x33);
         ++ticks;
-        battle_fx_present();
+        battle_fx_present_454b3();                   // sub_454B3 + sub_5E9E8
         wait_game_tick();
     }
+    // The loop can exit before its 5E9E8; the fade tail's first 454B3 covers those draws.
+    battle_fx_flush();
     cam_fine_y_ = 0;                                 // dword_BA838 = 0 (restore the shake)
     // loc_58571 (ASM 97879-97891): every pass draws (454B3), then 562C1(4Bh,0) - which waits
     // for retrace (5E943) - and copies the frame (5E9E8) only while the ramp is non-zero. The

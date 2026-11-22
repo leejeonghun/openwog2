@@ -10439,23 +10439,31 @@ void CombatII::battle_fx_blit(int frame, int x, int y) {
 
 // sub_1FFFE drawn between sub_10AEB (map) and sub_12BEE (tops + units). The original
 // 26B1F blits confuse.nsp frame 0 there, so the unit sprites cover it; queueing it through
-// battle_fx_blit would draw it on top. render_battle_map() consumes this once, in place.
+// battle_fx_blit would draw it on top. render_battle_map() consumes the queue in call order
+// between the base tiles and the unit pass, so sub_56BD4's chain and sub_229CC's early
+// diamond frames can stack several sprites there.
 void CombatII::battle_fx_blit_under_units(int frame, int x, int y) {
     if (frame < 0 || (size_t)frame >= magic_frames_.size()) return;
-    battle_fx_under_units_pending_ = true;
-    battle_fx_under_units_frame_ = frame;
-    battle_fx_under_units_x_ = x;
-    battle_fx_under_units_y_ = y;
+    magic_fx_under_units_draws_.push_back(MagicFxDraw{frame, x, y, -1, 0, 0});
 }
 
 // sub_5EFB9 between sub_10AEB and sub_12BEE (sub_59675's bstar frames): same gap as above but
 // through the clipped 13Fh/C7h blitter.
 void CombatII::battle_fx_blit_clipped_under_units(int frame, int x, int y) {
     if (frame < 0 || (size_t)frame >= magic_frames_.size()) return;
-    battle_fx_under_units_clip_pending_ = true;
-    battle_fx_under_units_clip_frame_ = frame;
-    battle_fx_under_units_clip_x_ = x;
-    battle_fx_under_units_clip_y_ = y;
+    MagicFxDraw d{frame, x, y, -1, 0, 0};
+    d.clip319 = true;
+    magic_fx_under_units_draws_.push_back(d);
+}
+
+// sub_5F611/sub_5F570 between sub_10AEB and sub_12BEE (sub_2690B's barrier ring): the scaled
+// blit must be covered by the unit pass, so it joins the same gap queue.
+void CombatII::battle_fx_blit_scaled_under_units(int frame, int x, int y, int dst_w, int dst_h,
+                                                 bool expand_only, bool shrink_only) {
+    if (frame < 0 || (size_t)frame >= magic_frames_.size()) return;
+    if (dst_w <= 0 || dst_h <= 0) return;
+    magic_fx_under_units_draws_.push_back(
+        MagicFxDraw{frame, x, y, -1, dst_w, dst_h, expand_only, false, false, shrink_only});
 }
 
 // sub_5EDDE: dim pixels already in the backbuffer through the page fx_shade_lut_build built.
@@ -10671,55 +10679,60 @@ void CombatII::blit_frame_tinted(int x, int y, const MagicFxFrame& fr, int tint_
 }
 
 // sub_5EE51: blit a [w][h]+flat block (0xFF transparent) to the back buffer.
-void CombatII::render_magic_effect_layer() {
-    for (const MagicFxDraw& d : magic_fx_draws_) {
-        if (d.shade_rect) {
-            fx_shade_rect(d.x, d.y, d.dst_w, d.dst_h);            // sub_5EDDE
-            continue;
-        }
-        if (d.redraw_unit >= 0) {
-            battle_draw_unit_now(d.redraw_unit);                 // sub_12F2A marker
-            continue;
-        }
-        if (d.frame < 0 || (size_t)d.frame >= magic_frames_.size()) continue;
-        const MagicFxFrame& fr = magic_frames_[(size_t)d.frame];
-        if (fr.flat.empty()) continue;
-        static std::vector<uint8_t> dbuf;
-        dbuf.resize(4 + fr.flat.size());
-        dbuf[0] = (uint8_t)(fr.w & 0xFF); dbuf[1] = (uint8_t)(fr.w >> 8);
-        dbuf[2] = (uint8_t)(fr.h & 0xFF); dbuf[3] = (uint8_t)(fr.h >> 8);
-        std::memcpy(dbuf.data() + 4, fr.flat.data(), fr.flat.size());
-        if (d.dst_w > 0) {
-            // sub_5F570 / sub_5F611: expand when the target is at least the source size;
-            // explicit 5F611 call sites force shrink even for a larger target.
-            if (d.expand_only || (!d.shrink_only && d.dst_w >= fr.w && d.dst_h >= fr.h))
-                blit_scale_expand(d.x, d.y, dbuf.data(), d.dst_w, d.dst_h);
-            else
-                blit_scale_shrink(d.x, d.y, dbuf.data(), d.dst_w, d.dst_h);
-        } else if (d.silhouette >= 0) {
-            // sub_5F093: fill every non-transparent pixel with the colour byte.
-            const long base = (long)d.y * SCREEN_W + d.x;
-            const long limit = (long)SCREEN_W * SCREEN_H;
-            for (int row = 0; row < fr.h; ++row) {
-                for (int col = 0; col < fr.w; ++col) {
-                    if (fr.flat[(size_t)row * (size_t)fr.w + (size_t)col] == 0xFF) continue;
-                    const long off = base + (long)row * SCREEN_W + col;
-                    if (off < 0 || off >= limit) continue;
-                    video_.get_backbuffer()[off] = (uint8_t)d.silhouette;
-                }
-            }
-        } else if (d.clip319) {
-            blit_flat_clip319(d.x, d.y, dbuf.data());                       // sub_5EFB9
-        } else if (d.tint_pct < 0) {
-            blit_flat_transparent(d.x, d.y, dbuf.data());                   // sub_5EE51
-        } else {
-            blit_frame_tinted(d.x, d.y, fr, d.tint_pct, !d.unclipped,
-                              d.tint_limited ? &d.tint_mask : nullptr,
-                              d.tint_mode1,
-                              d.tint_count ? d.tint_order.data() : nullptr,
-                              d.tint_count);                                 // sub_5F305 / 5F29D
-        }
+// One queued draw, shared by the post-unit flush and by the under-units gap
+// (render_battle_map), so the z-order differs but the blitter selection is identical.
+void CombatII::battle_fx_draw_magic_effect(const MagicFxDraw& d) {
+    if (d.shade_rect) {
+        fx_shade_rect(d.x, d.y, d.dst_w, d.dst_h);            // sub_5EDDE
+        return;
     }
+    if (d.redraw_unit >= 0) {
+        battle_draw_unit_now(d.redraw_unit);                 // sub_12F2A marker
+        return;
+    }
+    if (d.frame < 0 || (size_t)d.frame >= magic_frames_.size()) return;
+    const MagicFxFrame& fr = magic_frames_[(size_t)d.frame];
+    if (fr.flat.empty()) return;
+    static std::vector<uint8_t> dbuf;
+    dbuf.resize(4 + fr.flat.size());
+    dbuf[0] = (uint8_t)(fr.w & 0xFF); dbuf[1] = (uint8_t)(fr.w >> 8);
+    dbuf[2] = (uint8_t)(fr.h & 0xFF); dbuf[3] = (uint8_t)(fr.h >> 8);
+    std::memcpy(dbuf.data() + 4, fr.flat.data(), fr.flat.size());
+    if (d.dst_w > 0) {
+        // sub_5F570 / sub_5F611: expand when the target is at least the source size;
+        // explicit 5F611 call sites force shrink even for a larger target.
+        if (d.expand_only || (!d.shrink_only && d.dst_w >= fr.w && d.dst_h >= fr.h))
+            blit_scale_expand(d.x, d.y, dbuf.data(), d.dst_w, d.dst_h);
+        else
+            blit_scale_shrink(d.x, d.y, dbuf.data(), d.dst_w, d.dst_h);
+    } else if (d.silhouette >= 0) {
+        // sub_5F093: fill every non-transparent pixel with the colour byte.
+        const long base = (long)d.y * SCREEN_W + d.x;
+        const long limit = (long)SCREEN_W * SCREEN_H;
+        for (int row = 0; row < fr.h; ++row) {
+            for (int col = 0; col < fr.w; ++col) {
+                if (fr.flat[(size_t)row * (size_t)fr.w + (size_t)col] == 0xFF) continue;
+                const long off = base + (long)row * SCREEN_W + col;
+                if (off < 0 || off >= limit) continue;
+                video_.get_backbuffer()[off] = (uint8_t)d.silhouette;
+            }
+        }
+    } else if (d.clip319) {
+        blit_flat_clip319(d.x, d.y, dbuf.data());                       // sub_5EFB9
+    } else if (d.tint_pct < 0) {
+        blit_flat_transparent(d.x, d.y, dbuf.data());                   // sub_5EE51
+    } else {
+        blit_frame_tinted(d.x, d.y, fr, d.tint_pct, !d.unclipped,
+                          d.tint_limited ? &d.tint_mask : nullptr,
+                          d.tint_mode1,
+                          d.tint_count ? d.tint_order.data() : nullptr,
+                          d.tint_count);                                 // sub_5F305 / 5F29D
+    }
+}
+
+void CombatII::render_magic_effect_layer() {
+    for (const MagicFxDraw& d : magic_fx_draws_)
+        battle_fx_draw_magic_effect(d);
     magic_fx_draws_.clear();
     if (magic_fx_frame_ < 0 || (size_t)magic_fx_frame_ >= magic_frames_.size()) return;
     const MagicFxFrame& fr = magic_frames_[(size_t)magic_fx_frame_];

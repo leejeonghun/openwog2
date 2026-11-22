@@ -13,7 +13,8 @@
 //   frame chains.
 //
 // Port mapping, same conventions as combatii_fx_support.cpp:
-//   454B3+12BEE+454D5+5E9E8 = battle_fx_present(), 499E4 = wait_game_tick(),
+//   454B3+5E9E8 = battle_fx_present_454b3(), 10AEB+12BEE = render_battle_map(),
+//   454D5+5E9E8 = battle_fx_present_454d5(), 499E4 = wait_game_tick(),
 //   1033B = game_timer_set(), 499BD = combat_rand(), 4F4CD = sfx(),
 //   1FFCD = battle_nsp_release(), 5FA2C = pal_scale_range(0, 0x100, ..., pct),
 //   5FC21+5FD1C = pal_shift_fade(mul), 5F29D/5F305 = battle_fx_blit_tinted,
@@ -299,7 +300,7 @@ int CombatII::battle_fx_5a267(int unit_index, int tx, int ty, int k) {
     while (counter > 5 && !should_exit_) {
         for (int i = 0; i < step && !should_exit_; ++i) {
             draw_scaled(counter);
-            battle_fx_present();
+            battle_fx_present_454b3();                     // sub_454B3 + sub_5E9E8
             wait_game_tick();
         }
         --counter;
@@ -307,7 +308,7 @@ int CombatII::battle_fx_5a267(int unit_index, int tx, int ty, int k) {
     while (counter < 8 && !should_exit_) {
         for (int i = 0; i < step && !should_exit_; ++i) {
             draw_scaled(counter);
-            battle_fx_present();
+            battle_fx_present_454b3();                     // sub_454B3 + sub_5E9E8
             wait_game_tick();
         }
         ++counter;
@@ -324,7 +325,8 @@ int CombatII::battle_fx_5a267(int unit_index, int tx, int ty, int k) {
                                                 ay + magic_frames_[round].yo, 0x3C,
                                                 {0x01, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17});
             battle_fx_redraw_unit(unit_index);                 // sub_12F2A after 5F29D
-            battle_fx_present();
+            render_battle_map(false, false, true);              // sub_10AEB + sub_12BEE
+            battle_fx_present_454d5();                          // sub_454D5 + sub_5E9E8
             wait_game_tick();
             pal_shift_fade(mul);                               // 5FD1C(old mul)
             mul = std::min(0x64, mul + 2);
@@ -377,8 +379,8 @@ int CombatII::battle_fx_5a566(int unit_index, int tx, int ty, int k) {
                 battle_fx_redraw_unit(unit_index);                 // sub_12F2A (after 12BEE, before 5F570)
                 battle_fx_blit_scaled(fi, ax + e.xo - sz / 2, ay + e.yo - sz / 2,
                                       sz, sz, true);
-                battle_fx_overlay();                           // sub_454D5
-                battle_fx_present();
+                render_battle_map(false, false, true);         // sub_10AEB + sub_12BEE
+                battle_fx_present_454d5();                     // sub_454D5 + sub_5E9E8
                 wait_game_tick();
             }
         }
@@ -402,7 +404,9 @@ int CombatII::battle_fx_5a566(int unit_index, int tx, int ty, int k) {
                 battle_fx_blit_scaled(6, ax + e.xo - sz / 2, ay + e.yo - sz / 2,
                                       sz, sz, true);          // 5F570
             }
-            battle_fx_present();
+            render_battle_map(false, false, true);             // sub_10AEB + sub_12BEE
+            battle_fx_flush();                                 // sub_12E01 (5F29D + 12F2A + 5F570)
+            battle_fx_commit();                                // sub_5E9E8 (no 454D5 here)
             wait_game_tick();
             pal_shift_fade(fade);                              // 5FD1C
             fade = std::min(100, fade + 2);

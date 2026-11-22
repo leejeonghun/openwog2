@@ -2322,16 +2322,11 @@ private:
     //   right/bottom) so it dims the frame 454B3 already drew before later sprites.
     struct MagicFxDraw { int frame; int x, y; int tint_pct; int dst_w, dst_h; bool expand_only = false; bool unclipped = false; bool clip319 = false; bool shrink_only = false; int silhouette = -1; std::array<uint64_t, 4> tint_mask{}; bool tint_limited = false; int redraw_unit = -1; bool tint_mode1 = true; std::array<uint8_t, 32> tint_order{}; uint8_t tint_count = 0; bool shade_rect = false; };
     std::vector<MagicFxDraw> magic_fx_draws_;
-    // Pending sub_1FFFE draw for the sub_10AEB -> sub_12BEE gap (battle_fx_blit_under_units).
-    bool battle_fx_under_units_pending_ = false;
-    int battle_fx_under_units_frame_ = -1;
-    int battle_fx_under_units_x_ = 0;
-    int battle_fx_under_units_y_ = 0;
-    // Pending sub_5EFB9 draw for the same gap (battle_fx_blit_clipped_under_units).
-    bool battle_fx_under_units_clip_pending_ = false;
-    int battle_fx_under_units_clip_frame_ = -1;
-    int battle_fx_under_units_clip_x_ = 0;
-    int battle_fx_under_units_clip_y_ = 0;
+    // Sprites queued for the sub_10AEB -> sub_12BEE gap (battle_fx_blit_under_units and
+    // battle_fx_blit_clipped_under_units). render_battle_map consumes them in call order between
+    // the base tiles and the unit pass, unlike magic_fx_draws_ which the caller flushes after
+    // the units. Several entries per frame are needed by sub_56BD4 and sub_229CC.
+    std::vector<MagicFxDraw> magic_fx_under_units_draws_;
     // dword_F9F08 + word ptr dword_FA8B6+2: units that sub_44DCC redraws inside 454D5.
     // The original stores raw unit pointers and does not deduplicate (at most 59h entries).
     std::vector<int> battle_highlight_units_;
@@ -2475,6 +2470,9 @@ private:
     void battle_fx_46a11(int unit_index);                          // sub_46A11 large-unit dissolve
     void battle_fx_blit_scaled(int frame, int x, int y, int dst_w, int dst_h,
                                bool expand_only = false, bool shrink_only = false);                            // 5F570/5F611 draw request
+    void battle_fx_blit_scaled_under_units(int frame, int x, int y, int dst_w, int dst_h,
+                                           bool expand_only, bool shrink_only);  // 5F570/5F611 in the 10AEB->12BEE gap
+    void battle_fx_draw_magic_effect(const MagicFxDraw& d);                     // one queued draw
     void pal_snapshot_range(int start, int end, uint8_t* out);         // sub_5F945 (DAC -> buffer)
     void pal_load_range(int start, int end, const uint8_t* src);       // sub_5F9E9 (buffer -> DAC)
     void pal_crossfade(int start, int end, const uint8_t* from, const uint8_t* to, int step_pct); // sub_49A3E
