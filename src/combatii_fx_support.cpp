@@ -45,8 +45,10 @@ inline void ring_point(int angle, int radius, int cx, int cy, int& px, int& py) 
 
 // sub_2476E(eax=caster, dx=target tile x, bx=target tile y): heal1.nsp heal particles.
 //   The head advances in 1/16-pixel steps from the caster anchor (20136+0Ch/20146) toward the
-//   target centre (135EB). Each outer pass recomputes distance/3.0 and runs var_40 = int(var_30*
-//   2.5) sub-steps; every sub-step applies the off_2474E 8-direction displacement (var_4C
+//   target centre (135EB). Each outer pass computes the x87 distance/3.0, truncates the 80-bit
+//   result for the step divisor, then re-truncates its float copy (var_60) for var_30/var_40 and
+//   the 30/4 mode thresholds, and runs var_40 = int(var_30*2.5) sub-steps; every sub-step applies
+//   the off_2474E 8-direction displacement (var_4C
 //   decays by var_10), shifts the 16-entry trail and draws the seven sub_1FFFE calls at trail
 //   15/12/9/6/3/0 plus the new head. While var_4C/var_10 remain set, the direction is remapped
 //   through dword_1FE3E and 499E4 waits one tick. On arrival it runs 4F4CD(0x32) -> 1033B(5)
@@ -82,12 +84,12 @@ int CombatII::battle_fx_2476e(int unit_index, int tx, int ty, int k) {
     // 135EB returns screen space; the original adds cam*24/16 to get the world target.
     const int target_x = ex + cam_tile_x_ * TOWN_TILE_W;
     const int target_y = ey + cam_tile_y_ * TOWN_TILE_H;
-    game_timer_set(2);                                                   // sub_1033B(2)
 
     constexpr int kTrail = 16;                                           // `cmp bx,10h` (var_8A/var_AA)
     struct P { int x, y; };
     P trail[kTrail];
     for (P& p : trail) { p.x = head_x; p.y = head_y; }                   // loc_2485C init
+    game_timer_set(2);                                                   // sub_1033B(2)
 
     int point_x = world_x;                                               // var_14
     int point_y = world_y;                                               // var_3C
@@ -97,14 +99,20 @@ int CombatII::battle_fx_2476e(int unit_index, int tx, int ty, int k) {
     static constexpr int kDirMap[8] = {1, 0, 3, 2, 5, 4, 7, 6};          // dword_1FE3E
 
     for (int burst = 0; burst < 0x100 && !should_exit_; ++burst) {
-        // loc_24881: step toward the target, using the truncated distance/3.0 as the divisor and
-        // storing the low byte (mov [var_8], al) exactly like the original.
-        const double dx = (double)(target_x - point_x);
-        const double dy = (double)(target_y - point_y);
-        const double dist3 = std::sqrt(dx * dx + dy * dy) / 3.0;
-        const int var30 = (int)dist3;                                    // var_30
-        const int step_x = var30 != 0 ? (int)(int8_t)((target_x - point_x) * 10 / var30) : 0;
-        const int step_y = var30 != 0 ? (int)(int8_t)((target_y - point_y) * 10 / var30) : 0;
+        // loc_24881: x87 distance/3.0. The first fistp of the 80-bit result is the step
+        // divisor; var_60 keeps a float copy that is re-truncated below for var_30/var_40 and
+        // the mode thresholds. The step bytes use the low 8 bits (mov [var_8], al).
+        const long double dx = (long double)(target_x - point_x);
+        const long double dy = (long double)(target_y - point_y);
+        const long double dist3 = std::sqrt(dx * dx + dy * dy) / 3.0L;
+        const int step_div = (int)dist3;                                 // first fistp (80-bit)
+        const int step_x = step_div != 0 ? (int)(int8_t)((target_x - point_x) * 10 / step_div) : 0;
+        const int step_y = step_div != 0 ? (int)(int8_t)((target_y - point_y) * 10 / step_div) : 0;
+
+        const int base_x = point_x;                                      // var_58
+        const int base_y = point_y;                                      // var_54
+        int fx = 0;                                                      // edi
+        int16_t fy = 0;                                                  // var_48
 
         // The direction choice tests the radius/radius_step left over from the previous pass,
         // before this pass overwrites them with the new distance mode.
@@ -121,22 +129,21 @@ int CombatII::battle_fx_2476e(int unit_index, int tx, int ty, int k) {
             else if (step_x > 5 && step_y < -5) dir = 7;
         }
 
+        // loc_24A7E: fld [var_60] (float) -> fld st -> fistp, i.e. the float-rounded distance is
+        // truncated again for var_30. var_40, the 30/4 thresholds and the mode use this value.
+        const float dist3_f = (float)dist3;                              // var_60
+        const int var30 = (int)dist3_f;                                  // second fistp
         const int var40 = (int)((double)var30 * 2.5);                    // var_40
-        if (dist3 > 30.0) {                                              // loc_24ABC
+        if (dist3_f > 30.0f) {                                           // loc_24ABC
             radius_step = 1;                                             // var_10
             radius = var40 / 2;                                          // var_4C
-        } else if (dist3 > 4.0) {                                        // loc_24ADD
+        } else if (dist3_f > 4.0f) {                                     // loc_24ADD
             radius = var40;
             radius_step = 2;
         } else {
             radius = 0;
             radius_step = 0;
         }
-
-        const int base_x = point_x;                                      // var_58
-        const int base_y = point_y;                                      // var_54
-        int fx = 0;                                                      // edi
-        int16_t fy = 0;                                                  // var_48
 
         for (int n = 0; n < var40 && !should_exit_; ++n) {               // loc_24B1E
             fx += step_x;
