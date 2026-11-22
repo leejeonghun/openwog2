@@ -10441,6 +10441,16 @@ void CombatII::battle_fx_blit_under_units(int frame, int x, int y) {
     battle_fx_under_units_y_ = y;
 }
 
+// sub_5EFB9 between sub_10AEB and sub_12BEE (sub_59675's bstar frames): same gap as above but
+// through the clipped 13Fh/C7h blitter.
+void CombatII::battle_fx_blit_clipped_under_units(int frame, int x, int y) {
+    if (frame < 0 || (size_t)frame >= magic_frames_.size()) return;
+    battle_fx_under_units_clip_pending_ = true;
+    battle_fx_under_units_clip_frame_ = frame;
+    battle_fx_under_units_clip_x_ = x;
+    battle_fx_under_units_clip_y_ = y;
+}
+
 // sub_5EDDE: dim pixels already in the backbuffer through the page fx_shade_lut_build built.
 // Queued like a sprite so 454B3's scene is dimmed before later 5EE51/5F29D draws, matching the
 // original call order (58619's particle columns, 59A70's full-screen pass).

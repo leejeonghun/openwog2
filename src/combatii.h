@@ -2326,6 +2326,11 @@ private:
     int battle_fx_under_units_frame_ = -1;
     int battle_fx_under_units_x_ = 0;
     int battle_fx_under_units_y_ = 0;
+    // Pending sub_5EFB9 draw for the same gap (battle_fx_blit_clipped_under_units).
+    bool battle_fx_under_units_clip_pending_ = false;
+    int battle_fx_under_units_clip_frame_ = -1;
+    int battle_fx_under_units_clip_x_ = 0;
+    int battle_fx_under_units_clip_y_ = 0;
     // dword_F9F08 + word ptr dword_FA8B6+2: units that sub_44DCC redraws inside 454D5.
     // The original stores raw unit pointers and does not deduplicate (at most 59h entries).
     std::vector<int> battle_highlight_units_;
@@ -2354,6 +2359,7 @@ private:
     // sub_1FFFE between sub_10AEB (map) and sub_12BEE (tops + units): the next
     // render_battle_map() draws this frame over the base tiles and below the units (26B1F).
     void battle_fx_blit_under_units(int frame, int x, int y);
+    void battle_fx_blit_clipped_under_units(int frame, int x, int y); // 5EFB9, sub_10AEB->12BEE gap
     // sub_5EDDE: queue a page-3 LUT rectangle so it dims the frame 454B3 already drew before
     // sprites queued later. fx_shade_lut_build must have built the page first.
     void battle_fx_shade_rect(int x0, int y0, int x1, int y1);

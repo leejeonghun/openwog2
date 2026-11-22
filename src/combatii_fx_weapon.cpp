@@ -371,6 +371,13 @@ int CombatII::battle_fx_2cc3a_anim(int unit_index, int variant, int sfx_id) {
     static constexpr uint8_t kSwingTrailColor[5] = {0x3D, 0x3C, 0x3A, 0x39, 0x38};
     const NC2Frame* swing[5] = {nullptr, nullptr, nullptr, nullptr, nullptr};
     for (int i = 0; i < 5; ++i) swing[i] = nc2_frame_for(A.sprite_type, A.facing & 3, 5 + i);
+    // var_24 (ASM 39841-39853): dword unk_BA8AD[slot*5*8] >> 24 != 0FFh. The index is the image
+    // slot at [+60h], not the type at [+61h]; sub_11575 (type -> slot, 1:1) fills the 28h-byte
+    // block at unk_BA8B0 with 0FFh and overwrites it only when the NC2 has animation records.
+    // The port keys its NC2 cache by type, which is the file loaded into that slot.
+    bool extra_frame = false;                                    // [esp+90h+var_24]
+    if (auto it = nc2_chars_.find(A.sprite_type); it != nc2_chars_.end() && it->second)
+        extra_frame = (it->second->head(0) != -1);
     // (4) Dim and tick period.
     battle_dim_row0_ = true;                                     // sub_44D6E(1)
     game_timer_set(0x0C);                                        // sub_1033B(0Ch)
@@ -394,9 +401,8 @@ int CombatII::battle_fx_2cc3a_anim(int unit_index, int variant, int sfx_id) {
             blit_nc2_frame(sx + cf->x_off, sy + cf->y_off, *cf);
         // Switch on frame % 5 (off_2CC16: case 0 = loc_2D183, 1 = loc_2CFCD,
         //   2 = loc_2D092, 3 = loc_2D1B8, 4 = loc_2D0C4).
-        //   case 1/4: 4F4CD(cx) plus one blinking frame when var_24 == 1.
-        //      var_24 = (unk_BA8AD + 40*slot + 3 != 0FFh) is a per-slot data byte; the port has
-        //      no such table and treats it as always true. The original body is
+        //   case 1/4: 4F4CD(cx) plus one blinking frame only when var_24 == 1 (extra_frame,
+        //      ASM 40087-40127). The original body is
         //      5EECF(save) -> 5F3FD(pose) -> 5E9E8 -> 499E4 -> 5EE51(restore) -> 5F3FD(next).
         //      The port redraws the world every frame, so showing the pose for one more frame
         //      is one commit + tick.
@@ -416,10 +422,12 @@ int CombatII::battle_fx_2cc3a_anim(int unit_index, int variant, int sfx_id) {
             case 1:
             case 4:
                 sfx(sfx_id);                                          // 4F4CD([esp+66h]>>16 = cx)
-                battle_fx_commit();                                   // 5F3FD -> 5E9E8
-                wait_game_tick();                                     // 499E4
-                if (const NC2Frame* cf = nc2_frame_for(A.sprite_type, A.facing & 3, 5 + frames % 5))
-                    blit_nc2_frame(sx + cf->x_off, sy + cf->y_off, *cf);   // 5EE51 + 5F3FD(next pose)
+                if (extra_frame) {                                    // cmp [var_24],1
+                    battle_fx_commit();                               // 5F3FD -> 5E9E8
+                    wait_game_tick();                                 // 499E4
+                    if (const NC2Frame* cf = nc2_frame_for(A.sprite_type, A.facing & 3, 5 + frames % 5))
+                        blit_nc2_frame(sx + cf->x_off, sy + cf->y_off, *cf); // 5EE51 + 5F3FD
+                }
                 break;
             case 2:
                 set_target_hit_pose();
@@ -473,11 +481,8 @@ int CombatII::battle_fx_2cc3a_anim(int unit_index, int variant, int sfx_id) {
     wait_game_tick();                                            // 499DA falls through to 499E4
     battle_highlight_clear();                                    // sub_44D75
     battle_dim_row0_ = false;                                    // sub_44D6E(0)
-    for (size_t i = 0; i < units_.size(); ++i) {                 // restore the shake offsets
-        if (!units_[i].active) continue;
-        units_[i].walk_off_x = 0;
-        units_[i].walk_off_y = 0;
-    }
+    // [65h]/[66h] are cleared by sub_45BFB for each damage target only (ASM 40301-40380,
+    // 72396-72398); units outside the target list keep their offsets.
     const int pose = frames % 5 + 5;                             // [64h] = var_10 + 5 (var_10 = frames%5)
     A.anim_frame = (uint8_t)pose;
     A.fx_sprite_hidden = false;                                  // sub_11E04 restores occupancy
@@ -837,7 +842,7 @@ void CombatII::fx_37fa4_hit_block(int unit_index, int irus_frame, int pose, int 
         video_.clear();                                          // 5E9D0
         if (f < n) {                                             // 5EE51 (+A0h/+64h)
             const MagicFxFrame& a = magic_frames_[(size_t)f];
-            fx_blit_nsp(f, 0xA0 + a.xo, 0x64 + a.yo);
+            fx_blit_nsp_5ee51(f, 0xA0 + a.xo, 0x64 + a.yo);            // sub_5EE51
         }
         fx_trail_drop();                                         // 30784
         fx_trail_step(unit_index, pose);                         // 305A2
@@ -985,7 +990,7 @@ void CombatII::battle_fx_37fa4_dash_and_lightning(int unit_index, bool load_nsp)
         const int f = (i % 3) + 0x0C;                                   // (cx%3) + 0Ch
         if (f < nframes) {                                              // 5EE51 (+A0h/+64h)
             const MagicFxFrame& a = magic_frames_[(size_t)f];
-            fx_blit_nsp(f, 0xA0 + a.xo, 0x64 + a.yo);
+            fx_blit_nsp_5ee51(f, 0xA0 + a.xo, 0x64 + a.yo);            // sub_5EE51
         }
         fx_trail_step(-1, 0);                                          // 305A2(0,0)
         render_highlight_units_direct();                               // 44DCC (redraw units above the effect)
@@ -1064,7 +1069,7 @@ void CombatII::battle_fx_34c48_anim(int unit_index) {
     auto blit = [&](int frame, int xo, int yo) {                          // 5EE51
         if (frame < 0 || (size_t)frame >= magic_frames_.size()) return;
         const MagicFxFrame& e = magic_frames_[(size_t)frame];
-        fx_blit_nsp(frame, ax + xo + e.xo, ay + yo + e.yo);
+        fx_blit_nsp_5ee51(frame, ax + xo + e.xo, ay + yo + e.yo);     // sub_5EE51
     };
     // Original frame order: 454B3 -> 12F2A(caster) -> 5EE51(effect) -> 5E9E8 -> 499E4.
     auto frame = [&](int pose, int bframe, int xo, int yo) {
@@ -1109,7 +1114,7 @@ void CombatII::battle_fx_34c48_anim(int unit_index) {
         battle_fx_overlay();
         if (frame >= 0 && (size_t)frame < magic_frames_.size()) {
             const MagicFxFrame& e = magic_frames_[(size_t)frame];
-            fx_blit_nsp(frame, tx + e.xo, ty + e.yo);
+            fx_blit_nsp_5ee51(frame, tx + e.xo, ty + e.yo);                // sub_5EE51
         }
         battle_fx_commit();                                               // 5E9E8
         wait_game_tick();                                                 // 499E4

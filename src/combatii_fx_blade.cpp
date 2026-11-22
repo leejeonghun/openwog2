@@ -178,9 +178,12 @@ int CombatII::battle_fx_5637d(int unit_index, int tx, int ty, int k) {
         p.pad = 0;
     };
     auto kill = [&](int i) { slots[(size_t)i].state = 0; };  // sub_561E5
+    // ASM 95210-95228: 10AEB -> 1FFFE -> 12BEE -> 454D5, so the fireblad frame goes under the
+    // unit pass.
     auto draw_1fffe = [&](int f, int x, int y) {            // sub_1FFFE -> sub_5EE51
         if (f < 0 || f >= nframes) return;
-        battle_fx_blit(f, x + magic_frames_[(size_t)f].xo, y + magic_frames_[(size_t)f].yo);
+        battle_fx_blit_under_units(f, x + magic_frames_[(size_t)f].xo,
+                                   y + magic_frames_[(size_t)f].yo);
     };
     auto draw_561f4 = [&](int f, int x, int y) {            // sub_561F4 -> sub_5F29D
         if (f < 0 || f >= nframes) return;
@@ -297,7 +300,7 @@ int CombatII::battle_fx_22767(int unit_index, int tx, int ty, int k) {
 
 // sub_229CC(eax=tx, edx=ty): diamondb.nsp explosion.
 //   1124A (camera) -> 1FEA4("diamondb.nsp") -> 1033B(0Ah) -> anchor 10971(tx)+0Ch /
-//   10988(ty)+8 -> 4F4CD(32h) -> 26 frames (cx < 19h):
+//   10988(ty)+8 -> 4F4CD(32h) -> 25 frames (cx < 19h):
 //     - for i > 7, frame (i&1)+7 at the anchor (alternating 7/8)
 //     - for i > 0Ah, frame 9 + ((i-8) % 4); otherwise frame i+1
 //     - 10AEB -> the frame above -> (12BEE when i <= 0Ah) -> 454D5 + 5E9E8 -> 499E4 -> 1FFCD
@@ -314,7 +317,7 @@ int CombatII::battle_fx_229cc(int unit_index, int tx, int ty, int k) {
         f = std::max(0, std::min(nframes - 1, f));
         battle_fx_blit(f, ax + magic_frames_[(size_t)f].xo, ay + magic_frames_[(size_t)f].yo);
     };
-    for (int i = 0; i < 0x1A && !should_exit_; ++i) {        // cx < 19h
+    for (int i = 0; i < 0x19 && !should_exit_; ++i) {        // 25 frames (cx < 19h)
         if (i > 7) blit((i & 1) + 7);                       // alternating 7/8
         if (i > 0x0A) blit(9 + ((i - 8) % 4));
         else blit(i + 1);
@@ -506,7 +509,8 @@ int CombatII::battle_fx_272ad(int unit_index, int tx, int ty, int k) {
 //   1FEA4("bstar.nsp", 46h) -> 103A8 -> 61147(1,46h); 1FEA4 restores edx via loc_21E10 ->
 //   [unit+64h] = 0Ah (hit pose) -> anchor 10971([unit])+0Ch / 10988([unit])-6 -> 1033B(0Fh).
 //   (1) 13 frames (cx <= 0Ch): {10AEB; 5EFB9(frame cx, anchor, scale); 12BEE; 12F2A(unit);
-//       5E9E8; 499E4}
+//       5E9E8; 499E4}. Every 5EFB9 frame runs before 12BEE, so the star is composited under
+//       the units (battle_fx_blit_clipped_under_units); 5F29D/5F305 stay above them.
 //   (2) 4F4CD(32h) -> var_28 = 0Dh (frame), descent start var_30 = anchor y+0Ch,
 //       var_24 = anchor y-0BCh
 //   (3) descent: 5 frames (13..17) + 15 hold frames (18..32) + 4 closing frames (33..36).
@@ -528,9 +532,9 @@ int CombatII::battle_fx_59675(int target_index) {
     auto frame_ptr = [&](int f) -> const MagicFxFrame* {
         return (f >= 0 && f < nframes) ? &magic_frames_[(size_t)f] : nullptr;
     };
-    auto clipped = [&](int f, int x, int y) {               // sub_5EFB9
+    auto clipped = [&](int f, int x, int y) {               // sub_5EFB9 (before 12BEE)
         if (const MagicFxFrame* e = frame_ptr(f))
-            battle_fx_blit_clipped(f, x + e->xo, y + e->yo);
+            battle_fx_blit_clipped_under_units(f, x + e->xo, y + e->yo);
     };
     auto tinted_u = [&](int f, int x, int y) {              // sub_5F29D
         if (const MagicFxFrame* e = frame_ptr(f))

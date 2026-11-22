@@ -39,7 +39,8 @@
 //         1FFFE+454B3+5E9E8+499E4, with two extra 499E4 ticks and 4F4CD(0x32) on frame 5
 //       - 44D6E(0) restores the map
 //     45559; 1FFCD frees the table.
-//   Deviation: the 5FD1C palette fade becomes a sprite tint ramp and 44D6E is skipped.
+//   The 5FC21/5FD1C palette fade is the same work-palette delta pal_shift_fade builds
+//   (unk_12824F = master palette entry 1).
 int CombatII::battle_fx_26c9a(int unit_index, int tx, int ty, int k) {
     (void)k;
     // 11DB2: unit standing on the target tile; falls back to the passed unit.
@@ -54,22 +55,19 @@ int CombatII::battle_fx_26c9a(int unit_index, int tx, int ty, int k) {
     unit_screen_center(units_[(size_t)victim], cx, cy);            // sub_135EB
     const int nframes = (int)magic_frames_.size();
 
-    // Replaces 5FD1C: the sprite tint goes 0 -> 100 in 5 steps, then 100 -> 0 by 0x0A. The
-    // original only re-presents the screen (45559), so this keeps the frame and presents only.
-    auto fade_frame = [&](int frame, int tint) {
-        battle_fx_blit_tinted(frame, cx, cy - 0x20, tint);
-        present_cutscene_frame();                                  // sub_45559
-    };
+    // 5FC21 turns the 100h copies of palette[1] (unk_12824F) into delta[i] = palette[1] -
+    // master[i]; every 5FD1C below writes DAC[i] = master[i] + delta[i]*pct/100, i.e. exactly
+    // pal_shift_fade(pct) over the full 100h entries (ASM 31727-31813).
+    sfx(0x33);                                                     // sub_4F4CD(33h)
+    battle_dim_row0_ = true;                                       // sub_44D6E(1)
+    auto fade = [&](int pct) { pal_shift_fade(pct, 0x100); };      // sub_5FD1C(0,100h,...)
     for (int pass = 0; pass < 2 && !should_exit_; ++pass) {
-        for (int t = 0; t <= 0x64 && !should_exit_; t += 0x14) {   // brighten
-            fade_frame(std::min(nframes - 1, t * nframes / 0x64), t);
-            wait_game_tick();
-        }
-        for (int t = 0x64; t > 0 && !should_exit_; t -= 0x0A) {    // restore
-            fade_frame(std::min(nframes - 1, t * nframes / 0x64), t);
-            wait_game_tick();
-        }
-        if (pass == 1) break;                                     // cmp di,1 -> exit
+        // loc_26D34: pct 0,14h,28h,3Ch,50h, then a single 45559 present.
+        for (int t = 0; t <= 0x50 && !should_exit_; t += 0x14) fade(t);
+        present_cutscene_frame();                                  // sub_45559
+        // loc_26D58: pct 64h,5Ah,...,0Ah without presenting.
+        for (int t = 0x64; t > 0 && !should_exit_; t -= 0x0A) fade(t);
+        if (pass == 1) break;                                     // cmp di,1 -> 26E0A
         game_timer_set(0x10);                                     // sub_1033B(10h)
         for (int i = 0; i < nframes && !should_exit_; ++i) {
             battle_fx_blit(i, cx, cy - 0x20);                     // sub_1FFFE + sub_5EE51
@@ -81,7 +79,9 @@ int CombatII::battle_fx_26c9a(int unit_index, int tx, int ty, int k) {
                 sfx(0x32);                                        // sub_4F4CD(32h)
             }
         }
+        battle_dim_row0_ = false;                                 // sub_44D6E(0)
     }
+    battle_dim_row0_ = false;                                     // port cleanup on early exit
     present_cutscene_frame();                                     // sub_45559
     battle_nsp_release();                                         // sub_1FFCD
     if (battle_trace_)
@@ -92,15 +92,15 @@ int CombatII::battle_fx_26c9a(int unit_index, int tx, int ty, int k) {
 // ---- sub_26E1F: Black Hole (q1 61) ----
 //   eax/edx = caster coordinates in 16.16, ebx (bl) = damage flag (>0 runs the expand phase).
 //   dword_1FE74/dword_1FE84/loc_1FE94 hold 16 spiral vectors (+-4). Each frame:
-//     1. 5F611 draws the centre blob (radius var_8, 0x3C decreasing by 4)
-//     2. the 16 particles are drawn with 5EE51 at their own frames at
-//        (centre - t2[i]*t3[i], centre - t3[i]*t1[i])
-//     3. 454D5 (dim, markers, highlights, HP, HUD) + 5E9E8 + 499E4.
+//     1. 5F611 draws table entry 16 (dword_F0E72) at radius var_8 (0x3C, -4 per frame)
+//     2. the 16 particles are drawn with 5EE51 at their own frames (entry i) at
+//        x = centre - t3[i]*t1[i], y = centre - t2[i]*t3[i]; t3 decays every frame
+//     3. 12E01 + 454D5 + 5E9E8 + 499E4.
 //   Once the radius drops to 1 or less:
 //     flag>0 -> from edi=2 up to 0x28*flag in steps of flag*4 the same particles are expanded with
-//               5F570, then 30 frames of { 5F570, particles, 1FFFE(0x11+(i&1)), 4F4CD(0x33)
-//               when 499BD(3)==0 },
-//     flag<=0 -> only 30 frames of { 5F611(0x82,0x4B), particles, 1FFFE, 5E9E8, 499E4 }.
+//               5F570 (entry 16, size edi), then 30 frames of { 5F570 (size kept), particles,
+//               1FFFE(0x11+(i&1)), 4F4CD(0x33) and one extra tick when 499BD(3)==0 },
+//     flag<=0 -> only 30 frames of { 5EE51(entry 16, 82h,4Bh), particles, 5E9E8, 499E4 }.
 //   1FFCD releases the table at the end.
 //   5F611/5F570 are ported in combatii_fx_gfx.cpp as battle_fx_blit_scaled.
 int CombatII::battle_fx_26e1f(int unit_index, int tx, int ty, int k) {
@@ -109,68 +109,89 @@ int CombatII::battle_fx_26e1f(int unit_index, int tx, int ty, int k) {
     if (!battle_nsp_load("b_hole.nsp") || magic_frames_.empty()) return 0;
     const int nframes = (int)magic_frames_.size();
 
-    // loc_1FE94 is dumped as 16 bytes of code and cannot be read directly; this uses a
-    // phase-shifted copy of the same spiral instead.
-    static const int8_t kSpiralX[16] = {1, 2, 3, 4, 0, -1, -2, -3, -4, 3, 2, 1, 0, -1, -2, -3};
-    static const int8_t kSpiralY[16] = {0, 1, 2, 3, 4, 3, 2, 1, 0, -1, -2, -3, -4, -3, -2, -1};
+    // dword_1FE74, dword_1FE84 and loc_1FE94 (ASM 22912-22914) are copied to the stack at
+    // entry. loc_1FE94 doubles as the per-particle frame counter: the original decrements the
+    // byte after each draw (see draw_particles).
+    static const int8_t kT1[16] = {4, 3, 2, 1, 0, -1, -2, -3, -4, 3, 2, 1, 0, -1, -2, -3};
+    static const int8_t kT2[16] = {0, 1, 2, 3, 4, 3, 2, 1, 0, -1, -2, -3, -4, -3, -2, -1};
+    int8_t t3[16] = {0x14, 0x12, 0x10, 0x18, 0x09, 0x0A, 0x08, 0x06,
+                     0x04, 0x0C, 0x04, 0x10, 0x08, 0x14, 0x0C, 0x0E};
 
     int cx = 0, cy = 0;
     unit_screen_center(units_[(size_t)unit_index], cx, cy);        // sub_10971+0Ch / sub_10988+4
     camera_center_on((int)(int8_t)units_[(size_t)unit_index].x,
                      (int)(int8_t)units_[(size_t)unit_index].y);   // sub_1124A
-    const int particles = std::min(16, nframes);
-    const int blob_frame = std::min(nframes - 1, 0);
+    // dword_F0E72: every blob phase draws table entry 16 (dword_F0E6C/F0E6E are its +2/+4).
+    const int blob_frame = std::min(nframes - 1, 0x10);
 
-    auto draw_particles = [&](int frame_base) {
-        for (int i = 0; i < particles; ++i) {
-            const int f = std::min(nframes - 1, frame_base + i);
-            const MagicFxFrame& fr = magic_frames_[(size_t)f];
-            const int px = cx - kSpiralX[i] * kSpiralY[i] - fr.w / 2 + fr.xo;
-            const int py = cy - kSpiralY[i] * kSpiralX[(i + 4) & 15] - fr.h / 2 + fr.yo;
-            battle_fx_blit(f, px, py);                             // sub_5EE51
+    // x = centre - t3[i]*t1[i] (eax), y = centre - t2[i]*t3[i] (edx) before 5EE51. The frame is
+    // entry i itself (F0DAA + i*12) and no frame offset is added.
+    //   phase 0 (shrink + no damage): t3-- (reset 0Ah when the pre-decrement value is below 4).
+    //   phase 1 (expand + 30 hold frames): t3 -= 2 (reset (di>>3)+0Ah when the result is below 4).
+    auto draw_particles = [&](int phase, int di) {
+        for (int i = 0; i < 16; ++i) {
+            battle_fx_blit(i, cx - t3[i] * kT1[i], cy - kT2[i] * t3[i]);  // sub_5EE51
+            const int before = t3[i];
+            if (phase == 0) {
+                t3[i] = (int8_t)(before < 4 ? 0x0A : before - 1);
+            } else {
+                const int next = before - 2;
+                t3[i] = (int8_t)(next < 4 ? (di >> 3) + 0x0A : next);
+            }
         }
-    };
-    // sub_5F611 / sub_5F570: draw the centre blob scaled to "size x size".
-    auto draw_blob = [&](int frame, int size) {
-        const int f = std::max(0, std::min(nframes - 1, frame));
-        if (size <= 0) return;
-        battle_fx_blit_scaled(f, cx - size / 2, cy - size / 2, size, size);
     };
 
     game_timer_set(7);                                              // sub_1033B(7)
     sfx(0x32);                                                      // sub_4F4CD(32h)
 
-    // (1) Shrink phase: radius 0x3C decreasing by 4 down to 1 or less (15 frames).
+    // (1) Shrink phase: radius 0x3C decreasing by 4 down to 1 or less (15 frames). sub_5F611
+    //     puts the top-left at centre + size/2 + entry offset (ASM 31896-31907).
     int radius = 0x3C;
     for (int guard = 0; guard < 0x40 && radius > 1 && !should_exit_; ++guard) {
-        draw_blob((0x3C - radius) / 4, radius);          // 5F611 (ecx = radius)
-        draw_particles(0);
+        if (radius > 0) {
+            const MagicFxFrame& fr = magic_frames_[(size_t)blob_frame];
+            battle_fx_blit_scaled(blob_frame, cx + radius / 2 + fr.xo,
+                                  cy + radius / 2 + fr.yo, radius, radius, false, true);
+        }
+        draw_particles(0, 0);
         battle_fx_present_12d65();
         radius -= 4;
         wait_game_tick();
     }
 
+    int di = 2;                                                     // expand size counter
     if (k > 0) {
-        // (2) Expand phase: edi from 2 to 0x28*k in steps of k*4.
-        for (int e = 2; e < 0x28 * k && !should_exit_; e += k * 4) {
-            draw_blob(std::min(nframes - 1, 0x10), e);              // 5F570(ecx=e)
-            draw_particles(0);
+        // (2) Expand phase: edi from 2 to 0x28*k in steps of k*4, 5F570 centred on the caster.
+        for (; di < 0x28 * k && !should_exit_; di += k * 4) {
+            const MagicFxFrame& fr = magic_frames_[(size_t)blob_frame];
+            battle_fx_blit_scaled(blob_frame, cx - di / 2 + fr.xo, cy - di / 2 + fr.yo,
+                                  di, di, true);
+            draw_particles(1, di);
             battle_fx_present_12d65();
             wait_game_tick();
         }
-        // (3) 30 frames alternating frames 0x11/0x12, with a sound every third frame.
+        // (3) 30 frames: 5F570 keeps the final size counter and entry 16 while 1FFFE draws
+        //     0x11+(counter&1) at the centre; a failed 499BD(3) inserts one extra tick.
         for (int i = 0; i < 0x1E && !should_exit_; ++i) {
-            draw_blob(0x11 + (i & 1), k * 0x28);                    // 5F570 (fixed size)
-            draw_particles(0);
+            const MagicFxFrame& fr = magic_frames_[(size_t)blob_frame];
+            battle_fx_blit_scaled(blob_frame, cx - di / 2 + fr.xo, cy - di / 2 + fr.yo,
+                                  di, di, true);
+            draw_particles(1, di);
+            const int f = std::min(nframes - 1, 0x11 + (i & 1));
+            battle_fx_blit(f, cx + magic_frames_[(size_t)f].xo,
+                           cy + magic_frames_[(size_t)f].yo);        // sub_1FFFE
+            if (combat_rand(3) == 0) {                              // sub_499BD(3) == 0
+                sfx(0x33);                                          // sub_4F4CD(33h)
+                wait_game_tick();
+            }
             battle_fx_present_12d65();
-            if (combat_rand(3) == 0) sfx(0x33);                     // sub_499BD(3) == 0 -> 4F4CD(33h)
             wait_game_tick();
         }
     } else {
-        // (3') No-damage variant: 30 static frames (large 0x82 x 0x4B blob plus particles).
+        // (3') No-damage variant: 30 frames of the plain entry-16 blit at (82h,4Bh), no scaling.
         for (int i = 0; i < 0x1E && !should_exit_; ++i) {
-            draw_blob(blob_frame, 0x82);                            // 5F611 (centre 0x82)
-            draw_particles(0);
+            battle_fx_blit(blob_frame, 0x82, 0x4B);                 // sub_5EE51
+            draw_particles(0, 0);
             battle_fx_present_12d65();
             wait_game_tick();
         }

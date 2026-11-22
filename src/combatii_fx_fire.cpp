@@ -430,8 +430,12 @@ int CombatII::battle_fx_57766(int unit_index, int tx, int ty, int k) {
             FxParticle& p = fx_slot[i];
             if (p.state != 1) {
                 if (no_more) continue;
-                const int cycle = fx_rand_mod(10);
-                fx_spawn(i, fx_rand_mod(320), fx_rand_mod(200), 0, cycle, 1);
+                // ASM 96835-96867 / 97121-97153 / 97482-97515: push rand%10 as the state and
+                // 3 as the period, so sub_56178 stores period=3 (+0Ah) and state=rand%10 (+4).
+                const int state = fx_rand_mod(10);
+                const int sy = fx_rand_mod(200);     // ASM: first spawn rand (%0C8h) -> +2
+                const int sx = fx_rand_mod(320);     // ASM: second rand (%140h) -> +0
+                fx_spawn(i, sx, sy, 0, 3, state);
                 p.vx = (int16_t)(5 + fx_rand_mod(0x14));
                 p.vy = (int16_t)(5 + fx_rand_mod(0x14));
                 if (fx_rand_mod(2)) p.vx = (int16_t)(-p.vx);
@@ -505,8 +509,12 @@ int CombatII::battle_fx_57ac4(int unit_index, int tx, int ty, int k) {
             FxParticle& p = fx_slot[i];
             if (p.state != 1) {
                 if (no_more) continue;
-                const int cycle = fx_rand_mod(10);
-                fx_spawn(i, fx_rand_mod(320), fx_rand_mod(200), 0, cycle, 1);
+                // ASM 96835-96867 / 97121-97153 / 97482-97515: push rand%10 as the state and
+                // 3 as the period, so sub_56178 stores period=3 (+0Ah) and state=rand%10 (+4).
+                const int state = fx_rand_mod(10);
+                const int sy = fx_rand_mod(200);     // ASM: first spawn rand (%0C8h) -> +2
+                const int sx = fx_rand_mod(320);     // ASM: second rand (%140h) -> +0
+                fx_spawn(i, sx, sy, 0, 3, state);
                 p.vx = (int16_t)(5 + fx_rand_mod(0x14));
                 p.vy = (int16_t)(5 + fx_rand_mod(0x14));
                 if (fx_rand_mod(2)) p.vx = (int16_t)(-p.vx);
@@ -581,11 +589,10 @@ int CombatII::battle_fx_57f18(int unit_index, int tx, int ty, int k) {
     fx_spawn(0x0D, 0, 0, 9, 3, 1);
     game_timer_set(0x0A);                            // sub_1033B(0A)
     pal_ramp_set_width(0x29);            // sub_5623E (word_11233C ramp width)
-    for (;;) {                                   // loc_57FDE fade-in (5E943 per step)
+    for (;;) {                                   // loc_57FDE: 562C1(4Bh,0) only, no 5E9E8
         if (should_exit_) break;
         const int ramp = pal_ramp_step(0x4B, 0);
-        battle_fx_present();
-        video_.wait_presented();
+        video_.wait_presented();                 // sub_5E943 inside 5FD1C
         if (ramp == 1) break;
     }
     sfx(0x33);                                       // 4F4CD(33)
@@ -609,8 +616,12 @@ int CombatII::battle_fx_57f18(int unit_index, int tx, int ty, int k) {
             FxParticle& p = fx_slot[i];
             if (p.state != 1) {
                 if (no_more) continue;
-                const int cycle = fx_rand_mod(10);
-                fx_spawn(i, fx_rand_mod(320), fx_rand_mod(200), 0, cycle, 1);
+                // ASM 96835-96867 / 97121-97153 / 97482-97515: push rand%10 as the state and
+                // 3 as the period, so sub_56178 stores period=3 (+0Ah) and state=rand%10 (+4).
+                const int state = fx_rand_mod(10);
+                const int sy = fx_rand_mod(200);     // ASM: first spawn rand (%0C8h) -> +2
+                const int sx = fx_rand_mod(320);     // ASM: second rand (%140h) -> +0
+                fx_spawn(i, sx, sy, 0, 3, state);
                 p.vx = (int16_t)(5 + fx_rand_mod(0x14));
                 p.vy = (int16_t)(5 + fx_rand_mod(0x14));
                 if (fx_rand_mod(2)) p.vx = (int16_t)(-p.vx);
@@ -679,14 +690,16 @@ int CombatII::battle_fx_57f18(int unit_index, int tx, int ty, int k) {
         wait_game_tick();
     }
     cam_fine_y_ = 0;                                 // dword_BA838 = 0 (restore the shake)
-    // loc_58571: 454B3 once, then 562C1(4Bh,0) with a 5E9E8 flush per step.
-    if (!should_exit_) battle_fx_present();
+    // loc_58571 (ASM 97879-97891): every pass draws (454B3), then 562C1(4Bh,0) - which waits
+    // for retrace (5E943) - and copies the frame (5E9E8) only while the ramp is non-zero. The
+    // ramp == 0 pass still draws but does not present.
     for (;;) {
         if (should_exit_) break;
-        const int ramp = pal_ramp_step(0x4B, 0);
-        battle_fx_present();                         // 454B3 + 5E9E8 for the fade step
-        video_.wait_presented();                     // sub_5E943
-        if (ramp == 0) break;
+        render_battle_frame();                       // sub_454B3
+        const int ramp = pal_ramp_step(0x4B, 0);     // sub_562C1 -> 56245 -> 5FD1C
+        video_.wait_presented();                     // sub_5E943 inside 5FD1C
+        if (ramp == 0) break;                        // test ax,ax; jz loc_5859F
+        battle_fx_commit();                          // sub_5E9E8
     }
     pal_ramp_apply(0);                               // release the ramp (DAC = master)
     battle_nsp_release();

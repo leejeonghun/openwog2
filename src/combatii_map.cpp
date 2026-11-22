@@ -2044,10 +2044,17 @@ void CombatII::render_battle_map(bool magic_pass, bool overlay_only, bool skip_m
     // 26B1F's confuse frame 0 belongs under the units, so it is drawn here rather than through
     // the battle_fx_blit queue (which the caller flushes after this pass).
     auto under_units_blit = [&]() {
-        if (!battle_fx_under_units_pending_) return;
-        battle_fx_under_units_pending_ = false;
-        fx_blit_nsp_5ee51(battle_fx_under_units_frame_,
-                          battle_fx_under_units_x_, battle_fx_under_units_y_);
+        if (battle_fx_under_units_pending_) {
+            battle_fx_under_units_pending_ = false;
+            fx_blit_nsp_5ee51(battle_fx_under_units_frame_,
+                              battle_fx_under_units_x_, battle_fx_under_units_y_);
+        }
+        // sub_5EFB9 variant of the same gap (sub_59675's bstar frames).
+        if (battle_fx_under_units_clip_pending_) {
+            battle_fx_under_units_clip_pending_ = false;
+            fx_blit_nsp(battle_fx_under_units_clip_frame_,
+                        battle_fx_under_units_clip_x_, battle_fx_under_units_clip_y_);
+        }
     };
     if (!overlay_only) {
         highlight_draws_.clear();           // the sub_44DCC replay list is rebuilt on every sub_454B3 pass
