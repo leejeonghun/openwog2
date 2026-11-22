@@ -25,9 +25,9 @@
 //
 // 21114/2132B/215FE are the boom/icestick family: fixed pixel offsets from the caster tile,
 // frame = a per-group counter, and the counters cascade into the next group. No motion.
-// 21114: 5 sprites, counters 5, thresholds >2 / <6, tick (frame+6)/3, end c[4].
-// 2132B: 24 sprites in groups 3/5/7/9, thresholds >2 / <5, tick (frame+6)/2, end c[3].
-// 215FE: 29 sprites in groups 2/3*9, thresholds >1 / <5, tick (frame+9)/3, end c[9].
+// 21114: 5 sprites, boom -1/++ / icestick 7/--, thresholds >2 / <6, tick (frame+6)/3, end c[4].
+// 2132B: 24 sprites in groups 3/5/7/9, same counters, thresholds >2 / <5, tick (frame+6)/2, end c[3].
+// 215FE: 29 sprites in groups 2/3*9, same counters, thresholds >1 / <5, tick (frame+9)/3, end c[9].
 #include "combatii.h"
 #include "combatii_internal.h"
 
@@ -290,8 +290,9 @@ int CombatII::battle_fx_20ddf(int unit_index, int tx, int ty, int energy) {
 
 // sub_21114 (29722 k0): 5 boom/icestick sprites at fixed facing offsets.
 //   x = 10971(unit.x) + xo*18h + 0Ch, y = 10988(unit.y) + yo*10h + 4; no motion.
-//   Counter c[0..4] = 7 (boom) / -1 (icestick); c[0] moves every frame, and c[i] cascades into
-//   c[i+1] when c[i] > 2 (energy) / c[i] < 6 (boom). Frame = c[i]. 200DE(unit, 3), 1033B(2).
+//   Counter c[0..4] = -1 (boom) / 7 (icestick); c[0] moves every frame (++ boom, -- icestick),
+//   and c[i] cascades into c[i+1] when c[i] > 2 (boom) / c[i] < 6 (icestick). Frame = c[i].
+//   End: c[4] > 0Dh (boom) / c[4] == 0 (icestick). 200DE(unit, 3), 1033B(2).
 int CombatII::battle_fx_21114(int unit_index, int tx, int ty, int energy) {
     (void)tx; (void)ty;
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return 0;
@@ -315,18 +316,18 @@ int CombatII::battle_fx_21114(int unit_index, int tx, int ty, int energy) {
         const int idx = facing * 5 + i;
         px[i] = scr_x((int)(int8_t)c.x) + kX21114[idx] * 0x18 + 0x0C;
         py[i] = scr_y((int)(int8_t)c.y) + kY21114[idx] * 0x10 + 4;
-        ctr[i] = energy ? -1 : 7;
+        ctr[i] = energy ? 7 : -1;
     }
     game_timer_set(2);                                 // sub_1033B(2)
     int frame_no = 0;                                  // var_8
     while (!should_exit_) {
-        if (energy) ++ctr[0]; else --ctr[0];           // loc_21220
+        if (energy) --ctr[0]; else ++ctr[0];           // loc_21220 (ice --, boom ++)
         for (int i = 4; i >= 0; --i) {                 // loc_21236 (reverse order)
             if (ctr[i] >= 0 && ctr[i] < end_frame && ctr[i] < nframes)
                 battle_fx_blit(ctr[i], px[i], py[i]);  // 1FFFE
             if (i < 4) {                               // cascade into the next group
-                if (energy) { if (ctr[i] > 2) ++ctr[i + 1]; }
-                else        { if (ctr[i] < 6) --ctr[i + 1]; }
+                if (energy) { if (ctr[i] < 6) --ctr[i + 1]; }
+                else        { if (ctr[i] > 2) ++ctr[i + 1]; }
             }
         }
         ++frame_no;
@@ -334,7 +335,7 @@ int CombatII::battle_fx_21114(int unit_index, int tx, int ty, int energy) {
         wait_game_tick();                              // sub_499E4
         if (frame_no % end_frame == 0) game_timer_set((frame_no + 6) / 3);
         if (frame_no % 10 == 0) sfx(0x32);
-        if (energy ? (ctr[4] > end_frame) : (ctr[4] == 0)) break;
+        if (energy ? (ctr[4] == 0) : (ctr[4] > end_frame)) break;
     }
     battle_nsp_release();                              // sub_1FFCD
     if (battle_trace_)
@@ -344,7 +345,7 @@ int CombatII::battle_fx_21114(int unit_index, int tx, int ty, int energy) {
 
 // sub_2132B (29722 k1): 24 boom/icestick sprites in groups of 3/5/7/9.
 //   x = 10971(unit.x) + xo*18h + 0Ch, y = 10988(unit.y) + yo*10h (no +4). 200DE(unit, 2),
-//   1033B(4 boom / 9 icestick). Counters cascade while c[i] > 2 (energy) / c[i] < 5 (boom).
+//   1033B(4 boom / 9 icestick). Counters cascade while c[i] > 2 (boom) / c[i] < 5 (icestick).
 int CombatII::battle_fx_2132b(int unit_index, int tx, int ty, int energy) {
     (void)tx; (void)ty;
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return 0;
@@ -369,11 +370,11 @@ int CombatII::battle_fx_2132b(int unit_index, int tx, int ty, int energy) {
         px[i] = scr_x((int)(int8_t)c.x) + kX2132B[idx] * 0x18 + 0x0C;
         py[i] = scr_y((int)(int8_t)c.y) + kY2132B[idx] * 0x10;
     }
-    int ctr[4] = { energy ? -1 : 7, energy ? -1 : 7, energy ? -1 : 7, energy ? -1 : 7 };
+    int ctr[4] = { energy ? 7 : -1, energy ? 7 : -1, energy ? 7 : -1, energy ? 7 : -1 };
     game_timer_set(energy ? 9 : 4);                    // sub_1033B
     int frame_no = 0;                                  // var_10
     while (!should_exit_) {
-        if (energy) ++ctr[0]; else --ctr[0];
+        if (energy) --ctr[0]; else ++ctr[0];
         int sprite = 0;
         int draw_count = 3;                            // var_8 = 3, +2 per group
         for (int g = 0; g < 4; ++g) {                  // loc_214A8
@@ -383,8 +384,8 @@ int CombatII::battle_fx_2132b(int unit_index, int tx, int ty, int energy) {
             }
             draw_count += 2;
             if (g < 3) {
-                if (energy) { if (ctr[g] > 2) ++ctr[g + 1]; }
-                else        { if (ctr[g] < 5) --ctr[g + 1]; }
+                if (energy) { if (ctr[g] < 5) --ctr[g + 1]; }
+                else        { if (ctr[g] > 2) ++ctr[g + 1]; }
             }
         }
         battle_fx_present();                           // 454D5 + 5E9E8
@@ -392,7 +393,7 @@ int CombatII::battle_fx_2132b(int unit_index, int tx, int ty, int energy) {
         ++frame_no;
         if (frame_no % 6 == 0) game_timer_set((frame_no + 6) / 2);
         if (frame_no % 10 == 0) sfx(0x32);
-        if (energy ? (ctr[3] > end_frame) : (ctr[3] == 0)) break;
+        if (energy ? (ctr[3] == 0) : (ctr[3] > end_frame)) break;
     }
     battle_nsp_release();
     if (battle_trace_)
@@ -402,7 +403,8 @@ int CombatII::battle_fx_2132b(int unit_index, int tx, int ty, int energy) {
 
 // sub_215FE (29722 k2): 29 boom/icestick sprites in groups of 2 then 9x3.
 //   x = 10971(unit.x) + xo*18h + 0Ch, y = 10988(unit.y) + yo*10h + 4. 200DE(unit, 5),
-//   1033B(2). Counters cascade while c[i] > 1 (energy) / c[i] < 5 (boom); end at c[9].
+//   1033B(2). Counters cascade while c[i] > 1 (boom) / c[i] < 5 (icestick); end at c[9]
+//   (boom c[9] > 0Dh, icestick c[9] == 0).
 int CombatII::battle_fx_215fe(int unit_index, int tx, int ty, int energy) {
     (void)tx; (void)ty;
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return 0;
@@ -430,18 +432,18 @@ int CombatII::battle_fx_215fe(int unit_index, int tx, int ty, int energy) {
         py[i] = scr_y((int)(int8_t)c.y) + yo * 0x10 + 4;
     }
     int ctr[10];
-    for (int i = 0; i < 10; ++i) ctr[i] = energy ? -1 : 7;
+    for (int i = 0; i < 10; ++i) ctr[i] = energy ? 7 : -1;
     game_timer_set(2);                                 // sub_1033B(2)
     int frame_no = 0;                                  // var_C
     while (!should_exit_) {
-        if (energy) ++ctr[0]; else --ctr[0];
+        if (energy) --ctr[0]; else ++ctr[0];
         int sprite = 0;
         // group 0: two sprites (loc_2176E)
         for (int k = 0; k < 2; ++k, ++sprite) {
             if (ctr[0] >= 0 && ctr[0] < end_frame && ctr[0] < nframes)
                 battle_fx_blit(ctr[0], px[sprite], py[sprite]);
         }
-        if (energy) { if (ctr[0] > 1) ++ctr[1]; } else { if (ctr[0] < 5) --ctr[1]; }
+        if (energy) { if (ctr[0] < 5) --ctr[1]; } else { if (ctr[0] > 1) ++ctr[1]; }
         // groups 1..9: three sprites each (loc_217EE)
         for (int g = 1; g < 10; ++g) {
             for (int k = 0; k < 3; ++k, ++sprite) {
@@ -449,8 +451,8 @@ int CombatII::battle_fx_215fe(int unit_index, int tx, int ty, int energy) {
                     battle_fx_blit(ctr[g], px[sprite], py[sprite]);
             }
             if (g < 9) {
-                if (energy) { if (ctr[g] > 1) ++ctr[g + 1]; }
-                else        { if (ctr[g] < 5) --ctr[g + 1]; }
+                if (energy) { if (ctr[g] < 5) --ctr[g + 1]; }
+                else        { if (ctr[g] > 1) ++ctr[g + 1]; }
             }
         }
         ++frame_no;                                    // inc var_C
@@ -458,7 +460,7 @@ int CombatII::battle_fx_215fe(int unit_index, int tx, int ty, int energy) {
         wait_game_tick();                              // 499E4
         if (frame_no % end_frame == 0) game_timer_set((frame_no + 9) / 3);
         if (frame_no % 10 == 0) sfx(0x32);
-        if (energy ? (ctr[9] > end_frame) : (ctr[9] == 0)) break;
+        if (energy ? (ctr[9] == 0) : (ctr[9] > end_frame)) break;
     }
     battle_nsp_release();
     if (battle_trace_)
@@ -466,45 +468,53 @@ int CombatII::battle_fx_215fe(int unit_index, int tx, int ty, int energy) {
     return 1;
 }
 
-// sub_22AF9 (29514 bx==1, Ice Fog): pick icewind/icestor/icetypho.nsp by k and radiate
-//   50 particles (0x32). Start position is (i%10)*0x20 + (i%4)*4, y=(i/10)*0x28.
+// sub_22AF9 (29514 bx==1, Ice Fog): sub_1124A(tx,ty), pick icewind/icestor/icetypho.nsp by k
+//   and radiate 50 particles on screen-absolute coordinates. A slot stores only x/y:
+//   x=(i%10)*0x20+(i%4)*4, y=(i/10)*0x28 (loc_22B50).
+//   Each of the 60 frames (var_8 < 0x3C): the shared frame index (di, initially 0) advances by 1
+//   every (0x3C/frames) frames until it reaches frames-2 (loc_22C17), and dword_BA838 is
+//   -(k*2) on every 4th frame and 0 otherwise. Every slot is then blitted through 1FFFE and
+//   moved by (3k+8, 3k+4): x > 0x13F -> 0, y > 0xBE -> 0x0A. 454B3 opens the frame and
+//   454D5/5E9E8 close it. sfx(32h) plays once before the loop (no periodic SFX).
+//   Tail: 1FFCD -> BA838=0 -> 45559.
 int CombatII::battle_fx_22af9(int unit_index, int tx, int ty, int k) {
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return 0;
+    camera_center_on(tx, ty);                                  // sub_1124A
     const char* nsp = (k == 0) ? "icewind.nsp" : (k == 1 ? "icestor.nsp" : "icetypho.nsp");
     if (!battle_nsp_load(nsp) || !battle_fx_loaded()) return 0;
     const int nframes = battle_fx_frame_count();
     const CombatUnitPlacement& caster = units_[(size_t)unit_index];
-    const int cx = (tx - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X + 12;
-    const int cy = (ty - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y + 8;
-    struct P { int x, y, vx, vy, life; };
-    std::vector<P> ps(50);
+    game_timer_set(5);                                         // sub_1033B(5) (before the init)
+    int px[50], py[50];
     for (int i = 0; i < 50; ++i) {
-        P& p = ps[(size_t)i];
-        p.x = (i % 10) * 0x20 + (i % 4) * 4;                 // loc_22B50 offset math
-        p.y = (i / 10) * 0x28;
-        p.vx = ((i % 7) - 3);
-        p.vy = ((i % 5) - 2) * 2;
-        p.life = 0x14 + (i % 0x10);
+        px[i] = (i % 10) * 0x20 + (i % 4) * 4;                 // loc_22B50 offset math
+        py[i] = (i / 10) * 0x28;
     }
-    sfx(0x32);
-    game_timer_set(5);
-    for (int guard = 0; guard < 0x48 && !should_exit_; ++guard) {
+    const int anim_step = (nframes > 0) ? (0x3C / nframes) : 0x3C;   // var_C
+    sfx(0x32);                                                 // sub_4F4CD(32h)
+    int frame_index = 0;                                       // di
+    const int last_frame = nframes - 2;                        // word_F0DA8-2
+    for (int frame = 0; frame < 0x3C && !should_exit_; ++frame) {   // var_8
+        if (anim_step > 0 && frame % anim_step == 0 && frame_index != last_frame)
+            ++frame_index;
+        // Keep the shared index inside the loaded table; the original NSPs always have
+        // frames-2 >= 1, so this clamp never changes their behaviour.
+        frame_index = std::min(std::max(0, frame_index), std::max(0, nframes - 1));
+        cam_fine_y_ = (frame % 4 == 0) ? CAM_FINE_Y_REST - k * 2 : CAM_FINE_Y_REST; // BA838
+        const MagicFxFrame& e = magic_frames_[(size_t)frame_index];
         for (int i = 0; i < 50; ++i) {
-            P& p = ps[(size_t)i];
-            if (p.life <= 0) { p.life = 0x14 + (i % 0x10); continue; }
-            p.x += p.vx;
-            p.y += p.vy;
-            p.vy += 1;
-            --p.life;
-            const int frame = std::min(std::max(0, (0x14 - p.life) / 2), nframes - 1);
-            battle_fx_blit(frame, cx + p.x - 0xA0, cy + p.y - 0x78);
+            battle_fx_blit(frame_index, px[i] + e.xo, py[i] + e.yo);   // sub_1FFFE
+            px[i] += k * 3 + 8;
+            if (px[i] > 0x13F) px[i] = 0;
+            py[i] += k * 3 + 4;
+            if (py[i] > 0xBE) py[i] = 0x0A;
         }
-        if (guard % 10 == 0) sfx(0x32);
-        battle_fx_present();
-        wait_game_tick();
+        battle_fx_present();                                   // 454B3 + 454D5 + 5E9E8
+        wait_game_tick();                                      // sub_499E4
     }
-    sfx(0x33);
-    battle_nsp_release();
+    battle_nsp_release();                                      // sub_1FFCD
+    cam_fine_y_ = CAM_FINE_Y_REST;                             // dword_BA838 = 0
+    battle_fx_present();                                       // sub_45559
     if (battle_trace_)
         fprintf(stderr, "COMBAT: 22AF9 unit=%d k=%d nsp=%s\n", caster.id, k, nsp);
     return 1;

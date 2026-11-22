@@ -386,13 +386,18 @@ int CombatII::battle_fx_570a1(int unit_index, int tx, int ty, int k) {
     pro_spawn(0x4F, 0x140, 0x64, 0x4C, 7, 1);
     game_timer_set(0x0A);                            // sub_1033B(0Ah)
     sfx(0x32);                                       // sub_4F4CD(32h)
-    // Cx starts at -0x48, steps by +4 and ends at 4 (19 frames).
+    // Cx starts at -0x48 and steps by +4 until cx == 4; the body runs 19 times (last blit at
+    // cx == 0). The second blit uses the separate local initialised to 0x188 and decremented by
+    // 4 each frame (0x5713E/0x571B3/0x571C4), i.e. 0x188 -> 0x140. The last sweep opens the same
+    // right-hand sprite from 0x140 upwards.
     int sweep_i = 0;                                 // di (frame counter)
+    int back_x = 0x188;                              // var_C ([esp+0Ch])
     for (int x = -0x48; x != 4; x += 4) {             // loc_57143 (`cmp cx,4; jnz`)
         if (should_exit_) break;
         const int p = ((sweep_i++ / 2) % 7);         // `sub eax,edx; sar 1; idiv 7`
         fx_blit_f(0x53 + p, x, 0x64);                // sub_56217
-        fx_blit_f(0x4C + p, x, 0x64);                // sub_56217
+        fx_blit_f(0x4C + p, back_x, 0x64);           // sub_56217 (second x)
+        back_x -= 4;                                 // sub ebx,4
         battle_fx_present();                         // 454B3 + 454D5 + 5E9E8
         wait_game_tick();                            // 499E4
     }
@@ -402,49 +407,84 @@ int CombatII::battle_fx_570a1(int unit_index, int tx, int ty, int k) {
     game_timer_set(0x14);                            // sub_1033B(14h)
     pal_ramp_set_width(0x14);                        // sub_5623E(14h)
     sfx(0x33);                                       // sub_4F4CD(33h)
+    // The original walks three independent slot passes each frame; only 0..0x4D increments
+    // var_4 (the 0x1F4 kill counter), and 0x4E/0x4F are drawn last of all (loc_57591).
     int kills = 0;                                   // var_4
-    for (int guard = 0; guard < 0x400 && !should_exit_; ++guard) {
+    bool done = false;
+    for (int guard = 0; guard < 0x400 && !should_exit_ && !done; ++guard) {
         // sub_10AEB + sub_12BEE, then shake camera fine y by rand%3-1.
         cam_fine_y_ = (int16_t)(combat_rand(3) - 1);         // word dword_BA838
         pal_ramp_step(0x4B, 0x32);                           // sub_562C1(4Bh,32h); the result is unused
-        for (int i = 0; i < kProSlots && !should_exit_; ++i) {
+        // loc_5724A: slots 0..0x4D, the only pass that counts kills.
+        for (int i = 0; i < 0x4E && !should_exit_; ++i) {
             ProParticle& p = g_pro[i];
-            if (p.state == 0) {
-                if (i < 0x4E) {                          // slots 0..0x4D: explosio sparks
-                    const int r = combat_rand(4);
-                    if (r == 0) pro_spawn(i, combat_rand(320), combat_rand(200), 0x5A, 5, 1);
-                    else if (r == 1) pro_spawn(i, combat_rand(320), combat_rand(200), 0x5F, 8, 1);
-                } else if (i >= 0x50 && i < 0x5A) {      // loc_57361: four-direction columns
-                    const int r = combat_rand(12) & 3;
-                    static const int base[4] = {0x00, 0x09, 0x12, 0x1B};
-                    static const int px[4] = {0x1E, 0x1E, 0x122, 0x122};
-                    pro_spawn(i, px[r], combat_rand(200), base[r], 9, 1);
-                } else if (i >= 0x5A && i < 0x5F) {      // loc_57478: two rising side rows
-                    int r = combat_rand(12) - 1;
-                    if (r < 0) r = 0;
-                    r &= 3;
-                    static const int base[4] = {0x24, 0x2E, 0x38, 0x42};
-                    static const int px[4] = {0xDC, 0xDC, 0x6E, 0x6E};
-                    int y = combat_rand(10);
-                    if (r == 1 || r == 2) y += 0x64;     // `add edx,64h`
-                    pro_spawn(i, px[r], y, base[r], 10, 1);
+            if (p.state == 0) {                          // explosio sparks
+                const int r = combat_rand(4);
+                if (r == 0) {
+                    const int y = combat_rand(200);          // first rand: %0C8h
+                    const int x = combat_rand(320);          // second rand: %140h
+                    pro_spawn(i, x, y, 0x5A, 5, 1);
+                } else if (r == 1) {
+                    const int y = combat_rand(200);
+                    const int x = combat_rand(320);
+                    pro_spawn(i, x, y, 0x5F, 8, 1);
                 }
-                continue;
-            }
-            if (i >= 0x4E && i < 0x50) {                 // 0x4E/0x4F always draw
-                fx_blit_f(p.base + p.frame, p.x, p.y);
-                ++p.frame;
-                if (p.frame >= p.cycle) p.frame = 0;
                 continue;
             }
             fx_blit_f(p.base + p.frame, p.x, p.y);       // sub_1FFFE(base + frame)
             ++p.frame;
             if (p.frame == p.cycle) {                    // cycle end: switch off and count
                 pro_kill(i);
-                if (++kills > 0x1F4) break;              // `cmp si,1F4h; jg`
+                if (++kills > 0x1F4) {                   // `cmp si,1F4h; jg`
+                    done = true;
+                    break;
+                }
             }
         }
-        if (kills > 0x1F4) break;
+        if (kills > 0x1F4) done = true;                  // loc_5734F
+        if (!done) {
+            // loc_57361: slots 0x50..0x59, four-direction columns (no kill count).
+            for (int i = 0x50; i < 0x5A && !should_exit_; ++i) {
+                ProParticle& p = g_pro[i];
+                if (p.state == 0) {
+                    const int r = combat_rand(12) & 3;
+                    static const int base[4] = {0x00, 0x09, 0x12, 0x1B};
+                    static const int px[4] = {0x1E, 0x1E, 0x122, 0x122};
+                    pro_spawn(i, px[r], combat_rand(200), base[r], 9, 1);
+                    continue;
+                }
+                fx_blit_f(p.base + p.frame, p.x, p.y);   // sub_56217
+                ++p.frame;
+                if (p.frame == p.cycle) pro_kill(i);     // no count
+            }
+            // loc_57478: slots 0x5A..0x5E, two rising side rows (no kill count).
+            for (int i = 0x5A; i < 0x5F && !should_exit_; ++i) {
+                ProParticle& p = g_pro[i];
+                if (p.state == 0) {
+                    // Only rand%12 == 1..4 spawn; 0 and 5..11 create nothing.
+                    const int r = combat_rand(12) - 1;
+                    if (r >= 0 && r < 4) {
+                        static const int base[4] = {0x24, 0x2E, 0x38, 0x42};
+                        static const int px[4] = {0xDC, 0xDC, 0x6E, 0x6E};
+                        int y = combat_rand(100);        // rand%64h
+                        if (r == 1 || r == 2) y += 0x64; // `add edx,64h`
+                        pro_spawn(i, px[r], y, base[r], 10, 1);
+                    }
+                    continue;
+                }
+                fx_blit_f(p.base + p.frame, p.x, p.y);   // sub_56217
+                ++p.frame;
+                if (p.frame == p.cycle) pro_kill(i);     // no count
+            }
+            // loc_57591: the two fixed sprites are drawn last, over every particle.
+            for (int i = 0x4E; i < 0x50 && !should_exit_; ++i) {
+                ProParticle& p = g_pro[i];
+                fx_blit_f(p.base + p.frame, p.x, p.y);   // sub_56217
+                ++p.frame;
+                if (p.frame >= p.cycle) p.frame = 0;
+            }
+        }
+        if (done) break;
         battle_fx_present();                             // 454D5 + 5E9E8
         wait_game_tick();                                // 499E4
         if (guard % 6 == 5) sfx(0x33);                   // every 6 frames (var_10 == 5)
@@ -465,13 +505,16 @@ int CombatII::battle_fx_570a1(int unit_index, int tx, int ty, int k) {
     }
 
     // (4) Final horizontal sweep: cx 0 -> -0x4C by 4, frames 0x53+ / 0x4C+ (cx/2)%7.
-    // cx runs from 0 down to -0x4C (19 frames); the frame counter di starts at 0x140.
-    int back_i = 0;                                      // var_14 (counts up from 0x140)
+    // cx steps 0, -4, ... and the loop exits when it reaches -0x4C, so the body runs 19 times
+    // (last blit at -0x48). The frame counter di starts at 0x140, +4 each frame, and is the
+    // second blit's x (loc_576D1).
+    int back_i = 0;                                      // var_14 (frame counter)
     for (int x = 0; x != -0x4C; x -= 4) {                // loc_576D1 (`cmp cx,0FFB4h`)
         if (should_exit_) break;
-        const int p = ((back_i++ / 2) % 7);
+        const int i = back_i++;
+        const int p = ((i / 2) % 7);
         fx_blit_f(0x53 + p, x, 0x64);
-        fx_blit_f(0x4C + p, x, 0x64);
+        fx_blit_f(0x4C + p, 0x140 + i * 4, 0x64);        // di: 0x140, 0x144, ...
         battle_fx_present();                             // 454B3 + 454D5 + 5E9E8
         wait_game_tick();                                // 499E4
     }

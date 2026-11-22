@@ -85,6 +85,7 @@ int CombatII::battle_fx_58619(int unit_index, int tx, int ty, int k) {
     (void)k;
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return 0;
     if (!battle_nsp_load("moon.nsp") || magic_frames_.empty()) return 0;
+    weather_tick_enabled_ = false;                             // sub_103A8 (right after 1FEA4)
     const int nframes = (int)magic_frames_.size();
     auto& caster = units_[(size_t)unit_index];
     camera_center_on(tx, ty);                                  // sub_1124A
@@ -117,7 +118,7 @@ int CombatII::battle_fx_58619(int unit_index, int tx, int ty, int k) {
         pal_scale_range(0, 0x100, &battle_master_palette_[0][0], pct);
         wait_game_tick();
     }
-    if (should_exit_) { battle_nsp_release(); return 1; }
+    if (should_exit_) { weather_tick_enabled_ = true; battle_nsp_release(); return 1; }
 
     // 5EFB9 draws the moon frame directly on the work buffer; 12F2A draws only the hostile
     // units. The map/weather pass (10AEB/12BEE/4512E) and 454D5 are not part of this driver.
@@ -245,6 +246,7 @@ int CombatII::battle_fx_58619(int unit_index, int tx, int ty, int k) {
     for (int oi : list) {
         if ((size_t)oi < units_.size()) reset_unit_pose(units_[(size_t)oi]);   // sub_12124
     }
+    weather_tick_enabled_ = true;                              // sub_103A0
     battle_nsp_release();                                      // sub_1FFCD
     return 1;
 }
@@ -267,6 +269,7 @@ int CombatII::battle_fx_5a267(int unit_index, int tx, int ty, int k) {
     (void)tx; (void)ty; (void)k;
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return 0;
     if (!battle_nsp_load("sunl.nsp") || magic_frames_.empty()) return 0;
+    weather_tick_enabled_ = false;                             // sub_103A8 (right after 1FEA4)
     const int nframes = (int)magic_frames_.size();
     auto& caster = units_[(size_t)unit_index];
     // 1124A is not inside 5A267; the preceding 28889 announce path centres the camera.
@@ -330,6 +333,7 @@ int CombatII::battle_fx_5a267(int unit_index, int tx, int ty, int k) {
 
     caster.fx_sprite_hidden = false;                           // sub_11E04(caster)
     pal_shift_fade(0);                                         // 5FD1C(0) - original palette
+    weather_tick_enabled_ = true;                              // sub_103A0
     battle_nsp_release();                                      // sub_1FFCD
     return 1;
 }
@@ -349,6 +353,7 @@ int CombatII::battle_fx_5a566(int unit_index, int tx, int ty, int k) {
     (void)tx; (void)ty; (void)k;
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return 0;
     if (!battle_nsp_load("sunl2.nsp") || magic_frames_.empty()) return 0;
+    weather_tick_enabled_ = false;                             // sub_103A8 (right after 1FEA4)
     const int nframes = (int)magic_frames_.size();
     auto& caster = units_[(size_t)unit_index];
     // 1124A comes from the caller's 28889 announce path, not from 5A566. Kept for direct
@@ -407,6 +412,7 @@ int CombatII::battle_fx_5a566(int unit_index, int tx, int ty, int k) {
     caster.fx_sprite_hidden = false;                           // sub_11E04(caster)
     sfx(0x33);                                                 // sub_4F4CD(33h)
     pal_shift_fade(0);                                         // 5FD1C(0)
+    weather_tick_enabled_ = true;                              // sub_103A0
     battle_nsp_release();                                      // sub_1FFCD
     return 1;
 }
