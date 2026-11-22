@@ -71,39 +71,45 @@ int CombatII::battle_fx_2476e(int unit_index, int tx, int ty, int k) {
     }
     game_timer_set(2);                                                   // sub_1033B(2)
 
-    constexpr int kParticles = 16;                                       // `cmp bx,10h`
+    constexpr int kTrail = 16;                                           // `cmp bx,10h` (var_8A/var_AA)
     struct P { int x, y; };
-    P parts[kParticles];
+    P parts[kTrail + 1];                                                 // [0] head, [1..16] trail
     const int dx = ex - sx, dy = ey - sy;
     // sub_2476E: fsqrt -> fdiv dbl_77259 (3.0) -> __CHP -> fistp. The step divisors use that
     // truncated value, so /3.0 must be applied before the cast.
     const int dist = (int)(std::sqrt((double)dx * dx + (double)dy * dy) / 3.0);
     const int step_x = dist > 0 ? dx * 10 / dist : 0;                    // (delta*10)/dist
     const int step_y = dist > 0 ? dy * 10 / dist : 0;
-    for (int i = 0; i < kParticles; ++i) {
-        // The original starts all 16 coordinates at the caster centre and shifts them one
-        // step per frame to form a tail.
+    for (int i = 0; i <= kTrail; ++i) {
+        // The original starts the head and all 16 trail entries at the caster centre.
         parts[i].x = sx; parts[i].y = sy;
     }
     bool moving = (step_x != 0 || step_y != 0);
-    for (int guard = 0; guard < 0x200 && moving && !should_exit_; ++guard) {
+    for (int t = 0; t < 0x200 && moving && !should_exit_; ++t) {
         moving = false;
-        for (int i = kParticles - 1; i > 0; --i) parts[i] = parts[i - 1];  // loc_24D9D tail shift
+        for (int i = kTrail; i > 0; --i) parts[i] = parts[i - 1];        // loc_24D9D tail shift
         parts[0].x += step_x;
         parts[0].y += step_y;
         if (std::abs(ex - parts[0].x) > std::abs(step_x) ||
             std::abs(ey - parts[0].y) > std::abs(step_y)) moving = true;
-        for (int i = 0; i < kParticles; ++i) {
-            // Four overlaid sprites: frames (i%4)+9, (i%3)+9, (i%4)+4, (i%5)+4.
-            const int f1 = (i % 4) + 9;
-            const int f2 = (i % 3) + 9;
-            const int f3 = (i % 4) + 4;
-            const int f4 = (i % 5) + 4;
-            if (f1 < nframes) battle_fx_blit(f1, parts[i].x, parts[i].y);
-            if (f2 < nframes) battle_fx_blit(f2, parts[i].x + 2, parts[i].y);
-            if (f3 < nframes) battle_fx_blit(f3, parts[i].x, parts[i].y - 2);
-            if (f4 < nframes) battle_fx_blit(f4, parts[i].x + 2, parts[i].y - 2);
-        }
+        // loc_24D98 pushes the previous head into the 16-entry trail, then the seven
+        // sub_1FFFE calls use entries 15,12,9,6,3,0 and the current head. Frames come from
+        // the frame counter (var_24), not from the particle/entry index.
+        const int f1 = (t % 4) + 9;
+        const int f2 = (t % 3) + 9;
+        const int f3 = (t % 4) + 4;
+        const int f4 = (t % 5) + 4;
+        const int f5 = t % 4;
+        auto blit_trail = [&](int f, int slot) {
+            if (f >= 0 && f < nframes) battle_fx_blit(f, parts[slot].x, parts[slot].y);
+        };
+        blit_trail(f1, 16);   // [15] = head-16
+        blit_trail(f2, 13);   // [12] = head-13
+        blit_trail(f1, 10);   // [9]  = head-10
+        blit_trail(f3, 7);    // [6]  = head-7
+        blit_trail(f3, 4);    // [3]  = head-4
+        blit_trail(f4, 1);    // [0]  = previous head
+        blit_trail(f5, 0);    // current head
         battle_fx_present();                                             // sub_454B3 + sub_5E9E8
         wait_game_tick();                                                // sub_499E4
     }
@@ -122,9 +128,9 @@ int CombatII::battle_fx_2476e(int unit_index, int tx, int ty, int k) {
 
 // sub_25047(eax/edx=caster tile, bl=variant): heal1.nsp shrinking ring (party heal).
 //   Ten angles (0x40 apart) start at radius var_8=0xA0 and shrink by 1 (variant 1) or 4 (other)
-//   per frame while drawing frame (counter%4). Variant 1 also rotates each angle by +0x0A per
-//   frame (spinning ring). At radius 0: 4F4CD(0x32) -> 1033B(5) -> 15 frames of (i%6)+0Ch ->
-//   1FFCD.
+//   per frame. Frame = radius%4 for variant 1, otherwise (radius/4)%4 (loc_250F1/loc_2510C).
+//   Variant 1 also rotates each angle by +0x0A per frame (spinning ring). At radius 0:
+//   4F4CD(0x32) -> 1033B(5) -> 15 frames of (i%6)+0Ch -> 1FFCD.
 int CombatII::battle_fx_25047(int unit_index, int tx, int ty, int k) {
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return 0;
     if (!battle_nsp_load("heal1.nsp") || magic_frames_.empty()) return 0;
@@ -140,11 +146,12 @@ int CombatII::battle_fx_25047(int unit_index, int tx, int ty, int k) {
         cy = (ty - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y + 8;
     }
     game_timer_set(2);                                                   // sub_1033B(2)
-    int angles[10], radius = 0xA0, frame_no = 0;
+    int angles[10], radius = 0xA0;
     for (int i = 0; i < 10; ++i) angles[i] = i * kAngleStep;
     while (radius > 0 && !should_exit_) {                                // `cmp var_8,0; jle` (exit)
-        const int f = frame_no % 4;                                      // sar/idiv 4 -> remainder
-        ++frame_no;
+        // loc_250F1/loc_2510C: variant 1 uses radius%4, the others (radius/4)%4, so the
+        // first four frames are 0,3,2,1 as the radius shrinks.
+        const int f = variant1 ? (radius % 4) : ((radius / 4) % 4);
         for (int i = 0; i < 10; ++i) {
             int px, py;
             ring_point(angles[i], radius, cx, cy, px, py);
@@ -199,9 +206,9 @@ int CombatII::battle_fx_25254(int unit_index, int tx, int ty, int k) {
             if (angles[i] >= kAngleMax) angles[i] = 0;
         }
         radius += 2;                                                     // 454D5(var_8+2)
-        if ((cy % 8) == 0) sfx(0x32);                                    // `idiv 8; test edx,edx`
         battle_fx_present();
         wait_game_tick();
+        if ((cy % 8) == 0) sfx(0x32);                                    // `idiv 8; test edx,edx` after 499E4
     }
     battle_nsp_release();                                                // sub_1FFCD
     return 1;
@@ -254,9 +261,10 @@ int CombatII::battle_fx_253dc(int unit_index, int tx, int ty, int k) {
 }
 
 // sub_25591(eax=cx, dx=cy): wideheal.nsp five-layer expanding ring (wide heal 3).
-//   Keeps a 50-entry angle table (five groups of ten, 0x40 apart) and adds one ring every 10
-//   frames. Ring r (0..4) grows from radius 0 to 0xA0 by 7,5,5,5,5 while rotating +4 per frame.
-//   Frame = 0x0A + (4 - (t%0x1E)), i.e. it cycles 0x0E..0x0A over a 30-frame period.
+//   Keeps a 50-entry angle table (five groups of ten, 0x40 apart). Ring r starts when the
+//   frame counter passes r*10, grows from radius 0 to 0xA0 by 7,5,5,5,5 and rotates +5 (ring 1)
+//   or +4 (the others) per frame. Frame = 0x0A + (4 - radius/0x1E) per ring, i.e. 0x0E..0x09
+//   as that ring expands. Runs 0x96 frames with 4F4CD(0x32) every 10.
 int CombatII::battle_fx_25591(int unit_index, int tx, int ty, int k) {
     (void)tx; (void)ty; (void)k;
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return 0;
@@ -273,28 +281,30 @@ int CombatII::battle_fx_25591(int unit_index, int tx, int ty, int k) {
     int radius[kRings] = {0, 0, 0, 0, 0};
     for (int r = 0; r < kRings; ++r)
         for (int i = 0; i < kPerRing; ++i) angles[r * kPerRing + i] = i * kAngleStep;
-    static const int kGrow[kRings] = {7, 5, 5, 5, 5};                    // radius growth per ring
-    int t = 0;
-    for (int guard = 0; guard < 0x400 && !should_exit_; ++guard) {
-        const int f = 0x0A + (4 - (t % 0x1E));                           // idiv 1Eh -> remainder
-        int drawn = 0;
+    static const int kGrow[kRings] = {7, 5, 5, 5, 5};                    // var_30/var_30+2/var_2C/...
+    static const int kSpin[kRings] = {5, 4, 4, 4, 4};                    // ring 1 adds 5, the rest 4
+    for (int t = 0; t < 0x96 && !should_exit_; ++t) {                    // `cmp bx,96h`
         for (int r = 0; r < kRings; ++r) {
-            if (t < r * 10) continue;                                    // `cmp var_10, r*10; jle`
+            if (t <= r * 10) continue;                                   // loc_257A2 etc.: jle threshold
+            // Frame is recomputed from this ring's current radius (loc_2567F/257A2/258C3/
+            // 259E4/25B07): 0x0A + (4 - radius/0x1E).
+            const int f = 0x0A + (4 - radius[r] / 0x1E);
             for (int i = 0; i < kPerRing; ++i) {
                 int px, py;
                 ring_point(angles[r * kPerRing + i], radius[r], cx, cy, px, py);
-                if (f < nframes) battle_fx_blit(f, px, py);
-                angles[r * kPerRing + i] += 4;                           // angle +4
+                if (f >= 0 && f < nframes) battle_fx_blit(f, px, py);
+                angles[r * kPerRing + i] += kSpin[r];                    // angle +5 / +4
                 if (angles[r * kPerRing + i] >= kAngleMax) angles[r * kPerRing + i] = 0;
             }
             radius[r] += kGrow[r];
-            if (radius[r] > 0xA0) radius[r] = 0;                         // ring reset
-            ++drawn;
+            if (radius[r] > 0xA0) {                                      // loc_25787 etc.
+                for (int i = 0; i < kPerRing; ++i) angles[r * kPerRing + i] = i * kAngleStep;
+                radius[r] = 0;
+            }
         }
-        if (!drawn) { battle_fx_present(); wait_game_tick(); ++t; continue; }
-        battle_fx_present();
-        wait_game_tick();
-        ++t;
+        battle_fx_present();                                             // 454B3 + 454D5 + 5E9E8
+        wait_game_tick();                                                // 499E4
+        if ((t % 10) == 0) sfx(0x32);                                    // `idiv 0Ah` on the frame counter
     }
     battle_nsp_release();                                                // sub_1FFCD
     return 1;
@@ -410,6 +420,8 @@ int CombatII::battle_fx_26391(int unit_index, int tx, int ty, int k) {
 // sub_26584(eax/edx=caster tile, ebx=direction (esi)): marmor.nsp magic-defence effect.
 //   After 1124A it moves the target centre y by +6 and draws one frame per tick for 30 frames,
 //   frame = direction*7 + (t%7) (direction*7 selects a 7-frame group per direction).
+//   Each frame is sub_10AEB -> [sub_12BEE when t%7 < 5] -> sub_1FFFE -> [sub_12BEE when
+//   t%7 >= 5] -> sub_454D5 -> sub_5E9E8, with no weather/message/drop passes.
 //   1033B(0x0A), 4F4CD(0x32) at start.
 int CombatII::battle_fx_26584(int unit_index, int tx, int ty, int k) {
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return 0;
@@ -428,10 +440,20 @@ int CombatII::battle_fx_26584(int unit_index, int tx, int ty, int k) {
     game_timer_set(0x0A);                                                // sub_1033B(0Ah)
     const int dir = (k / 3) & 0x7;                                       // original esi = direction (0..6)
     for (int t = 0; t < 0x1E && !should_exit_; ++t) {                    // `cmp cx,1Eh`
-        const int f = dir * 7 + (t % 7);                                 // `imul eax,ebx(7); + dl`
-        if (f < nframes) battle_fx_blit(f, cx, cy);                      // sub_1FFFE
-        battle_fx_present();
-        wait_game_tick();
+        const int phase = t % 7;
+        const int f = dir * 7 + phase;                                   // `imul eax,ebx(7); + dl`
+        const bool units_after_effect = (phase >= 5);                    // `cmp dl,4; jbe`
+        if (units_after_effect && f < nframes)
+            battle_fx_blit_under_units(f, cx, cy);                       // sub_1FFFE before sub_12BEE
+        render_battle_map(false, false, true);                           // sub_10AEB + sub_12BEE
+        if (!units_after_effect) {
+            if (f < nframes) battle_fx_blit(f, cx, cy);                  // sub_1FFFE over the units
+            battle_fx_flush();                                           // sub_12E01
+        }
+        battle_hud_time_ = battle_time_;                                 // 454D5 frame time
+        battle_fx_overlay();                                             // sub_454D5
+        battle_fx_commit();                                              // sub_5E9E8
+        wait_game_tick();                                                // sub_499E4
     }
     battle_nsp_release();                                                // sub_1FFCD
     return 1;

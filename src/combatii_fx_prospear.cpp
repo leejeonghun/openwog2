@@ -492,6 +492,7 @@ int CombatII::battle_fx_570a1(int unit_index, int tx, int ty, int k) {
     if (should_exit_) { battle_nsp_release(); return 1; }
 
     // (3) Keep only 0x4E/0x4F until the ramp reaches 0 (loc_57630).
+    cam_fine_y_ = 0;                                     // loc_57620: mov word ptr dword_BA838, 0
     for (int guard = 0; guard < 0x100 && !should_exit_; ++guard) {
         for (int i = 0x4E; i < 0x50; ++i) {
             ProParticle& p = g_pro[i];

@@ -109,7 +109,7 @@ int CombatII::battle_fx_23074(int unit_index, int tx, int ty, int k) {
         if (i % 10 == 0) drift += 2;
         for (int j = 0; j < kN; ++j) {
             py[j] += drift;                             // loc_235C8 (var_D4 array)
-            const int f = (j < 3) ? (j + 7) : (((py[j] & 0xFFFF) % 7) + 0x0E);
+            const int f = (j < 6) ? (j + 7) : (((py[j] & 0xFFFF) % 7) + 0x0E);
             battle_fx_blit(f, px[j], py[j]);
         }
         battle_fx_present();

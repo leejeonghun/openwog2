@@ -488,10 +488,10 @@ uint32_t CombatII::eval_condition(uint32_t offset, bool& satisfied) const {
     uint16_t flag_idx = c.u16();
     uint16_t flag_val = c.u16();
     if (!c.ok) return 0;
-    if (flag_idx != 0 && scenario_flags_[flag_idx & 0xFF] != (uint8_t)flag_val) {
+    if (flag_idx != 0 && scenario_flags_[flag_idx] != flag_val) {
         if (script_trace_)
             fprintf(stderr, "COMBAT: cond flag fail (idx=%u have=%u need=%u)\n",
-                    flag_idx, scenario_flags_[flag_idx & 0xFF], flag_val & 0xFF);
+                    flag_idx, scenario_flags_[flag_idx], flag_val & 0xFF);
         return 0;
     }
     satisfied = true;
@@ -663,7 +663,7 @@ CombatII::VmResult CombatII::run_vm(uint32_t offset) {
             uint16_t idx = c.u16();
             uint8_t val = c.u8();
             if (!c.ok) { abort_range(); break; }
-            scenario_flags_[idx & 0xFF] = val;
+            scenario_flags_[idx] = val;
             if (script_trace_) fprintf(stderr, "COMBAT: vm flag[%u] = %u\n", idx, val);
             break;
         }

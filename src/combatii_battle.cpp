@@ -2516,7 +2516,8 @@ bool CombatII::battle_quick_save_4f4ef() {
     // F0420/422/424 and sub_4F85C reads them back. V5 appends the eight 100-byte trigger fire
     // flag arrays in the exact sub_4F4EF order (they live in genesis.qsv, not BLACKBOX.DAT).
     // V6 appends byte_BA84D (weather_), byte_FF0B7 (battle_bgm_id_), byte_FF0B8 (battle_sfx_id_).
-    ok = ok && qsv_write_u32(f, 6);
+    // V7 widens scenario_flags_ from 256 bytes to 65536 bytes (R3-048).
+    ok = ok && qsv_write_u32(f, 7);
     const std::string& scen = current_scenario_name_;
     ok = ok && qsv_write_u32(f, (uint32_t)scen.size());
     if (ok && !scen.empty()) ok = fwrite(scen.data(), 1, scen.size(), f) == scen.size();
@@ -2690,7 +2691,7 @@ bool CombatII::battle_quick_load_4fd25() {
     uint32_t scen_len = 0, uw = 0;
     int32_t i32 = 0;
     ok = ok && qsv_read_u32(f, h.version) &&
-         (h.version >= 2 && h.version <= 6) &&
+         (h.version >= 2 && h.version <= 7) &&
          qsv_read_u32(f, scen_len) && scen_len < 256;
     if (ok && scen_len) {
         h.scen.resize(scen_len);
@@ -2734,7 +2735,7 @@ bool CombatII::battle_quick_load_4fd25() {
         char m2[8] = {};
         auto skip_u32 = [&](uint32_t& v) { return qsv_read_u32(f, v); };
         if (fread(m2, 1, 8, f) != 8 || memcmp(m2, "G2QSV2", 6) != 0 ||
-            !skip_u32(uw) || (uw < 2 || uw > 6) ||
+            !skip_u32(uw) || (uw < 2 || uw > 7) ||
             !skip_u32(uw) || uw >= 256) {
             fclose(f); return fail("quick load header corrupt (" + path + ")");
         }
@@ -2788,7 +2789,13 @@ bool CombatII::battle_quick_load_4fd25() {
             if (ok) tiles.push_back(e);
         }
     }
-    if (ok) ok = fread(scenario_flags_, 1, sizeof(scenario_flags_), f) == sizeof(scenario_flags_);
+    if (ok) {
+        // V2..V6 stored the original 256-byte flag block; V7 stores the full 64 KiB index space.
+        const size_t flag_bytes = (h.version >= 7) ? sizeof(scenario_flags_) : 256u;
+        ok = fread(scenario_flags_, 1, flag_bytes, f) == flag_bytes;
+        if (ok && flag_bytes < sizeof(scenario_flags_))
+            std::memset(scenario_flags_ + flag_bytes, 0, sizeof(scenario_flags_) - flag_bytes);
+    }
     if (ok) ok = fread(battle_fe04f_, 1, sizeof(battle_fe04f_), f) == sizeof(battle_fe04f_);
     if (ok) ok = fread(battle_fdf87_, 1, sizeof(battle_fdf87_), f) == sizeof(battle_fdf87_);
     if (ok) ok = fread(battle_stash_, 1, sizeof(battle_stash_), f) == sizeof(battle_stash_);

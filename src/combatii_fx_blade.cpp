@@ -246,7 +246,7 @@ int CombatII::battle_fx_5637d(int unit_index, int tx, int ty, int k) {
 
 // sub_22767(eax=ty, edx=tx): crystal.nsp, six crystals in orbit.
 //   1FEA4("crystal.nsp", 0A0h) -> 1124A -> anchor 10971(tx)+0Ch / 10988(ty) -> 1033B(3) ->
-//   edi (frame spacing counter) = 0A0h, -2 per frame, so 80 frames.
+//   edi (frame spacing counter) = 0A0h, -2 per frame, so 81 frames (0A0h..0 inclusive).
 //   Each frame: angle += 14h (20), wrapping to 0 at 280h (640). Position = centre +
 //   (cos,sin)(angle/100) * bdl_771D0 (= 160.0). The 6-slot trail shifts by one and six frames are
 //   drawn (frames 0..5, skipped when x < 0FFFFFFFBh or off screen). When the loop ends (counter < 0)
@@ -265,7 +265,7 @@ int CombatII::battle_fx_22767(int unit_index, int tx, int ty, int k) {
     const int kStep = 0x14, kWrap = 0x280;                  // angle unit = degrees * 100/360
     std::vector<FxPoint> trail(6, FxPoint{cx, cy});
     int angle = 0;
-    for (int frame_no = 0; frame_no < 0x50 && !should_exit_; ++frame_no) {   // 0A0h / 2
+    for (int frame_no = 0; frame_no <= 0x50 && !should_exit_; ++frame_no) {  // 0A0h, 09Eh, ..., 0
         angle = (angle + kStep) % kWrap;
         const double rad = (double)angle / 100.0;           // flt_771CC = 100.0
         FxPoint p;
@@ -412,7 +412,7 @@ int CombatII::battle_fx_2690b(int unit_index, int tx, int ty, int k) {
 //   Port: 5F305 is battle_fx_blit_tinted(frame, x, y, 0x28, {1}); the extra 1FFFE is one more
 //   battle_fx_blit of the same frame.
 int CombatII::battle_fx_275a4(int unit_index, int tx, int ty, int k) {
-    (void)unit_index; (void)k;
+    (void)unit_index;
     if (!battle_nsp_load("dna.nsp") || magic_frames_.empty()) return 0;
     camera_center_on(tx, ty);                               // sub_1124A
     int cx = 0, cy = 0;
@@ -430,9 +430,10 @@ int CombatII::battle_fx_275a4(int unit_index, int tx, int ty, int k) {
         battle_fx_blit_tinted(f, cx + magic_frames_[(size_t)f].xo,
                                  cy + magic_frames_[(size_t)f].yo, 0x28, {0x01}); // sub_5F305
         if (i > 5) {                                                 // extra 1FFFE after loc_2769F
-            const int g = std::min(nframes - 1, 5 + (i % 6));
-            battle_fx_blit(g, cx + magic_frames_[(size_t)g].xo,
-                              cy + magic_frames_[(size_t)g].yo);
+            const int g = 5 + k * 6 + (i % 6);                       // 5 + ([var_A+3]>>24)*6 + cx%6
+            if (g >= 0 && g < nframes)
+                battle_fx_blit(g, cx + magic_frames_[(size_t)g].xo,
+                                  cy + magic_frames_[(size_t)g].yo);
         }
         battle_fx_present();                                // sub_5E9E8
         wait_game_tick();

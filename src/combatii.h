@@ -2718,7 +2718,7 @@ private:
     uint8_t battle_map_effect_count_ = 0; // byte_F040C
     uint8_t battle_map_effect_row_ = 0;   // byte_F040D
     // AI_CTRL.ICO #13 in DOS is the unit-command ring entry that toggles [+0x83].
-    uint8_t  scenario_flags_[256] = {}; // word_FDF85 (byte array indexed by the condition block)
+    uint8_t  scenario_flags_[65536] = {}; // word_FDF85 (byte array indexed by the 16-bit flag index)
     uint8_t  script_fired_[100] = {};
     uint8_t  area_trigger_fired_[100] = {};
     int      script_forced_target_ = -1; // dword_11024C: units_ index (-1 = none); unit selectors sel >= 10 in scripts point here (sub_5019C)
