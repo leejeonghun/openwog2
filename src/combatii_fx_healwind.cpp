@@ -72,7 +72,7 @@ int CombatII::battle_fx_25c88(int unit_index, int tx, int ty, int k) {
             if (fr >= nframes) fr = nframes - 1;
             battle_fx_blit(fr, px[i], py[i]);                             // sub_1FFFE
         }
-        battle_fx_present();                                              // sub_454B3 + sub_5E9E8
+        battle_fx_present_454b3();                                        // sub_454B3 + sub_5E9E8
         wait_game_tick();                                                 // sub_499E4
     }
     battle_nsp_release();                                                 // sub_1FFCD
@@ -192,7 +192,7 @@ int CombatII::battle_fx_25dfe(int unit_index, int k) {
         }
         --sprite_y;                                                            // ASM 30787-30793: dec [esp+0x560]
         pal_shift_fade(pal_pct);                                               // sub_5FD1C([esp+0x568])
-        battle_fx_present();                                                   // 454B3 + 5E9E8
+        battle_fx_present_454b3();                                             // 454B3 (incl. 454D5) -> 1FFFE -> 5E9E8
         wait_game_tick();                                                      // 5E943 + 499E4
     }
     if (should_exit_) {
@@ -201,7 +201,7 @@ int CombatII::battle_fx_25dfe(int unit_index, int k) {
     }
 
     // Step 6 exit: 45559, palette pct 100..8 (-4), 1FFCD, then restore the camera.
-    present_cutscene_frame();                                                   // sub_45559
+    battle_fx_present_454b3();                                                  // sub_45559 = 454B3 + 5E9E8
     for (int pct = 0x64; pct > 4; pct -= 4) pal_shift_fade(pct);
     battle_nsp_release();                                                       // sub_1FFCD
     camera_center_on(cx, cy);                                                   // sub_1124A

@@ -237,8 +237,7 @@ int CombatII::battle_fx_59a70(int caster_index, int revived_index) {
             const int fx = (f & 3) + 9;
             if (fx < nframes) {
                 const MagicFxFrame& fr = magic_frames_[(size_t)fx];
-                battle_fx_blit_tinted_unclipped(fx, 0xA0 + fr.xo, 0x4C + fr.yo, 0x50,
-                                                {0x01, 0x30, 0x31, 0x32, 0x33, 0x34, 0x35}); // sub_5F29D(611AA)
+                battle_fx_blit(fx, 0xA0 + fr.xo, 0x4C + fr.yo);     // sub_5EE51
             }
         } else if (f <= 0x0F) {                                     // frame edi (0Dh..0Fh), tinted
             if (f < nframes) {
@@ -266,11 +265,12 @@ int CombatII::battle_fx_59a70(int caster_index, int revived_index) {
 
     // ---- (8) restore ----
     A.fx_sprite_hidden = false;                                    // sub_11E04(caster)
+    render_battle_frame();                                         // sub_454B3
     uint8_t rev[kPalLen];
     for (int k = 0; k < kPalLen; ++k)                              // "swap copy - master"
         rev[k] = (uint8_t)(master[k] - wash_pal[k]);
-    for (int pct = 0; pct <= 0x64; pct += 0x0A) apply_pal(0, 0x100, wash, pct);
-    for (int pct = 0; pct <= 0x64; pct += 2) apply_pal(0, 0x100, rev, pct);
+    apply_pal(0, 0x100, wash, 0x64);                               // sub_5FD1C(pct 6Eh -> 64h)
+    apply_pal(0, 0x100, rev, 0x64);                                // sub_5FD1C(pct 66h -> 64h)
     pal_load_range(0, 0x100, master);                              // sub_103A0
     battle_nsp_release();                                          // sub_1FFCD
     reset_unit_pose(A);                                            // sub_12124 (caster)

@@ -12,7 +12,7 @@
 //     (2) Three meteors (i=0..2):
 //         life<0 respawns: life=0x64, y=-(499BD(6Eh)+1Eh) (-30..-139),
 //           x=499BD(12Ch)+0DCh (220..519), sfx counter=0, spawn counter (var_4)++.
-//         life>=0Eh (active): frame=(life/5)/3, y+=0Ah, x-=0Ch,
+//         life>=0Eh (active): frame=(life/5)%3, y+=0Ah, x-=0Ch,
 //           draw 1FFFE(frame, x, y) while y>-32h && y<0C8h; life-=5;
 //           sfx counter==0 -> 4F4CD(33h) then counter++.
 //         life<0Eh (falling/gone): frame=7-life/2, camera shake
@@ -73,7 +73,7 @@ int CombatII::battle_fx_21e16(int unit_index, int tx, int ty, int k) {
                 ++spawned;
             }
             if (life[i] >= 0x0E) {                                   // active (loc_2204A)
-                const int f = (life[i] / 5) / 3;                     // (life/5)/3
+                const int f = (life[i] / 5) % 3;                     // (life/5)%3
                 my[i] = (int16_t)(my[i] + 0x0A);                     // y += 0Ah
                 mx[i] = (int16_t)(mx[i] - 0x0C);                     // x -= 0Ch
                 const int y = my[i], x = mx[i];

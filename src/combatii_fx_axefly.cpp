@@ -54,7 +54,7 @@ int CombatII::battle_fx_2dd7a(int unit_index, int tx, int ty, int k) {
     game_timer_set(0x19);                                            // sub_1033B(19h)
     for (int i = 0; i < 2 && !should_exit_; ++i) {
         u.anim_frame = (uint8_t)(i + 7);                             // `mov al,bl; add al,7`
-        battle_fx_present();                                         // sub_454B3 + sub_5E9E8
+        battle_fx_present_454b3();                                   // sub_454B3 + sub_5E9E8
         wait_game_tick();                                            // sub_499E4
     }
     if (should_exit_) { battle_nsp_release(); return 1; }
@@ -111,7 +111,7 @@ int CombatII::battle_fx_2dd7a(int unit_index, int tx, int ty, int k) {
     // (6) tail
     if (should_exit_) { battle_nsp_release(); return 1; }
     reset_unit_pose(units_[(size_t)unit_index]);                     // sub_12124
-    present_cutscene_frame();                                        // sub_45559
+    battle_fx_present_454b3();                                       // sub_45559 = sub_454B3 + sub_5E9E8
     game_timer_set(0x20);                                            // sub_499DA(20h)
     wait_game_tick();                                                // 499DA falls through to 499E4
     battle_nsp_release();                                            // sub_1FFCD (loc_2DA2B)

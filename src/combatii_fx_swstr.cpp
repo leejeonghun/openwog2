@@ -39,9 +39,8 @@
 //   - 2D48A fills the palette with grey, waits al ticks and restores it; the port reproduces
 //     the order with two 5F9AE calls plus one game_timer_set/wait_game_tick.
 //   - The flat-colour argument ecx (1Ch/1Bh/1Ah) of 5F093 is used as the palette index.
-//   - 2D4EB's two frames only call 454B3 + 5E9E8, but the port uses battle_fx_present
-//     (454B3 + 5E9E8 + 454D5), so the HUD/overlay is drawn once more (the same approximation
-//     as the other drivers).
+//   - 2D4EB's two frames call only sub_454B3 (which falls through into 454D5) + 5E9E8, so
+//     battle_fx_present_454b3 omits 5046B/50216/render_sprites.
 #include "combatii.h"
 #include "combatii_internal.h"
 #include <cstdint>
@@ -102,7 +101,7 @@ int CombatII::battle_fx_2d7d2(int unit_index, int k) {
     for (int i = 0; i < 2 && !should_exit_; ++i) {
         if ((size_t)unit_index >= units_.size()) break;
         units_[(size_t)unit_index].anim_frame = (uint8_t)(7 + i);    // [64h] = 7, 8
-        battle_fx_present();                                        // 454B3 + 5E9E8
+        battle_fx_present_454b3();                                  // 454B3 + 5E9E8
         wait_game_tick();                                           // sub_499E4
     }
     if (should_exit_) { battle_nsp_release(); return 1; }

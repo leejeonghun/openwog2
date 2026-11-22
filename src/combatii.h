@@ -2370,6 +2370,7 @@ private:
     // [5Ch] <= 6, the stored record's sprite is filled at the live unit's anchor too.
     void battle_fx_silhouette_13669(int unit_index, int color);
     void battle_fx_present();                                  // sub_454B3 + sub_5E9E8
+    void battle_fx_present_454b3(bool capture_dump = true);    // sub_454B3 (incl. 454D5) -> 12E01 -> 5E9E8 (no 5046B/50216/15D0A)
     void blit_frame_tinted(int x, int y, const MagicFxFrame& fr, int tint_pct,
                            bool clip = true,
                            const std::array<uint64_t, 4>* tint_mask = nullptr,

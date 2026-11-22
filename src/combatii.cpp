@@ -151,6 +151,16 @@ void CombatII::battle_fx_world_dim() {
     battle_fx_overlay();
 }
 
+// sub_454B3 (10AEB + [1547F] + 12BEE + 4512E + fall-through 454D5) -> 12E01 -> 5E9E8,
+// without sub_5046B (message window), sub_50216 (drop layer), or render_sprites (15D0A).
+void CombatII::battle_fx_present_454b3(bool capture_dump) {
+    battle_hud_time_ = battle_time_;
+    battle_fx_world();
+    battle_fx_overlay();
+    battle_fx_flush();
+    battle_fx_commit(capture_dump);
+}
+
 // sub_10AEB + sub_12D65: the reduced frame the full-screen dark spells use. sub_12D65 has no
 // sub_122C4/sub_12567 pass, so it draws no normal/attacking/water units and no weather - only
 // the map, its top tiles and the sub_18605 item/field markers.

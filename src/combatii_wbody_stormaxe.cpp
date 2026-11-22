@@ -21,7 +21,7 @@
 //       The trail mix depends on var_14 (rem = var_4 % 3, x = si + xo):
 //         0: (10h+rem, var_10) (10h+rem, var_28) (13h+rem, di)
 //         1: (13h+rem, var_10) (10h+rem, var_28) (10h+rem, di)
-//         2: (10h+rem, var_10) (13h+rem, var_28) (13h+rem, di)
+//         2: (10h+rem, var_10) (13h+rem, var_28) (10h+rem, di)
 //       Then 5E9E8 and 499E4. var_8 wraps 8 -> 1, var_4 wraps 2 -> 0 and var_14 wraps
 //       2 -> 0 after each group of three sub-frames.
 //   (7) Tail: dword_7001C = 0Ch, dword_BA838 = 0, 1033B(0Ah, 100h), 5F9AE(0,100h)
@@ -134,7 +134,7 @@ int CombatII::battle_fx_35fc2_anim(int unit_index) {
                     } else {                                            // loc_36340
                         blit(0x10 + rem, si, v10);
                         blit(0x13 + rem, si, v28);
-                        blit(0x13 + rem, si, vc);
+                        blit(0x10 + rem, si, vc);
                     }
                     v10 = (int16_t)(v10 - 0x2D);
                     v28 = (int16_t)(v28 - 0x2D);
