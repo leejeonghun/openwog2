@@ -11215,10 +11215,10 @@ int CombatII::battle_weapon_f1474(int unit_index, int idx, int dx) {
         // pose 9, then two 454B3 + 1E2EA(1/2) + 5E9E8 frames.
         u.anim_frame = 7;                                        // mov [esi+64h],7
         game_timer_set(0x10);                                    // sub_1033B(10h)
-        battle_fx_present();                                     // sub_45559
+        battle_fx_present_454b3();                               // sub_45559
         wait_game_tick();                                        // sub_499E4
         u.anim_frame = 8;
-        battle_fx_present();                                     // sub_45559
+        battle_fx_present_454b3();                               // sub_45559
         wait_game_tick();                                        // sub_499E4
         sfx(0x14);                                               // sub_4F4CD(14h)
         wait_game_tick();                                        // sub_499E4
@@ -11253,7 +11253,7 @@ int CombatII::battle_weapon_f1474(int unit_index, int idx, int dx) {
         game_timer_set(0x19);                                   // sub_1033B(19h)
         for (int i = 0; i < 2 && !should_exit_; ++i) {
             u.anim_frame = (uint8_t)(7 + i);                    // `add al,7`
-            battle_fx_present();                                // 454B3 + 5E9E8
+            battle_fx_present_454b3();                          // 454B3 + 5E9E8
             wait_game_tick();                                   // sub_499E4
         }
         if (should_exit_) return 1;
@@ -11433,7 +11433,7 @@ int CombatII::battle_weapon_f1474(int unit_index, int idx, int dx) {
         u.anim_frame = 6;
         game_timer_set(0x1E);
         for (int i = 0; i < 3 && !should_exit_; ++i) {
-            battle_fx_present();                                  // 454B3 + 5E9E8
+            battle_fx_present_454b3();                            // 454B3 + 5E9E8
             ++u.anim_frame;
             wait_game_tick();                                     // sub_499E4
         }
@@ -11569,7 +11569,7 @@ int CombatII::battle_weapon_f1474(int unit_index, int idx, int dx) {
         if (should_exit_) { battle_nsp_release(); return 1; }
         const int r = battle_weapon_2caf7_loop(unit_index, dx, add); // sub_2CAF7
         if ((size_t)unit_index < units_.size()) reset_unit_pose(units_[(size_t)unit_index]); // 12124
-        if (!should_exit_) battle_fx_present();                   // 454B3 + 5E9E8 (before 1FFCD)
+        if (!should_exit_) battle_fx_present_454b3();             // 454B3 + 5E9E8 (before 1FFCD)
         battle_nsp_release();                                     // sub_1FFCD
         if (battle_trace_) fprintf(stderr, "COMBAT: f1474[%d]=2E25B unit=%d dx=%d R=%d -> 2CAF7(%d,%d) -> %d\n",
                                     idx, u.id, dx, radius, dx, add, r);
@@ -12530,7 +12530,7 @@ int CombatII::battle_weapon_f1474_ext(int unit_index, int idx, int dx) {
             u.anim_frame = 7;                                // [64h]=7
             game_timer_set(0x20);                            // sub_1033B(20h)
             for (int i = 0; i < 3 && !should_exit_; ++i) {
-                battle_fx_present();                         // sub_45559
+                battle_fx_present_454b3();                   // sub_45559
                 ++u.anim_frame;                              // 7 -> 8 -> 9 -> 10
                 wait_game_tick();                            // sub_499E4
             }
@@ -12594,11 +12594,11 @@ int CombatII::battle_weapon_f1474_ext(int unit_index, int idx, int dx) {
                 wait_game_tick();                            // sub_499E4 x2
                 wait_game_tick();
                 u.anim_frame = 0;
-                battle_fx_present();                         // sub_45559
+                battle_fx_present_454b3();                   // sub_45559
             } else {
                 for (int f = 7; f < 0x0A && !should_exit_; ++f) { // poses 7,8,9
                     u.anim_frame = (uint8_t)f;
-                    battle_fx_present();                     // sub_45559
+                    battle_fx_present_454b3();               // sub_45559
                     wait_game_tick();                        // sub_499E4
                 }
             }

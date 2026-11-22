@@ -64,14 +64,14 @@ int CombatII::battle_fx_26c9a(int unit_index, int tx, int ty, int k) {
     for (int pass = 0; pass < 2 && !should_exit_; ++pass) {
         // loc_26D34: pct 0,14h,28h,3Ch,50h, then a single 45559 present.
         for (int t = 0; t <= 0x50 && !should_exit_; t += 0x14) fade(t);
-        present_cutscene_frame();                                  // sub_45559
+        battle_fx_present_454b3();                                 // sub_45559 = 454B3 + 5E9E8
         // loc_26D58: pct 64h,5Ah,...,0Ah without presenting.
         for (int t = 0x64; t > 0 && !should_exit_; t -= 0x0A) fade(t);
         if (pass == 1) break;                                     // cmp di,1 -> 26E0A
         game_timer_set(0x10);                                     // sub_1033B(10h)
         for (int i = 0; i < nframes && !should_exit_; ++i) {
             battle_fx_blit(i, cx, cy - 0x20);                     // sub_1FFFE + sub_5EE51
-            battle_fx_present();                                  // sub_454B3 + sub_5E9E8
+            battle_fx_present_454b3();                            // sub_454B3 -> 1FFFE -> 5E9E8
             wait_game_tick();                                     // sub_499E4
             if (i == 5) {                                         // frame 5: two extra ticks plus sound
                 wait_game_tick();
@@ -82,7 +82,7 @@ int CombatII::battle_fx_26c9a(int unit_index, int tx, int ty, int k) {
         battle_dim_row0_ = false;                                 // sub_44D6E(0)
     }
     battle_dim_row0_ = false;                                     // port cleanup on early exit
-    present_cutscene_frame();                                     // sub_45559
+    battle_fx_present_454b3();                                    // sub_45559 = 454B3 + 5E9E8
     battle_nsp_release();                                         // sub_1FFCD
     if (battle_trace_)
         fprintf(stderr, "COMBAT: 26C9A death victim=%d center=(%d,%d)\n", units_[(size_t)victim].id, cx, cy);

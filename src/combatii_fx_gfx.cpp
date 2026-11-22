@@ -360,7 +360,7 @@ void CombatII::battle_fx_white_flash_down(int down_step) {
 }
 
 void CombatII::battle_fx_white_flash(int up_step, int down_step) {
-    battle_fx_present();                               // sub_45559 (sub_284A3 only)
+    battle_fx_present_454b3();                         // sub_45559 (sub_284A3 only)
     battle_fx_white_flash_up(up_step);
     battle_fx_white_flash_down(down_step);
 }

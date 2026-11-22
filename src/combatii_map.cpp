@@ -2057,7 +2057,6 @@ void CombatII::render_battle_map(bool magic_pass, bool overlay_only, bool skip_m
         }
     };
     if (!overlay_only) {
-        highlight_draws_.clear();           // the sub_44DCC replay list is rebuilt on every sub_454B3 pass
         // Always draw FPM behind tiles when available (sub_10AEB order: sub_5EAE3 FPM first, then tiles
         // via sub_10010).
         // The FPM layer is drawn first so gaps between tiles show the background, as in sub_10AEB.
@@ -2190,12 +2189,6 @@ void CombatII::render_battle_map(bool magic_pass, bool overlay_only, bool skip_m
             int sx = (u.x - cam_tile_x_)*TOWN_TILE_W + cam_fine_x_ + UNIT_ANCHOR_X + u.walk_off_x;
             int sy = (u.y - cam_tile_y_)*TOWN_TILE_H + cam_fine_y_ + UNIT_ANCHOR_Y + u.walk_off_y;
             int foot_y = u.y * TOWN_TILE_H + 6 + u.walk_off_y;
-            // Units registered with sub_44D89 (dword_F9F08) are drawn a second time by sub_44DCC
-            // during 454D5 (above magic effects/dim, below the HUD). Copying the entry here lets
-            // the
-            // highlight pass replay the same pixels at the same coordinates.
-            const bool hl = std::find(battle_highlight_units_.begin(), battle_highlight_units_.end(),
-                                      (int)i) != battle_highlight_units_.end();
             // sub_12567 keeps three queues per row: E4C8C (normal units), E4854 (attacking
             // units, followed by sub_18605's field effects) and E4960/E4962 (water units, drawn
             // only after the whole 17-row loop).  sub_18605 also appends item sprites to the
@@ -2215,7 +2208,6 @@ void CombatII::render_battle_map(bool magic_pass, bool overlay_only, bool skip_m
                 e.order_x = sx;
                 e.order_owner = (int)i;
                 e.order_seq = draw_seq++;
-                if (hl) highlight_draws_.push_back(e);
                 draw_list.push_back(e);
             };
             // loc_12B16 passes var_30 + depth; sub_123C1 itself adds [65h]/[66h], so the
@@ -2259,7 +2251,6 @@ void CombatII::render_battle_map(bool magic_pass, bool overlay_only, bool skip_m
                 const int drop_x = sx - u.walk_off_x;
                 const int drop_y = sy - u.walk_off_y;
                 auto drop_push = [&](DrawEntry e) {
-                    if (hl) highlight_draws_.push_back(e);
                     drop_draws_.push_back(e);
                 };
                 if (dx > 1) {                             // dx 0/1: silhouette skipped, pillar drawn
@@ -2670,11 +2661,11 @@ void CombatII::render_battle_drop_layer() {
 
 // ---- sub_44DCC: redraw the units in the dword_F9F08 highlight list ----
 //   Called inside 454D5 after sub_12161 and before sub_13546 (above dim/magic effects, below the
-//   HUD). The original draws each unit pointer through sub_12F2A again; the port replays the draw
-//   entries render_battle_map built for the same units.
+//   HUD). The original walks the live pointer list and redraws each unit through sub_12F2A on
+//   every 454D5 pass, so the second pass of a two-454D5 frame (22AF9) also picks up the camera
+//   offset updated between them.
 void CombatII::render_highlight_units() {
-    for (const DrawEntry& e : highlight_draws_) blit_draw_entry(e);
-    highlight_draws_.clear();
+    for (int ui : battle_highlight_units_) battle_draw_unit_now(ui);   // sub_12F2A
 }
 
 // ---- sub_44D89: add a unit to the highlight list (max 59h entries) ----

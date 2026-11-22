@@ -64,7 +64,7 @@ int CombatII::battle_fx_3b9e1(int unit_index, int tx, int ty, int k) {
             const MagicFxFrame& fr = magic_frames_[(size_t)f];
             battle_fx_blit(f, cx + fr.xo, cy + fr.yo);            // sub_5EE51
         }
-        battle_fx_present();                                     // sub_454B3 + sub_5E9E8
+        battle_fx_present_454b3();                               // sub_454B3 + sub_5E9E8
         wait_game_tick();                                        // sub_499E4
     }
     battle_nsp_release();                                        // sub_1FFCD

@@ -56,7 +56,7 @@ int CombatII::battle_fx_23074(int unit_index, int tx, int ty, int k) {
         y += speed;                                    // `add ecx, esi`
         const int f = i % 4;                           // `idiv 4; imul edx,0Ch`
         battle_fx_blit(f, kStarX, y);                  // sub_1FFFE
-        battle_fx_present();                           // 454B3 + 5E9E8
+        battle_fx_present_454b3();                           // 454B3 + 5E9E8
         wait_game_tick();                              // sub_499E4
     }
     sfx(0x32);                                         // sub_4F4CD(32h)
@@ -69,7 +69,7 @@ int CombatII::battle_fx_23074(int unit_index, int tx, int ty, int k) {
         cam_fine_y_ = (i % 4 == 0) ? -4 : 0;
         const int f = i % 4;
         battle_fx_blit(f, kStarX, y);
-        battle_fx_present();
+        battle_fx_present_454b3();
         wait_game_tick();
     }
 
@@ -98,7 +98,7 @@ int CombatII::battle_fx_23074(int unit_index, int tx, int ty, int k) {
             const int f = (j < 3) ? (j + 4) : (((py[j] & 0xFFFF) % 7) + 0x0E);
             battle_fx_blit(f, px[j], py[j]);
         }
-        battle_fx_present();
+        battle_fx_present_454b3();
         wait_game_tick();
     }
 
@@ -112,7 +112,7 @@ int CombatII::battle_fx_23074(int unit_index, int tx, int ty, int k) {
             const int f = (j < 6) ? (j + 7) : (((py[j] & 0xFFFF) % 7) + 0x0E);
             battle_fx_blit(f, px[j], py[j]);
         }
-        battle_fx_present();
+        battle_fx_present_454b3();
         wait_game_tick();
     }
 
@@ -131,7 +131,7 @@ int CombatII::battle_fx_23074(int unit_index, int tx, int ty, int k) {
                                  : (((qy[i] & 0xFFFF) % 7) + 0x16);
         battle_fx_blit(f, qx[i], qy[i]);
     }
-    battle_fx_present();
+    battle_fx_present_454b3();
     wait_game_tick();
 
     // ---- (7) rising afterglow (50 frames, loc_2373D / loc_23777) ----
@@ -150,7 +150,7 @@ int CombatII::battle_fx_23074(int unit_index, int tx, int ty, int k) {
             battle_fx_blit(f, qx[j], qy[j] - 0x1E);     // `sub eax,1Eh`
             qy[j] += 1;                                 // `inc eax` -> [var_DA+2]
         }
-        battle_fx_present();
+        battle_fx_present_454b3();
         wait_game_tick();
     }
 

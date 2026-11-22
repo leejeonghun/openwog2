@@ -141,7 +141,7 @@ int CombatII::battle_fx_21944(int unit_index, int tx, int ty, int k) {
             const MagicFxFrame& fr = magic_frames_[(size_t)f];
             battle_fx_blit(f, X + fr.xo, Y + fr.yo);   // sub_1FFFE
         }
-        battle_fx_present();                         // 454B3 + 5E9E8
+        battle_fx_present_454b3();                   // 454B3 + 5E9E8
         wait_game_tick();                            // 499E4
     }
     if (should_exit_) return 1;
@@ -178,7 +178,7 @@ int CombatII::battle_fx_21944(int unit_index, int tx, int ty, int k) {
             for (int c = 0; c < 8; ++c)
                 blit_t(0x13 + p, X, plume_y - c * 0x10, 0x1E);
         }
-        battle_fx_present();                         // 454B3 + 5E9E8 (flush the queue over the map)
+        battle_fx_present_454b3();                   // 454B3 + 5E9E8 (flush the queue over the map)
         wait_game_tick();                            // 499E4
     }
     game_timer_set(0x1E);                            // sub_1033B(1Eh)
@@ -226,7 +226,7 @@ int CombatII::battle_fx_2da5e(int unit_index, int tx, int ty, int k) {
     game_timer_set(0x19);                            // sub_1033B(19h)
     for (int i = 0; i < 2 && !should_exit_; ++i) {
         u.anim_frame = 7 + i;                        // `add al,7`
-        battle_fx_present();                         // sub_454B3 + sub_5E9E8
+        battle_fx_present_454b3();                   // sub_454B3 + sub_5E9E8
         wait_game_tick();                            // sub_499E4
     }
     if (should_exit_) { reset_unit_pose(u); battle_nsp_release(); return 1; }

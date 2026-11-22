@@ -67,8 +67,8 @@
 //      port's CC998 map pass checks. 59A70 never calls 12F2A, so hiding the caster is what
 //      keeps it out of every frame until step (8) restores it.
 //   4. 5F517 (solid silhouette) / 5F3FD (unit frame) draw to the canvas rather than the magic
-//      layer, so this step alone splits present into render_battle_frame() -> overlay ->
-//      battle_fx_commit() to keep the original order (background/table -> unit -> present).
+//      layer, so this step alone splits present into battle_fx_454b3() -> unit ->
+//      battle_fx_commit() to keep the original order (454B3 -> unit -> 5E9E8).
 //   5. The palette wash base aliases the work buffers in the original, so only the 5FD1C
 //      contract "master + delta*pct/100" is kept and the delta is computed into named buffers.
 //      The visual result (colour shift, then back to normal) matches the original steps.
@@ -185,7 +185,7 @@ int CombatII::battle_fx_59a70(int caster_index, int revived_index) {
             py[i] = (int16_t)(py[i] - spd[i]);                     // y -= speed
             ++life[i];
         }
-        battle_fx_present();                                       // 454B3 + 5E9E8
+        battle_fx_present_454b3();                                 // 454B3 + 5E9E8
         apply_pal(0x60, 0x100, hue, 1);                            // 5FD1C(60h,100h,delta,1%)
         wait_game_tick();                                          // sub_499E4
     }
@@ -212,7 +212,7 @@ int CombatII::battle_fx_59a70(int caster_index, int revived_index) {
             battle_fx_blit_tinted_unclipped(ft, 0xA0 + fr.xo, 0x4C + fr.yo, 0x50,
                                             {0x01, 0x30, 0x31, 0x32, 0x33, 0x34, 0x35}); // sub_5F29D(611AA)
         }
-        battle_fx_present();
+        battle_fx_present_454b3();
         apply_pal(0, 0x100, wash, 0x64 - f * 0x0A);                // 5FD1C(pct 64h,5Ah,...)
         wait_game_tick();
     }
@@ -246,7 +246,7 @@ int CombatII::battle_fx_59a70(int caster_index, int revived_index) {
                                                 {0x01, 0x30, 0x31, 0x32, 0x33, 0x34, 0x35});
             }
         }
-        render_battle_frame();                                      // sub_454B3
+        battle_fx_454b3();                                          // sub_454B3 (incl. fall-through 454D5)
         if (f >= 0x10 && unit_frame) {                              // 5F517 (silhouette) / 5F3FD
             DrawEntry e{};
             e.x = 0xA0;
@@ -265,7 +265,7 @@ int CombatII::battle_fx_59a70(int caster_index, int revived_index) {
 
     // ---- (8) restore ----
     A.fx_sprite_hidden = false;                                    // sub_11E04(caster)
-    render_battle_frame();                                         // sub_454B3
+    battle_fx_454b3();                                             // sub_454B3 (incl. fall-through 454D5)
     uint8_t rev[kPalLen];
     for (int k = 0; k < kPalLen; ++k)                              // "swap copy - master"
         rev[k] = (uint8_t)(master[k] - wash_pal[k]);

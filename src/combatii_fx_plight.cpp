@@ -67,7 +67,7 @@ int CombatII::battle_fx_22d18(int unit_index, int tx, int ty, int k) {
     // (2) intro: x fixed at 0x2D, y from 0xC7 down to -0x64 in steps of 0x0F
     for (int y = 0xC7; y > -0x64 && !should_exit_; y -= 0x0F) {
         battle_fx_blit_tinted(0, 0x2D, y, tint, {0x18});     // sub_5F305 (colour-18h LUT)
-        battle_fx_present();                                 // 454B3 + 5E9E8
+        battle_fx_present_454b3();                           // 454B3 + 5E9E8
         wait_game_tick();                                    // 499E4
     }
     if (should_exit_) {

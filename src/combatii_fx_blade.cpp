@@ -281,7 +281,7 @@ int CombatII::battle_fx_22767(int unit_index, int tx, int ty, int k) {
             const int f = std::min(nframes - 1, s);
             battle_fx_blit(f, q.x + magic_frames_[(size_t)f].xo, q.y + magic_frames_[(size_t)f].yo);
         }
-        battle_fx_present();                                // sub_454B3 + sub_5E9E8
+        battle_fx_present_454b3();                          // sub_454B3 + sub_5E9E8
         wait_game_tick();
     }
     // loc_22951: step 40h until the angle reaches 280h, without drawing.
@@ -290,7 +290,7 @@ int CombatII::battle_fx_22767(int unit_index, int tx, int ty, int k) {
     for (int i = 0; i < 6 && !should_exit_; ++i) {           // loc_22979: six frames at the centre
         const int f = std::min(nframes - 1, i);
         battle_fx_blit(f, cx + magic_frames_[(size_t)f].xo, cy + magic_frames_[(size_t)f].yo);
-        battle_fx_present();
+        battle_fx_present_454b3();
         wait_game_tick();
     }
     battle_nsp_release();                                   // sub_1FFCD
@@ -487,7 +487,7 @@ int CombatII::battle_fx_272ad(int unit_index, int tx, int ty, int k) {
             const MagicFxFrame& fr = magic_frames_[(size_t)q.frame];
             battle_fx_blit_clipped(q.frame, q.x + fr.xo, q.y + fr.yo);  // sub_5EFB9
         }
-        battle_fx_present();                                // sub_454B3 + sub_5E9E8
+        battle_fx_present_454b3();                          // sub_454B3 + sub_5E9E8
         wait_game_tick();                                   // sub_499E4
         radius -= 2;                                        // `sub ecx,2`
     }
@@ -496,7 +496,7 @@ int CombatII::battle_fx_272ad(int unit_index, int tx, int ty, int k) {
         const MagicFxFrame& fr0 = magic_frames_[0];
         for (int yy = last_y; yy >= last_y - 0x1E && !should_exit_; --yy) {
             battle_fx_blit(0, last_x + fr0.xo, yy + fr0.yo);
-            battle_fx_present();
+            battle_fx_present_454b3();
             wait_game_tick();
         }
     }

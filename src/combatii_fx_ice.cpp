@@ -134,7 +134,7 @@ int CombatII::battle_fx_22172(int unit_index, int tx, int ty, int k) {
             tpos_x += vy;
             tpos_y += vx;
         }
-        battle_fx_present();                                           // sub_5E9E8 (includes 454B3)
+        battle_fx_present_454b3();                                     // sub_5E9E8 (includes 454B3)
         ++counter;
 
         const bool reached = (x == ex && y == ey);
@@ -206,7 +206,7 @@ int CombatII::battle_fx_22486(int unit_index, int tx, int ty, int k) {
             trail[i] = (int16_t)(trail[i] - 2);
             if (trail[i] < 2) trail[i] = (si < 0x28) ? (int16_t)0x10 : (int16_t)0xD8F0;
         }
-        battle_fx_present();
+        battle_fx_present_454b3();
         if (si == 5) sfx(0x32);                                        // sub_4F4CD(32h)
         wait_game_tick();
     }
@@ -275,7 +275,7 @@ int CombatII::battle_fx_23882(int unit_index, int tx, int ty, int k) {
             const int py = y + combat_rand(5) - 2;
             battle_fx_blit(fx_clamp_frame(f, nframes), px, py);
         }
-        battle_fx_present();
+        battle_fx_present_454b3();
         if (x == ex && y == ey) break;
         const bool vertical = (facing == 0 || facing == 2);
         if (vertical ? (std::abs(y - ey) <= 6) : (std::abs(x - ex) <= 6)) break;
@@ -321,8 +321,8 @@ int CombatII::battle_fx_241f7(int unit_index, int tx, int ty, int k) {
     const int particle_count = std::min(16, k_plus1 * 8);              // loc_24400: shl edx,3
     int tick = 0;
     for (int frame = 0; frame < total && !should_exit_; ++frame, ++tick) {
+        battle_fx_454b3();                                             // 454B3 every frame
         if (tick % 5 == 0) {                                           // var_10 % 5 == 0
-            battle_fx_present();                                       // 454B3
             // sub_5F9E9(0, 100h, unk_12824C, 1): restore the weather/time-adjusted master palette
             pal_load_range(0, 256, &battle_master_palette_[0][0]);
             sfx(0x32);                                                 // 4F4CD(32h)
@@ -342,7 +342,8 @@ int CombatII::battle_fx_241f7(int unit_index, int tx, int ty, int k) {
             battle_fx_blit(f, px[i], py[i]);
             phase[i] = (uint8_t)(p + 1);
         }
-        battle_fx_present();
+        battle_fx_flush();                                             // sub_12E01 (1FFFE after 454D5)
+        battle_fx_commit();                                            // sub_5E9E8
         wait_game_tick();
     }
     battle_nsp_release();                                              // sub_1FFCD
@@ -378,8 +379,8 @@ int CombatII::battle_fx_24466(int unit_index, int tx, int ty, int k) {
     }
     game_timer_set(5);                                                 // sub_1033B(5)
     for (int frame = 0; frame < 0x30 && !should_exit_; ++frame) {
+        battle_fx_454b3();                                             // 454B3 every frame
         if (frame == 0 || frame == 8) {                                // `test cx,cx` / `cmp cx,8`
-            battle_fx_present();
             pal_load_range(0, 256, &battle_master_palette_[0][0]);             // sub_5F9E9 palette restore
             sfx(0x32);                                                 // sub_4F4CD(32h)
             wait_game_tick();
@@ -411,7 +412,8 @@ int CombatII::battle_fx_24466(int unit_index, int tx, int ty, int k) {
             battle_fx_blit(f1, px[i], py[i]);
             battle_fx_blit(f2, px[i], py[i]);
         }
-        battle_fx_present();
+        battle_fx_flush();                                             // sub_12E01 (1FFFE after 454D5)
+        battle_fx_commit();                                            // sub_5E9E8
         wait_game_tick();
     }
     battle_nsp_release();                                              // sub_1FFCD

@@ -260,7 +260,11 @@ int CombatII::battle_fx_field_engine(int unit_index, int tx, int ty, int count,
                 q.ay = scr_y(q.by);
             }
         }
-        battle_fx_present();                   // 454D5 + 5E9E8
+        // loc_207A1/20B9F/20F69: sub_10AEB + sub_12BEE (no sub_454B3, no weather) every
+        // frame, then the 1FFFE sprites, then 454D5/5E9E8. render_battle_map draws the map
+        // and units before the queued sprites, so they keep being cleared each frame.
+        render_battle_map(false, false, true);
+        battle_fx_present_454d5();             // 454D5 + 5E9E8
         wait_game_tick();                      // 499E4
     }
     battle_nsp_release();                      // sub_1FFCD
@@ -331,7 +335,7 @@ int CombatII::battle_fx_21114(int unit_index, int tx, int ty, int energy) {
             }
         }
         ++frame_no;
-        battle_fx_present();                           // sub_5E9E8
+        battle_fx_present_454b3();                     // sub_5E9E8
         wait_game_tick();                              // sub_499E4
         if (frame_no % end_frame == 0) game_timer_set((frame_no + 6) / 3);
         if (frame_no % 10 == 0) sfx(0x32);
@@ -388,7 +392,8 @@ int CombatII::battle_fx_2132b(int unit_index, int tx, int ty, int energy) {
                 else        { if (ctr[g] > 2) ++ctr[g + 1]; }
             }
         }
-        battle_fx_present();                           // 454D5 + 5E9E8
+        render_battle_map(false, false, true);         // sub_10AEB + sub_12BEE
+        battle_fx_present_454d5();                     // 454D5 + 5E9E8
         wait_game_tick();                              // 499E4
         ++frame_no;
         if (frame_no % 6 == 0) game_timer_set((frame_no + 6) / 2);
@@ -456,7 +461,8 @@ int CombatII::battle_fx_215fe(int unit_index, int tx, int ty, int energy) {
             }
         }
         ++frame_no;                                    // inc var_C
-        battle_fx_present();                           // 454D5 + 5E9E8
+        render_battle_map(false, false, true);         // sub_10AEB + sub_12BEE
+        battle_fx_present_454d5();                     // 454D5 + 5E9E8
         wait_game_tick();                              // 499E4
         if (frame_no % end_frame == 0) game_timer_set((frame_no + 9) / 3);
         if (frame_no % 10 == 0) sfx(0x32);
@@ -474,8 +480,9 @@ int CombatII::battle_fx_215fe(int unit_index, int tx, int ty, int energy) {
 //   Each of the 60 frames (var_8 < 0x3C): the shared frame index (di, initially 0) advances by 1
 //   every (0x3C/frames) frames until it reaches frames-2 (loc_22C17), and dword_BA838 is
 //   -(k*2) on every 4th frame and 0 otherwise. Every slot is then blitted through 1FFFE and
-//   moved by (3k+8, 3k+4): x > 0x13F -> 0, y > 0xBE -> 0x0A. 454B3 opens the frame and
-//   454D5/5E9E8 close it. sfx(32h) plays once before the loop (no periodic SFX).
+//   moved by (3k+8, 3k+4): x > 0x13F -> 0, y > 0xBE -> 0x0A. Each frame is
+//   454B3 (world + fall-through 454D5) -> particles -> 454D5 again -> 5E9E8.
+//   sfx(32h) plays once before the loop (no periodic SFX).
 //   Tail: 1FFCD -> BA838=0 -> 45559.
 int CombatII::battle_fx_22af9(int unit_index, int tx, int ty, int k) {
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return 0;
@@ -495,6 +502,7 @@ int CombatII::battle_fx_22af9(int unit_index, int tx, int ty, int k) {
     int frame_index = 0;                                       // di
     const int last_frame = nframes - 2;                        // word_F0DA8-2
     for (int frame = 0; frame < 0x3C && !should_exit_; ++frame) {   // var_8
+        battle_fx_454b3();                                     // sub_454B3 (incl. 454D5)
         if (anim_step > 0 && frame % anim_step == 0 && frame_index != last_frame)
             ++frame_index;
         // Keep the shared index inside the loaded table; the original NSPs always have
@@ -509,12 +517,14 @@ int CombatII::battle_fx_22af9(int unit_index, int tx, int ty, int k) {
             py[i] += k * 3 + 4;
             if (py[i] > 0xBE) py[i] = 0x0A;
         }
-        battle_fx_present();                                   // 454B3 + 454D5 + 5E9E8
+        battle_fx_flush();                                     // sub_12E01 (deferred 1FFFE draws)
+        battle_fx_overlay();                                   // sub_454D5 again (loc_22BCF)
+        battle_fx_commit();                                    // sub_5E9E8
         wait_game_tick();                                      // sub_499E4
     }
     battle_nsp_release();                                      // sub_1FFCD
     cam_fine_y_ = CAM_FINE_Y_REST;                             // dword_BA838 = 0
-    battle_fx_present();                                       // sub_45559
+    battle_fx_present_454b3();                                 // sub_45559 = 454B3 + 5E9E8
     if (battle_trace_)
         fprintf(stderr, "COMBAT: 22AF9 unit=%d k=%d nsp=%s\n", caster.id, k, nsp);
     return 1;

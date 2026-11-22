@@ -43,7 +43,7 @@ int CombatII::battle_fx_2dfc1(int unit_index, int k) {
     game_timer_set(0x19);                                           // sub_1033B(19h)
     for (int i = 0; i < 2 && !should_exit_; ++i) {
         u.anim_frame = (uint8_t)(i + 7);                            // `mov al,bl; add al,7` -> [64h]
-        battle_fx_present();                                        // 454B3 + 5E9E8
+        battle_fx_present_454b3();                                  // 454B3 + 5E9E8
         wait_game_tick();                                           // sub_499E4
     }
     if (should_exit_) { battle_nsp_release(); return 1; }

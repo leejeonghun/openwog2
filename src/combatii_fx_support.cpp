@@ -300,7 +300,7 @@ int CombatII::battle_fx_25047(int unit_index, int tx, int ty, int k) {
             }
         }
         radius -= variant1 ? 1 : 4;                                      // `dec` / `sub 4`
-        battle_fx_present();
+        battle_fx_present_454b3();
         wait_game_tick();
     }
     if (should_exit_) { battle_nsp_release(); return 1; }
@@ -309,7 +309,7 @@ int CombatII::battle_fx_25047(int unit_index, int tx, int ty, int k) {
     for (int i = 0; i < 15 && !should_exit_; ++i) {
         const int f = (i % 6) + 0x0C;
         if (f < nframes) battle_fx_blit(f, cx, cy);
-        battle_fx_present();
+        battle_fx_present_454b3();
         wait_game_tick();
     }
     battle_nsp_release();                                                // sub_1FFCD
@@ -335,6 +335,7 @@ int CombatII::battle_fx_25254(int unit_index, int tx, int ty, int k) {
     for (int i = 0; i < 10; ++i) angles[i] = i * kAngleStep;
     int radius = 0;
     while (radius < 0xA0 && !should_exit_) {                             // `cmp var_8,0A0h; jge`
+        battle_fx_454b3();                                               // sub_454B3 (454D5 fall-through)
         const int f = ((cy / 2) % 5);                                     // sar 11h -> /2, idiv 5
         for (int i = 0; i < 10; ++i) {
             int px, py;
@@ -344,7 +345,7 @@ int CombatII::battle_fx_25254(int unit_index, int tx, int ty, int k) {
             if (angles[i] >= kAngleMax) angles[i] = 0;
         }
         radius += 2;                                                     // 454D5(var_8+2)
-        battle_fx_present();
+        battle_fx_present_454d5();                                       // 454D5 again over the ring
         wait_game_tick();
         if ((cy % 8) == 0) sfx(0x32);                                    // `idiv 8; test edx,edx` after 499E4
     }
@@ -375,6 +376,7 @@ int CombatII::battle_fx_253dc(int unit_index, int tx, int ty, int k) {
     struct Spark { int alive = 0, x = 0, y = 0, life = 0, speed = 0; };
     Spark sp[kSlots];
     for (int frame = 0; frame < 0x64 && !should_exit_; ++frame) {        // `cmp di,64h`
+        battle_fx_454b3();                                               // loc_2544A: sub_454B3
         for (int i = 0; i < kSlots; ++i) {
             if (!sp[i].alive && frame < 0x48) {                          // new ember (loc_2547D)
                 sp[i].alive = 1;
@@ -390,7 +392,7 @@ int CombatII::battle_fx_253dc(int unit_index, int tx, int ty, int k) {
             const int f = (sp[i].life % 5) + 5;
             if (f < nframes) battle_fx_blit(f, sp[i].x, sp[i].y);
         }
-        battle_fx_present();
+        battle_fx_present_454d5();
         wait_game_tick();
         if ((frame % 10) == 0) sfx(0x32);                                // `idiv ebp(10)`
     }
@@ -422,6 +424,7 @@ int CombatII::battle_fx_25591(int unit_index, int tx, int ty, int k) {
     static const int kGrow[kRings] = {7, 5, 5, 5, 5};                    // var_30/var_30+2/var_2C/...
     static const int kSpin[kRings] = {5, 4, 4, 4, 4};                    // ring 1 adds 5, the rest 4
     for (int t = 0; t < 0x96 && !should_exit_; ++t) {                    // `cmp bx,96h`
+        battle_fx_454b3();                                               // loc_2567F: sub_454B3
         for (int r = 0; r < kRings; ++r) {
             if (t <= r * 10) continue;                                   // loc_257A2 etc.: jle threshold
             // Frame is recomputed from this ring's current radius (loc_2567F/257A2/258C3/
@@ -440,7 +443,7 @@ int CombatII::battle_fx_25591(int unit_index, int tx, int ty, int k) {
                 radius[r] = 0;
             }
         }
-        battle_fx_present();                                             // 454B3 + 454D5 + 5E9E8
+        battle_fx_present_454d5();                                       // 454D5 -> 12E01 -> 5E9E8
         wait_game_tick();                                                // 499E4
         if ((t % 10) == 0) sfx(0x32);                                    // `idiv 0Ah` on the frame counter
     }
@@ -491,7 +494,7 @@ int CombatII::battle_fx_261fc(int unit_index, int tx, int ty, int k) {
             spark_y[i] -= 4;
             if (spark_y[i] < top) spark_y[i] = bottom;
         }
-        battle_fx_present();
+        battle_fx_present_454b3();                                       // loc_262B7: 454B3 + 5E9E8
         wait_game_tick();
     }
     battle_nsp_release();                                                // sub_1FFCD
@@ -638,7 +641,7 @@ int CombatII::battle_fx_26672(int unit_index, int tx, int ty, int k) {
             spark_y[i] += 4;                                             // `add eax,4`
             if (spark_y[i] > bottom) spark_y[i] = top;                   // `cmp ax,dx; jle` -> edi
         }
-        battle_fx_present();
+        battle_fx_present_454b3();
         wait_game_tick();
     }
     battle_nsp_release();                                                // sub_1FFCD
@@ -669,7 +672,7 @@ int CombatII::battle_fx_26810(int unit_index, int tx, int ty, int k) {
         const int f = dir * 4 + (t % 4);                                 // `idiv 4` -> remainder
         if (f < nframes) battle_fx_blit_tinted_unclipped(f, cx, cy, shade,
                                                          {0x00, 0x57});  // word_1FE6E
-        battle_fx_present();
+        battle_fx_present_454b3();
         wait_game_tick();
     }
     battle_nsp_release();                                                // sub_1FFCD

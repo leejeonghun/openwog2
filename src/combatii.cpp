@@ -151,6 +151,17 @@ void CombatII::battle_fx_world_dim() {
     battle_fx_overlay();
 }
 
+// sub_454B3 only (the fall-through sub_454D5 included) without sub_5E9E8. Callers that start a
+// frame with 454B3 and then draw 1FFFE sprites before a later 454D5/5E9E8 use this at the top
+// of the loop; the deferred queue is transferred after the dim/HUD, where the original's
+// immediate draws land (ASM 71729-71758). The queue is empty when it is called.
+void CombatII::battle_fx_454b3() {
+    battle_hud_time_ = battle_time_;
+    battle_fx_world();
+    battle_fx_overlay();
+    battle_fx_flush();
+}
+
 // sub_454B3 (10AEB + [1547F] + 12BEE + 4512E + fall-through 454D5) -> 12E01 -> 5E9E8,
 // without sub_5046B (message window), sub_50216 (drop layer), or render_sprites (15D0A).
 void CombatII::battle_fx_present_454b3(bool capture_dump) {
@@ -159,6 +170,16 @@ void CombatII::battle_fx_present_454b3(bool capture_dump) {
     battle_fx_overlay();
     battle_fx_flush();
     battle_fx_commit(capture_dump);
+}
+
+// sub_454D5 -> sub_12E01 -> sub_5E9E8: the frame tail of the drivers that already drew their
+// world pass this frame (454B3, or 10AEB+12BEE through render_battle_map). The original draws
+// its 1FFFE sprites before 454D5, so the queue is transferred first.
+void CombatII::battle_fx_present_454d5() {
+    battle_hud_time_ = battle_time_;
+    battle_fx_flush();
+    battle_fx_overlay();
+    battle_fx_commit();
 }
 
 // sub_10AEB + sub_12D65: the reduced frame the full-screen dark spells use. sub_12D65 has no

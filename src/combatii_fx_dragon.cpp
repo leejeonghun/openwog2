@@ -74,7 +74,7 @@ int CombatII::battle_fx_21be8(int unit_index, int tx, int ty, int k) {
     int16_t fy = 0x00C7;
     while (fy > -0x64 && !should_exit_) {                        // `cmp ecx,0FFFFFF9Ch; jle`
         battle_fx_blit_tinted(0, 0x2D, fy, kTint, {0});           // sub_5F305 (colour-0 LUT)
-        battle_fx_present();                                     // 454B3 + 5E9E8
+        battle_fx_present_454b3();                               // 454B3 + 5E9E8
         fy = (int16_t)(fy - 0x0F);                               // `sub ebx,0Fh`
         wait_game_tick();                                        // sub_10364 wait
     }

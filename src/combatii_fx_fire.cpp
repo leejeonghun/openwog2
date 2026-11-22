@@ -695,7 +695,7 @@ int CombatII::battle_fx_57f18(int unit_index, int tx, int ty, int k) {
     // ramp == 0 pass still draws but does not present.
     for (;;) {
         if (should_exit_) break;
-        render_battle_frame();                       // sub_454B3
+        battle_fx_454b3();                           // sub_454B3 (incl. fall-through 454D5)
         const int ramp = pal_ramp_step(0x4B, 0);     // sub_562C1 -> 56245 -> 5FD1C
         video_.wait_presented();                     // sub_5E943 inside 5FD1C
         if (ramp == 0) break;                        // test ax,ax; jz loc_5859F

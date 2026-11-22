@@ -640,6 +640,7 @@ private:
     // ---- Original frame chain (the order the spell drivers call every frame) ----
     void battle_fx_world();      // sub_454B3 (map/units/weather; no message/drop; falls into 454D5)
     void battle_fx_world_dim();  // sub_454B3 + sub_12E01 + sub_454D5 (dim before post-dim effects)
+    void battle_fx_454b3();      // sub_454B3 (incl. fall-through 454D5) -> 12E01, no sub_5E9E8
     void battle_fx_world_12d65();        // sub_10AEB + sub_12D65 (no unit pass, no weather)
     void battle_fx_world_454b3_12d65();  // sub_454B3 then sub_12D65 over it (276B9 step 2)
     void battle_fx_present_12d65();      // 10AEB+12D65 -> 12E01 -> 454D5 -> 5E9E8
@@ -2334,8 +2335,6 @@ private:
     // dword_F9F08 + word ptr dword_FA8B6+2: units that sub_44DCC redraws inside 454D5.
     // The original stores raw unit pointers and does not deduplicate (at most 59h entries).
     std::vector<int> battle_highlight_units_;
-    // Highlighted-unit draw entries produced by render_battle_map this frame, replayed by 44DCC.
-    std::vector<DrawEntry> highlight_draws_;
     // Spawn-drop sprites collected by render_battle_map and drawn after the weather pass.
     std::vector<DrawEntry> drop_draws_;
     bool battle_nsp_load(const char* name);    // sub_1FEA4 (MAGICSPR\<name>)
@@ -2377,6 +2376,7 @@ private:
     void battle_fx_silhouette_13669(int unit_index, int color);
     void battle_fx_present();                                  // sub_454B3 + sub_5E9E8
     void battle_fx_present_454b3(bool capture_dump = true);    // sub_454B3 (incl. 454D5) -> 12E01 -> 5E9E8 (no 5046B/50216/15D0A)
+    void battle_fx_present_454d5();                            // sub_454D5 -> 12E01 -> 5E9E8 (keeps the last 454B3 frame)
     void blit_frame_tinted(int x, int y, const MagicFxFrame& fr, int tint_pct,
                            bool clip = true,
                            const std::array<uint64_t, 4>* tint_mask = nullptr,

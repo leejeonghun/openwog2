@@ -82,7 +82,7 @@ int CombatII::battle_fx_23aba(int unit_index, int tx, int ty, int k) {
         if (fa < nframes) battle_fx_blit(fa, sx, sy);                      // sub_1FFFE
         if (fb < nframes) battle_fx_blit(fb, sx, sy);
         if (++sub9 == 9) { sub9 = 0; advance(); }                           // cmp dx,9
-        battle_fx_present();                                               // 454B3 + 5E9E8
+        battle_fx_present_454b3();                                               // 454B3 + 5E9E8
         wait_game_tick();                                                  // 499E4
         if (f % 10 == 0) sfx(0x32);                                        // idiv 0Ah
     }
@@ -156,7 +156,7 @@ int CombatII::battle_fx_23c36(int unit_index, int tx, int ty, int k) {
             if (fb < nframes) battle_fx_blit(fb, xs[j], ys[j]);
         }
         if (++phase == 3) { phase = 0; ++stepi; }                          // loc_23ECC
-        battle_fx_present();
+        battle_fx_present_454b3();
         wait_game_tick();
         if (f % 10 == 0) sfx(0x32);                                        // idiv 0Ah
     }
@@ -242,7 +242,7 @@ int CombatII::battle_fx_23f3a(int unit_index, int tx, int ty, int k) {
             }
             ++stepi;                                                       // inc edi
         }
-        battle_fx_present();
+        battle_fx_present_454b3();
         wait_game_tick();
         if (f % 10 == 0) sfx(0x32);
     }

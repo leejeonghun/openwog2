@@ -69,10 +69,10 @@ void CombatII::battle_highlight_add_depth(int caster_index) {
 
 // ---- sub_44DCC without the map ----
 //   The original draws the unit pointers of dword_F9F08 through sub_12F2A, with or without a
-//   map behind them. render_highlight_units replays the draw entries built by
-//   render_battle_map, which are empty on a black screen, so this path draws directly.
+//   map behind them. render_highlight_units draws the same live list; this entry point is kept
+//   for the callers that clear the screen first.
 void CombatII::render_highlight_units_direct() {
-    for (int ui : battle_highlight_units_) battle_draw_unit_now(ui);
+    render_highlight_units();
 }
 
 // ---- sub_12F2A: redraw one unit ----
