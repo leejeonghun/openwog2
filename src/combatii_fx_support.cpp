@@ -44,23 +44,33 @@ inline void ring_point(int angle, int radius, int cx, int cy, int& px, int& py) 
 } // namespace
 
 // sub_2476E(eax=caster, dx=target tile x, bx=target tile y): heal1.nsp heal particles.
-//   Starts 16 particles at the caster screen position (+0Ch,+2) and moves them toward the
-//   target centre (135EB) each frame by "remaining distance*10/dist". On arrival it runs
-//   4F4CD(0x32) -> 1033B(5) -> 15 frames of frame (i%6)+0Ch over the target -> 1FFCD.
-//   The original path also performs 8-direction selection (var_4) and camera scroll correction
-//   (dword_7001C/BA838); the port substitutes straight caster-to-target interpolation (the
-//   render step applies the camera correction).
+//   The head advances in 1/16-pixel steps from the caster anchor (20136+0Ch/20146) toward the
+//   target centre (135EB). Each outer pass recomputes distance/3.0 and runs var_40 = int(var_30*
+//   2.5) sub-steps; every sub-step applies the off_2474E 8-direction displacement (var_4C
+//   decays by var_10), shifts the 16-entry trail and draws the seven sub_1FFFE calls at trail
+//   15/12/9/6/3/0 plus the new head. While var_4C/var_10 remain set, the direction is remapped
+//   through dword_1FE3E and 499E4 waits one tick. On arrival it runs 4F4CD(0x32) -> 1033B(5)
+//   -> 15 frames of frame (i%6)+0Ch over the target -> 1FFCD and restores the resting camera
+//   fine values. The camera-scroll correction inside the sub-step (dword_7001C/BA838) is still
+//   not modelled; the head is converted with the camera that 1124A selected.
 int CombatII::battle_fx_2476e(int unit_index, int tx, int ty, int k) {
     (void)k;
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return 0;
     if (!battle_nsp_load("heal1.nsp") || magic_frames_.empty()) return 0;
     const int nframes = (int)magic_frames_.size();
     const CombatUnitPlacement& caster = units_[(size_t)unit_index];
-    camera_center_on((int)(int8_t)caster.x, (int)(int8_t)caster.y);      // sub_1124A
-    int sx = 0, sy = 0;
-    unit_screen_center(caster, sx, sy);                                  // 10971/10988
-    sx += 12; sy += 2;                                                   // +0Ch / +2
-    int ex = sx, ey = sy;
+    const int caster_x = (int)(int8_t)caster.x;
+    const int caster_y = (int)(int8_t)caster.y;
+    camera_center_on(caster_x, caster_y);                               // sub_1124A
+
+    // sub_20136/sub_20146 are absolute tile -> world; sub_10971/sub_10988 are screen. The heal
+    // anchor is 20136+0Ch/20146 and 10971+0Ch/10988, not sub_135EB (which adds the sprite centre).
+    const int world_x = caster_x * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X + 0x0C;
+    const int world_y = caster_y * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y;
+    int head_x = (caster_x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X + 0x0C;
+    int head_y = (caster_y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y;
+
+    int ex = head_x, ey = head_y;
     const bool tile_ok = (tx >= 0 && ty >= 0 && tx < (int)map_w_ && ty < (int)map_h_);
     const int ti = tile_ok ? battle_unit_index_at(tx, ty) : -1;
     if (ti >= 0 && (size_t)ti < units_.size()) {
@@ -69,60 +79,146 @@ int CombatII::battle_fx_2476e(int unit_index, int tx, int ty, int k) {
         ex = (tx - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X + 12;
         ey = (ty - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y + 2;
     }
+    // 135EB returns screen space; the original adds cam*24/16 to get the world target.
+    const int target_x = ex + cam_tile_x_ * TOWN_TILE_W;
+    const int target_y = ey + cam_tile_y_ * TOWN_TILE_H;
     game_timer_set(2);                                                   // sub_1033B(2)
 
     constexpr int kTrail = 16;                                           // `cmp bx,10h` (var_8A/var_AA)
     struct P { int x, y; };
-    P parts[kTrail + 1];                                                 // [0] head, [1..16] trail
-    const int dx = ex - sx, dy = ey - sy;
-    // sub_2476E: fsqrt -> fdiv dbl_77259 (3.0) -> __CHP -> fistp. The step divisors use that
-    // truncated value, so /3.0 must be applied before the cast.
-    const int dist = (int)(std::sqrt((double)dx * dx + (double)dy * dy) / 3.0);
-    const int step_x = dist > 0 ? dx * 10 / dist : 0;                    // (delta*10)/dist
-    const int step_y = dist > 0 ? dy * 10 / dist : 0;
-    for (int i = 0; i <= kTrail; ++i) {
-        // The original starts the head and all 16 trail entries at the caster centre.
-        parts[i].x = sx; parts[i].y = sy;
-    }
-    bool moving = (step_x != 0 || step_y != 0);
-    for (int t = 0; t < 0x200 && moving && !should_exit_; ++t) {
-        moving = false;
-        for (int i = kTrail; i > 0; --i) parts[i] = parts[i - 1];        // loc_24D9D tail shift
-        parts[0].x += step_x;
-        parts[0].y += step_y;
-        if (std::abs(ex - parts[0].x) > std::abs(step_x) ||
-            std::abs(ey - parts[0].y) > std::abs(step_y)) moving = true;
-        // loc_24D98 pushes the previous head into the 16-entry trail, then the seven
-        // sub_1FFFE calls use entries 15,12,9,6,3,0 and the current head. Frames come from
-        // the frame counter (var_24), not from the particle/entry index.
-        const int f1 = (t % 4) + 9;
-        const int f2 = (t % 3) + 9;
-        const int f3 = (t % 4) + 4;
-        const int f4 = (t % 5) + 4;
-        const int f5 = t % 4;
-        auto blit_trail = [&](int f, int slot) {
-            if (f >= 0 && f < nframes) battle_fx_blit(f, parts[slot].x, parts[slot].y);
-        };
-        blit_trail(f1, 16);   // [15] = head-16
-        blit_trail(f2, 13);   // [12] = head-13
-        blit_trail(f1, 10);   // [9]  = head-10
-        blit_trail(f3, 7);    // [6]  = head-7
-        blit_trail(f3, 4);    // [3]  = head-4
-        blit_trail(f4, 1);    // [0]  = previous head
-        blit_trail(f5, 0);    // current head
-        battle_fx_present();                                             // sub_454B3 + sub_5E9E8
-        wait_game_tick();                                                // sub_499E4
+    P trail[kTrail];
+    for (P& p : trail) { p.x = head_x; p.y = head_y; }                   // loc_2485C init
+
+    int point_x = world_x;                                               // var_14
+    int point_y = world_y;                                               // var_3C
+    int dir = 0;                                                         // var_4
+    int radius = 0;                                                      // var_4C
+    int radius_step = 0;                                                 // var_10
+    static constexpr int kDirMap[8] = {1, 0, 3, 2, 5, 4, 7, 6};          // dword_1FE3E
+
+    for (int burst = 0; burst < 0x100 && !should_exit_; ++burst) {
+        // loc_24881: step toward the target, using the truncated distance/3.0 as the divisor and
+        // storing the low byte (mov [var_8], al) exactly like the original.
+        const double dx = (double)(target_x - point_x);
+        const double dy = (double)(target_y - point_y);
+        const double dist3 = std::sqrt(dx * dx + dy * dy) / 3.0;
+        const int var30 = (int)dist3;                                    // var_30
+        const int step_x = var30 != 0 ? (int)(int8_t)((target_x - point_x) * 10 / var30) : 0;
+        const int step_y = var30 != 0 ? (int)(int8_t)((target_y - point_y) * 10 / var30) : 0;
+
+        // The direction choice tests the radius/radius_step left over from the previous pass,
+        // before this pass overwrites them with the new distance mode.
+        if (radius == 0 && radius_step == 0) {
+            const int ax = std::abs(step_x);
+            const int ay = std::abs(step_y);
+            if (ax <= 5 && step_y > 0) dir = 0;
+            else if (ax <= 5 && step_y < 0) dir = 1;
+            else if (ay <= 5 && step_x > 0) dir = 2;
+            else if (ay <= 5 && step_x < 0) dir = 3;
+            else if (step_x < -5 && step_y < -5) dir = 4;
+            else if (step_x > 5 && step_y > 5) dir = 5;
+            else if (step_x < -5 && step_y > 5) dir = 6;
+            else if (step_x > 5 && step_y < -5) dir = 7;
+        }
+
+        const int var40 = (int)((double)var30 * 2.5);                    // var_40
+        if (dist3 > 30.0) {                                              // loc_24ABC
+            radius_step = 1;                                             // var_10
+            radius = var40 / 2;                                          // var_4C
+        } else if (dist3 > 4.0) {                                        // loc_24ADD
+            radius = var40;
+            radius_step = 2;
+        } else {
+            radius = 0;
+            radius_step = 0;
+        }
+
+        const int base_x = point_x;                                      // var_58
+        const int base_y = point_y;                                      // var_54
+        int fx = 0;                                                      // edi
+        int16_t fy = 0;                                                  // var_48
+
+        for (int n = 0; n < var40 && !should_exit_; ++n) {               // loc_24B1E
+            fx += step_x;
+            fy = (int16_t)(fy + step_y);
+
+            if (dir <= 7) {                                              // off_2474E
+                const int r2 = radius * 2;
+                switch (dir) {
+                    case 0: fx += r2; break;                             // loc_24B82
+                    case 1: fx -= r2; break;                             // loc_24B8B
+                    case 2: fy = (int16_t)(fy + r2); break;              // loc_24BA8
+                    case 3: fy = (int16_t)(fy - r2); break;              // loc_24B9A
+                    case 4: fx -= r2; fy = (int16_t)(fy + r2); break;    // loc_24B8F
+                    case 5: fx += r2; fy = (int16_t)(fy - r2); break;    // loc_24B93
+                    case 6: fx += r2; fy = (int16_t)(fy + r2); break;    // loc_24BA1
+                    case 7: fx -= r2; fy = (int16_t)(fy - r2); break;    // loc_24BAF
+                }
+                radius -= radius_step;                                   // loc_24BB6
+            }
+
+            point_x = base_x + ((int16_t)fx >> 4);                       // var_14
+            point_y = base_y + (fy >> 4);                                // var_3C
+
+            // loc_24DB0 converts the updated world point to screen, then loc_24D9D shifts the
+            // trail and pushes the previous head.
+            const int new_x = point_x - cam_tile_x_ * TOWN_TILE_W + cam_fine_x_ + 8;
+            const int new_y = point_y - cam_tile_y_ * TOWN_TILE_H + cam_fine_y_ + 6;
+            for (int i = kTrail - 1; i > 0; --i) trail[i] = trail[i - 1];
+            trail[0].x = head_x;
+            trail[0].y = head_y;
+            head_x = new_x;
+            head_y = new_y;
+
+            // Seven sub_1FFFE calls at trail 15/12/9/6/3/0 and the current head. Frames use the
+            // sub-step counter n; sub_1FFFE adds the table entry's +4/+6 (xo/yo).
+            const int f1 = (n % 4) + 9;
+            const int f2 = (n % 3) + 9;
+            const int f3 = (n % 4) + 4;
+            const int f4 = (n % 5) + 4;
+            const int f5 = n % 4;
+            battle_fx_world_dim();                                       // sub_454B3 + sub_454D5
+            auto blit = [&](int f, int x, int y) {
+                if (f < 0 || f >= nframes) return;
+                const MagicFxFrame& fr = magic_frames_[(size_t)f];
+                battle_fx_blit(f, x + fr.xo, y + fr.yo);                 // sub_1FFFE
+            };
+            blit(f1, trail[15].x, trail[15].y);
+            blit(f2, trail[12].x, trail[12].y);
+            blit(f1, trail[9].x, trail[9].y);
+            blit(f3, trail[6].x, trail[6].y);
+            blit(f3, trail[3].x, trail[3].y);
+            blit(f4, trail[0].x, trail[0].y);
+            blit(f5, head_x, head_y);
+            battle_fx_flush();                                           // sub_12E01
+            battle_fx_commit();                                          // sub_5E9E8
+        }
+
+        if (should_exit_) break;
+        if (radius != 0 || radius_step != 0) {                           // loc_24F72
+            dir = kDirMap[dir & 7];
+            wait_game_tick();                                            // sub_499E4
+            continue;
+        }
+        break;
     }
     if (should_exit_) { battle_nsp_release(); return 1; }
     sfx(0x32);                                                           // sub_4F4CD(0x32)
     game_timer_set(5);                                                   // sub_1033B(5)
     for (int i = 0; i < 15 && !should_exit_; ++i) {                      // loc_24FCA (di<0Fh)
         const int f = (i % 6) + 0x0C;
-        if (f < nframes) battle_fx_blit(f, ex, ey);
-        battle_fx_present();
-        wait_game_tick();
+        battle_fx_world_dim();                                           // sub_454B3 + sub_454D5
+        if (f >= 0 && f < nframes) {
+            const MagicFxFrame& fr = magic_frames_[(size_t)f];
+            battle_fx_blit(f, ex + fr.xo, ey + fr.yo);                   // sub_1FFFE
+        }
+        battle_fx_flush();                                               // sub_12E01
+        battle_fx_commit();                                              // sub_5E9E8
+        wait_game_tick();                                                // sub_499E4
     }
     battle_nsp_release();                                                // sub_1FFCD
+    cam_fine_x_ = CAM_FINE_X_REST;                                       // dword_7001C = 0Ch
+    cam_fine_y_ = CAM_FINE_Y_REST;                                       // dword_BA838 = 0
     return 1;
 }
 
