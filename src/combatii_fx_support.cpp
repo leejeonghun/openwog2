@@ -505,8 +505,9 @@ int CombatII::battle_fx_261fc(int unit_index, int tx, int ty, int k) {
 //   1124A -> 11DB2/135EB(cx, cy) -> loc_263D1 computes py[0..2] via sub_10988(cy - i) + 4
 //   (16px vertical spacing). 40 frames (0x28), 1033B(7), 4F4CD(0x32):
 //     - main sprite k*6 + (t%6) at (cx, cy - t/2) alternates under (t%2==0) / over (t%2!=0) 12BEE
-//     - 3 embers: py[i]++ (if old_py > cy: py[i] = cy + main.yo - t/2), frame 0x12 + py[i]%3 at
-//       (cx + 4 - i*6, py[i]) via 1FFFE (+xo/yo), followed by 454D5 + 5E9E8 + 499E4.
+//     - 3 embers: py[i]++ (if old_py > cy: py[i] = cy + [esi+6] - t/2, where esi is main for i==0
+//       and the previous ember's frame for i>=1), frame 0x12 + py[i]%3 at (cx + 4 - i*6, py[i])
+//       via 1FFFE (+xo/yo), followed by 454D5 + 5E9E8 + 499E4.
 int CombatII::battle_fx_26391(int unit_index, int tx, int ty, int k) {
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return 0;
     if (!battle_nsp_load("speedup.nsp") || magic_frames_.empty()) return 0;
@@ -537,14 +538,18 @@ int CombatII::battle_fx_26391(int unit_index, int tx, int ty, int k) {
             else
                 battle_fx_blit(main_f, cx + main_xo, cy - (t >> 1) + main_yo);
         }
+        // loc_264CC: esi enters the loop pointing at the main frame, then is overwritten at the
+        // end of each ember iteration with that ember's frame (so i >= 1 resets with i-1's yo).
+        int reset_yo = main_yo;
         for (int i = 0; i < 3; ++i) {
             const int old_py = py[i];
             py[i] = old_py + 1;
-            if (old_py > cy) py[i] = cy + main_yo - (t >> 1);
+            if (old_py > cy) py[i] = cy + reset_yo - (t >> 1);
             const int f = 0x12 + (py[i] % 3);                            // `idiv 3; add 12h`
             if (f >= 0 && f < nframes) {
                 const MagicFxFrame& fr = magic_frames_[(size_t)f];
                 battle_fx_blit(f, cx + 4 - i * 6 + fr.xo, py[i] + fr.yo); // sub_1FFFE
+                reset_yo = fr.yo;
             }
         }
         battle_hud_time_ = battle_time_;                                 // 454D5 frame time

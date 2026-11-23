@@ -477,29 +477,34 @@ void CombatII::pal_shift_fade(int mul_pct, int end) {
 }
 
 // sub_562C1(eax = base %, edx = descending floor %): advance the ramp by one 3% step.
-//   word_7550E (direction) 0 = rising: pos += 3, refresh the DAC, and at pos >= base set
+//   word_7550E (direction) 0 = rising: draw current pos, then pos += 3; at pos > base set
 //   pos = base, direction = 1 and return 1.
-//   word_7550E 1 = falling: pos -= 3, refresh the DAC, and at pos <= floor set pos = floor,
+//   word_7550E 1 = falling: draw current pos, then pos -= 3; at pos < floor set pos = floor,
 //   direction = 0 and return 0.
 //   Otherwise 2 (still moving). 562C1 calls `56245(eax = current, edx = current +- 3,
-//   ebx = +- 3)`, so 56245's loop (si starts at the current value and stops at the target)
-//   writes only the current step to the DAC before the position moves - the port keeps that
-//   order (draw, then advance).
+//   ebx = +- 3)`, so 56245's loop writes only the current step to the DAC before pos moves.
 int CombatII::pal_ramp_step(int base_pct, int dir_start_pct) {
     if (pal_ramp_dir_ == 0) {
-        int next = pal_ramp_pos_ + 3;
-        if (next > base_pct) next = base_pct;
         pal_ramp_apply(pal_ramp_pos_);              // 56245 draws one step from the current position
-        const bool reached = (next >= base_pct);
-        pal_ramp_pos_ = reached ? base_pct : next;
-        if (reached) { pal_ramp_dir_ = 1; return 1; }
+        const int next = pal_ramp_pos_ + 3;
+        if (next > base_pct) {
+            pal_ramp_pos_ = base_pct;
+            pal_ramp_dir_ = 1;
+            return 1;
+        }
+        pal_ramp_pos_ = next;
         return 2;
     }
-    int next = pal_ramp_pos_ - 3;
-    if (next < dir_start_pct) next = dir_start_pct;
-    pal_ramp_apply(pal_ramp_pos_);
-    const bool reached = (next <= dir_start_pct);
-    pal_ramp_pos_ = reached ? dir_start_pct : next;
-    if (reached) { pal_ramp_dir_ = 0; return 0; }
+    if (pal_ramp_dir_ == 1) {
+        pal_ramp_apply(pal_ramp_pos_);
+        const int next = pal_ramp_pos_ - 3;
+        if (next < dir_start_pct) {
+            pal_ramp_pos_ = dir_start_pct;
+            pal_ramp_dir_ = 0;
+            return 0;
+        }
+        pal_ramp_pos_ = next;
+        return 2;
+    }
     return 2;
 }

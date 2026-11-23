@@ -450,10 +450,13 @@ int CombatII::battle_fx_570a1(int unit_index, int tx, int ty, int k) {
             for (int i = 0x50; i < 0x5A && !should_exit_; ++i) {
                 ProParticle& p = g_pro[i];
                 if (p.state == 0) {
-                    const int r = combat_rand(12) & 3;
-                    static const int base[4] = {0x00, 0x09, 0x12, 0x1B};
-                    static const int px[4] = {0x1E, 0x1E, 0x122, 0x122};
-                    pro_spawn(i, px[r], combat_rand(200), base[r], 9, 1);
+                    // Only rand%12 == 0..3 spawn (`cmp edx,3; ja loc_57468`).
+                    const int r = combat_rand(12);
+                    if (r < 4) {
+                        static const int base[4] = {0x00, 0x09, 0x12, 0x1B};
+                        static const int px[4] = {0x1E, 0x1E, 0x122, 0x122};
+                        pro_spawn(i, px[r], combat_rand(200), base[r], 9, 1);
+                    }
                     continue;
                 }
                 fx_blit_f(p.base + p.frame, p.x, p.y);   // sub_56217

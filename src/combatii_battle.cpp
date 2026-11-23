@@ -2653,9 +2653,12 @@ bool CombatII::battle_verify_qsv_4fcd9() {
 }
 
 bool CombatII::battle_quick_load_4fd25() {
-    // sub_4FD25: sub_5AF1B -> sub_5CD0D -> sub_44C05 ... sub_44C05 clears the screen to index 0
+    // sub_4FD25: sub_5AF1B -> sub_5CD0D(0) -> sub_44C05 ... sub_44C05 clears the screen to index 0
     // and draws the banner, so the frame that was on screen when quick load was chosen is not
-    // kept underneath it.
+    // kept underneath it. Stopping channel 0 first ensures any looping ambient sample stops even
+    // if the loaded save has battle_sfx_id_ <= 0 (when sub_4F3BD skips sub_5CD0D).
+    battle_bgm_active_ = false;
+    Audio::stop_channel0();
     battle_g2msg_scenario_banner();
     std::string path = battle_qsv_path();
     // Port-only failure path (the original has no missing/corrupt-qsv handling): redraw a real

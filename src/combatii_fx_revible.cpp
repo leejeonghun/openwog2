@@ -4,8 +4,8 @@
 // byte of the revived unit (2BC3B: `mov edx,[ecx+5Dh]; sar edx,18h`, i.e. [revived+60h] >> 24).
 //
 // Original flow, in order:
-//   (1) 103A8 (save palette) -> 1FEA4 ("revible.nsp") -> 1124A (centre on the caster tile) ->
-//       11EE4 (release caster occupancy) -> 611AA tint LUT from {01h,30h..35h}, shade 50h.
+//   (1) 103A8 (pause weather tick) -> 1FEA4 ("revible.nsp") -> 1124A (centre on the caster tile)
+//       -> 11EE4 (release caster occupancy) -> 611AA tint LUT from {01h,30h..35h}, shade 50h.
 //   (2) Two palette work buffers:
 //       buf1[i] = master[i+31h] (i = 0..0FFh; unk_1282DF = unk_12824C + 93h = entry 31h)
 //       buf2 = copy of buf1, except i < 68h, which keeps master[i] (loc_59B1B).
@@ -37,8 +37,8 @@
 //       5E9E8 -> 5FD1C(pct = (edi&1)*14h) -> 499E4.
 //       ([var_24] countdown and `mov [var_20],40h` are never read - dead code.)
 //   (8) 11E04 (restore occupancy) -> 454B3 -> 5FD1C(pct 0..64h, 0Ah steps) ->
-//       5FD1C(pct 0..64h, 2 steps) with the "pre-wash copy - master" delta -> 103A0 (restore
-//       palette) -> 1FFCD (release table) -> 12124 (caster) -> common epilogue.
+//       5FD1C(pct 0..64h, 2 steps) with the "pre-wash copy - master" delta -> 103A0 (resume
+//       weather tick) -> 1FFCD (release table) -> 12124 (caster) -> common epilogue.
 //
 // Stack slot interpretation (IDA aliases; settled from this file):
 //   - var_6A8/var_6C0 are the same slot (`push eax` on entry). sub_2BC3B passes eax = caster
@@ -57,7 +57,7 @@
 //
 // Deviations from the original:
 //   1. The 611AA tint LUT is handled by battle_fx_blit_tinted_unclipped(pct=50h) (sub_5F29D
-//      does not clip). Palette save/restore (61115/103A8/103A0) is covered by the port.
+//      does not clip). 103A8/103A0 control weather_tick_enabled_.
 //   2. 6106C(3,31h,32h)/6104A(3) are built explicitly with fx_shade_lut_build, and each
 //      454B3 frame queues the full-screen 5EDDE(0,0,140h,C8h) dim through
 //      battle_fx_shade_rect before its sprites. The original's initial full-screen 5EDDE
@@ -98,6 +98,7 @@ int CombatII::battle_fx_59a70(int caster_index, int revived_index) {
     const int dir = (int)units_[(size_t)revived_index].facing & 3; // edx>>16 = revived facing
 
     if (!battle_nsp_load("revible.nsp") || magic_frames_.empty()) return 0;   // sub_1FEA4
+    weather_tick_enabled_ = false;                                            // sub_103A8
     const int nframes = (int)magic_frames_.size();
     camera_center_on((int)(int8_t)A.x, (int)(int8_t)A.y);                    // sub_1124A
     // sub_11EE4(caster): 59A70 never calls 12F2A, so the caster must stay out of the map pass
@@ -271,7 +272,8 @@ int CombatII::battle_fx_59a70(int caster_index, int revived_index) {
         rev[k] = (uint8_t)(master[k] - wash_pal[k]);
     apply_pal(0, 0x100, wash, 0x64);                               // sub_5FD1C(pct 6Eh -> 64h)
     apply_pal(0, 0x100, rev, 0x64);                                // sub_5FD1C(pct 66h -> 64h)
-    pal_load_range(0, 0x100, master);                              // sub_103A0
+    pal_load_range(0, 0x100, master);                              // restore master palette
+    weather_tick_enabled_ = true;                                  // sub_103A0
     battle_nsp_release();                                          // sub_1FFCD
     reset_unit_pose(A);                                            // sub_12124 (caster)
     return 1;

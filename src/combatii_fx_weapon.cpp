@@ -371,13 +371,30 @@ int CombatII::battle_fx_2cc3a_anim(int unit_index, int variant, int sfx_id) {
     static constexpr uint8_t kSwingTrailColor[5] = {0x3D, 0x3C, 0x3A, 0x39, 0x38};
     const NC2Frame* swing[5] = {nullptr, nullptr, nullptr, nullptr, nullptr};
     for (int i = 0; i < 5; ++i) swing[i] = nc2_frame_for(A.sprite_type, A.facing & 3, 5 + i);
-    // var_24 (ASM 39841-39853): dword unk_BA8AD[slot*5*8] >> 24 != 0FFh. The index is the image
-    // slot at [+60h], not the type at [+61h]; sub_11575 (type -> slot, 1:1) fills the 28h-byte
-    // block at unk_BA8B0 with 0FFh and overwrites it only when the NC2 has animation records.
-    // The port keys its NC2 cache by type, which is the file loaded into that slot.
-    bool extra_frame = false;                                    // [esp+90h+var_24]
-    if (auto it = nc2_chars_.find(A.sprite_type); it != nc2_chars_.end() && it->second)
-        extra_frame = (it->second->head(0) != -1);
+    // var_24 (ASM 39841-39853): dword unk_BA8AD[slot*5*8] >> 24 != 0FFh, which addresses
+    // byte_BA8B0[slot*0x28] = head_table_[0]. sub_11575 initializes byte_BA8B0[slot*0x28] to 0FFh
+    // and overwrites the 40-byte head table at +0x81..+0xA8 only for class 0 (.NC2) when buf[0x80]
+    // != 0. The port keys nc2_chars_ by sprite_type, so np->head(0) != -1 is the exact same byte.
+    const NC2Parser* np = nullptr;
+    if (auto it = nc2_chars_.find(A.sprite_type); it != nc2_chars_.end())
+        np = it->second.get();
+    const bool extra_frame = (np && np->head(0) != -1);          // [esp+90h+var_24]
+    struct WeaSwingEntry {
+        int x0 = 0, y0 = 0, x1 = 0, y1 = 0, sprite = -1;
+    };
+    WeaSwingEntry wea_swing[2];
+    if (extra_frame) {                                           // loc_2CD76 (s = 0, 1)
+        const int d = A.facing & 3;
+        const int base_x = (A.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X + CENTER_ADD_X;
+        const int base_y = (A.y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y + CENTER_ADD_Y;
+        for (int s = 0; s < 2; ++s) {
+            wea_swing[s].sprite = np->head(d * 10 + s * 5 + 0);  // byte_BA8B0
+            wea_swing[s].x0 = base_x - np->head(d * 10 + s * 5 + 1); // unk_BA8B1
+            wea_swing[s].y0 = base_y - np->head(d * 10 + s * 5 + 2); // unk_BA8B2
+            wea_swing[s].x1 = base_x - np->head(d * 10 + s * 5 + 3); // unk_BA8B3
+            wea_swing[s].y1 = base_y - np->head(d * 10 + s * 5 + 4); // unk_BA8B4
+        }
+    }
     // (4) Dim and tick period.
     battle_dim_row0_ = true;                                     // sub_44D6E(1)
     game_timer_set(0x0C);                                        // sub_1033B(0Ch)
@@ -401,11 +418,10 @@ int CombatII::battle_fx_2cc3a_anim(int unit_index, int variant, int sfx_id) {
             blit_nc2_frame(sx + cf->x_off, sy + cf->y_off, *cf);
         // Switch on frame % 5 (off_2CC16: case 0 = loc_2D183, 1 = loc_2CFCD,
         //   2 = loc_2D092, 3 = loc_2D1B8, 4 = loc_2D0C4).
-        //   case 1/4: 4F4CD(cx) plus one blinking frame only when var_24 == 1 (extra_frame,
-        //      ASM 40087-40127). The original body is
-        //      5EECF(save) -> 5F3FD(pose) -> 5E9E8 -> 499E4 -> 5EE51(restore) -> 5F3FD(next).
-        //      The port redraws the world every frame, so showing the pose for one more frame
-        //      is one commit + tick.
+        //   case 1/4: 4F4CD(cx) plus WEA_EFFC slash arc when var_24 == 1 (extra_frame,
+        //      loc_2CFCD uses s=0, loc_2D0C4 uses s=1):
+        //      5EECF(save) -> 5F3FD(wea_effc[sprite], x0, y0) -> 5E9E8 -> 499E4 ->
+        //      5EE51(restore) -> 5F3FD(wea_effc[sprite+1], x1, y1).
         //   case 2: every F0648 target gets [+64h] = 3 (hit pose); case 0 does the same only
         //      when the trail is at least 3 (cmp di,2). Case 3 has no body.
         auto set_target_hit_pose = [&]() {
@@ -423,10 +439,23 @@ int CombatII::battle_fx_2cc3a_anim(int unit_index, int variant, int sfx_id) {
             case 4:
                 sfx(sfx_id);                                          // 4F4CD([esp+66h]>>16 = cx)
                 if (extra_frame) {                                    // cmp [var_24],1
-                    battle_fx_commit();                               // 5F3FD -> 5E9E8
-                    wait_game_tick();                                 // 499E4
-                    if (const NC2Frame* cf = nc2_frame_for(A.sprite_type, A.facing & 3, 5 + frames % 5))
-                        blit_nc2_frame(sx + cf->x_off, sy + cf->y_off, *cf); // 5EE51 + 5F3FD
+                    const WeaSwingEntry& ws = wea_swing[(frames % 5 == 4) ? 1 : 0];
+                    std::vector<uint8_t> saved_bb;
+                    if (uint8_t* bb = video_.get_backbuffer())        // sub_5EECF
+                        saved_bb.assign(bb, bb + (size_t)SCREEN_W * SCREEN_H);
+                    if (ws.sprite >= 0 && (size_t)ws.sprite < wea_effc_.size() &&
+                        !wea_effc_[(size_t)ws.sprite].rle.empty()) {  // sub_5F3FD(wea_effc[sprite])
+                        blit_sprite_480(ws.x0, ws.y0, wea_effc_[(size_t)ws.sprite].rle.data());
+                    }
+                    battle_fx_commit();                               // sub_5E9E8
+                    wait_game_tick();                                 // sub_499E4
+                    if (uint8_t* bb = video_.get_backbuffer(); bb && !saved_bb.empty()) // sub_5EE51
+                        std::memcpy(bb, saved_bb.data(), saved_bb.size());
+                    const int next_sp = ws.sprite + 1;
+                    if (next_sp >= 0 && (size_t)next_sp < wea_effc_.size() &&
+                        !wea_effc_[(size_t)next_sp].rle.empty()) {    // sub_5F3FD(wea_effc[sprite+1])
+                        blit_sprite_480(ws.x1, ws.y1, wea_effc_[(size_t)next_sp].rle.data());
+                    }
                 }
                 break;
             case 2:

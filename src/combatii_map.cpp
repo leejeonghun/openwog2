@@ -2838,7 +2838,7 @@ void CombatII::reset_weather_palette_base() {
 //   3) loc_450AC: sub_49A3E(0, 0x100, unk_F9188, unk_12824C, push 2)
 //        - sub_5FC21 builds unk_FABE0 = target - current (delta)
 //        - for each step i = 0,2,4,...,100, sub_5FD1C writes `base[j] + delta[j]*i/100` for
-//          j in [i,256), waiting for vertical retrace per step (sub_5E943), i.e. a ~0.7s fade;
+//          j in [0,256), waiting for vertical retrace per step (sub_5E943), i.e. a ~0.7s fade;
 //          the factor is clamped to 0x64.
 //      Then unk_F9188 <- unk_12824C and sub_5F9AE(0,0x100,unk_12824C) commits the DAC.
 void CombatII::apply_weather_palette(bool animate) {
@@ -2876,11 +2876,11 @@ void CombatII::apply_weather_palette(bool animate) {
             delta[i][ch] = (int)target[i][ch] - (int)weather_cur_palette_[i][ch];
     const bool changed = memcmp(target, weather_cur_palette_, sizeof(target)) != 0;
     if (animate && changed && !auto_advance_) {
-        // 51 steps x one vertical retrace each = about 0.7s. sub_49A3E calls
-        // sub_5FD1C(f, 0x100, unk_F9188, unk_FABE0, f), so step f only writes DAC entries
-        // [f, 256) with factor f while [0, f) retain the values from earlier steps.
+        // 51 steps x one vertical retrace each = about 0.7s. sub_49A3E keeps start=0, end=0x100
+        // fixed and passes the percentage step f = 0,2,...,100 into sub_5FD1C, updating all 256
+        // DAC entries together at each step.
         for (int f = 0; f <= 100; f += 2) {
-            for (int i = f; i < 256; ++i) {
+            for (int i = 0; i < 256; ++i) {
                 uint8_t v[3];
                 for (int ch = 0; ch < 3; ++ch) {
                     int base = weather_cur_palette_[i][ch];

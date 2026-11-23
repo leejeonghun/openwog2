@@ -251,12 +251,14 @@ int CombatII::battle_fx_5637d(int unit_index, int tx, int ty, int k) {
 
 // sub_22767(eax=ty, edx=tx): crystal.nsp, six crystals in orbit.
 //   1FEA4("crystal.nsp", 0A0h) -> 1124A -> anchor 10971(tx)+0Ch / 10988(ty) -> 1033B(3) ->
-//   edi (frame spacing counter) = 0A0h, -2 per frame, so 81 frames (0A0h..0 inclusive).
-//   Each frame: angle += 14h (20), wrapping to 0 at 280h (640). Position = centre +
-//   (cos,sin)(angle/100) * bdl_771D0 (= 160.0). The 6-slot trail shifts by one and six frames are
-//   drawn (frames 0..5, skipped when x < 0FFFFFFFBh or off screen). When the loop ends (counter < 0)
-//   the angle advances by 40h until it reaches 640, then after 1033B(1Eh) frames 0..5 are drawn at
-//   the centre for six frames and 1FFCD runs.
+//   pre-loop fills the 6-slot trail at (cx + cos/sin * dbl_771D0(160.0)) and adds 14h to angle.
+//   var_4 (radius, preserved from 1FEA4's edx) starts at 0A0h and decreases by 2 per frame:
+//   each frame shifts the 6-slot trail, computes new slot 0 at centre + (cos,sin)(angle/100)*var_4,
+//   adds 14h to angle (wrapping to 0 at 280h), and draws slots 5..0 (skipped when <= -5 or off
+//   screen). After `sub ebx,2`, only var_4 >= 0 calls 5E9E8 + 499E4 and loops (80 presented
+//   frames, var_4 = 0A0h down to 2); the final iteration with var_4 = 0 skips 5E9E8/499E4 and is
+//   overwritten by loc_22979's 454B3. Then 1033B(1Eh) draws frames 0..5 at the centre for six
+//   frames and 1FFCD runs.
 int CombatII::battle_fx_22767(int unit_index, int tx, int ty, int k) {
     (void)unit_index; (void)k;
     if (!battle_nsp_load("crystal.nsp") || magic_frames_.empty()) return 0;
@@ -266,17 +268,25 @@ int CombatII::battle_fx_22767(int unit_index, int tx, int ty, int k) {
     const int nframes = (int)magic_frames_.size();
     game_timer_set(3);                                      // sub_1033B(3)
     sfx(0x32);                                              // sub_4F4CD(32h)
-    const double kRadius = 160.0;                           // dbl_771D0
+    const double kInitRadius = 160.0;                       // dbl_771D0 (pre-loop trail init)
     const int kStep = 0x14, kWrap = 0x280;                  // angle unit = degrees * 100/360
-    std::vector<FxPoint> trail(6, FxPoint{cx, cy});
     int angle = 0;
-    for (int frame_no = 0; frame_no <= 0x50 && !should_exit_; ++frame_no) {  // 0A0h, 09Eh, ..., 0
-        angle = (angle + kStep) % kWrap;
+    const FxPoint init_p{
+        (int)((double)cx + std::cos((double)angle / 100.0) * kInitRadius),
+        (int)((double)cy + std::sin((double)angle / 100.0) * kInitRadius)
+    };
+    angle = (angle + kStep) % kWrap;
+    std::vector<FxPoint> trail(6, init_p);
+    // var_4 starts at 0A0h, -2 per frame. When radius == 0, `sub ebx,2` leaves -2 (< 0) so
+    // loc_2295E (5E9E8 + 499E4) is skipped and loc_22979 immediately redraws over the backbuffer.
+    for (int radius = 0xA0; radius > 0 && !should_exit_; radius -= 2) {
         const double rad = (double)angle / 100.0;           // flt_771CC = 100.0
         FxPoint p;
         // 22767: fild anchor -> faddp -> __CHP -> fistp truncates the anchored value.
-        p.x = (int)((double)cx + std::cos(rad) * kRadius);
-        p.y = (int)((double)cy + std::sin(rad) * kRadius);
+        p.x = (int)((double)cx + std::cos(rad) * (double)radius);
+        p.y = (int)((double)cy + std::sin(rad) * (double)radius);
+        angle += kStep;
+        if (angle >= kWrap) angle = 0;
         // Shift the 6-slot trail (copy loop cx=4..0 at 22878)
         for (int s = (int)trail.size() - 1; s > 0; --s) trail[(size_t)s] = trail[(size_t)s - 1];
         trail[0] = p;
@@ -289,8 +299,7 @@ int CombatII::battle_fx_22767(int unit_index, int tx, int ty, int k) {
         battle_fx_present_454b3();                          // sub_454B3 + sub_5E9E8
         wait_game_tick();
     }
-    // loc_22951: step 40h until the angle reaches 280h, without drawing.
-    while (angle != kWrap) angle = std::min(kWrap, angle + 0x40);
+    // loc_22951: step 40h until 280h without drawing (dead loop on eax in original).
     game_timer_set(0x1E);                                   // sub_1033B(1Eh)
     for (int i = 0; i < 6 && !should_exit_; ++i) {           // loc_22979: six frames at the centre
         const int f = std::min(nframes - 1, i);

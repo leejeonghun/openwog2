@@ -341,6 +341,7 @@ int CombatII::battle_fx_21114(int unit_index, int tx, int ty, int energy) {
         if (frame_no % 10 == 0) sfx(0x32);
         if (energy ? (ctr[4] == 0) : (ctr[4] > end_frame)) break;
     }
+    if (!should_exit_) wait_game_tick();               // loc_21319: extra sub_499E4 before 1FFCD
     battle_nsp_release();                              // sub_1FFCD
     if (battle_trace_)
         fprintf(stderr, "COMBAT: 21114 unit=%d energy=%d\n", c.id, energy ? 1 : 0);
