@@ -108,12 +108,12 @@
 //     start rows are 0,5,10,15,20,25,30 (seven passes). The original's overhangs fall in
 //     its 480-wide row padding; the port clips them to the visible 320 columns. That
 //     diagonal split is reproduced as-is.
-//     61115 (release tint LUT) is a no-op because the port caches no LUT; the two palette
-//     ramps run through 5FA2C(0..100h), present each DAC step and wait for it to be shown,
-//     then consume one 499E4 tick.
-//   - 5FA2C's 5E943 retrace uses Video::present + wait_retrace(1) so every palette step
-//     is handed to the display at the original 70.086Hz retrace cadence regardless of
-//     monitor refresh rate.
+//     61115 (release tint LUT) is a no-op because the port caches no LUT; each palette ramp
+//     step runs 5FA2C (its 5E943 retrace, then the DAC write) and then consumes one 499E4
+//     tick, matching the original's order.
+//   - 5FA2C's 5E943 retrace is wait_retrace(1) before the DAC write and the write is
+//     presented right away, so every palette step lands on the original 70.086Hz retrace
+//     edge regardless of monitor refresh rate.
 //   - Frame selection in (7)(8)(9) uses unk_F0DAA entry offsets, and magic_frames_ holds
 //     the same order, so it is expressed as frame numbers (0..8, reusing 0). The 12-frame
 //     column at 10h spacing in 30FD1 follows the same rule.
@@ -349,14 +349,13 @@ int CombatII::battle_fx_31283_anim(int unit_index) {
         }
     }
     game_timer_set(1);                                       // sub_1033B(1); 32h is the esi palette start
-    // sub_5FA2C waits for the 70.086Hz retrace (5E943) before writing DAC, so 1 tick (5.7ms)
-    // is already satisfied on return. Present each step and wait one virtual retrace.
+    // sub_5FA2C waits for the 70.086Hz retrace (5E943) before writing the DAC, and each step
+    // is followed by one 499E4 tick. Waiting first keeps the DAC write on the retrace edge.
     auto fade_palette_step = [&](int pct) {
+        if (!auto_advance_) wait_retrace(1);                      // sub_5E943 inside sub_5FA2C
         pal_scale_range(0, 0x100, &battle_master_palette_[0][0], pct);   // sub_5FA2C
-        if (!auto_advance_) {
-            video_.present();
-            wait_retrace(1);                                      // sub_5E943 (70.086Hz retrace)
-        }
+        if (!auto_advance_) video_.present();                     // DAC write is visible on this frame
+        wait_game_tick();                                         // sub_499E4 after each step
     };
     for (int pct = 0x32; pct >= 0 && !should_exit_; pct -= 4) {
         fade_palette_step(pct);

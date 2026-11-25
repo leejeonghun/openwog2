@@ -1086,6 +1086,7 @@ void CombatII::battle_fx_34c48_anim(int unit_index) {
     battle_dim_row0_ = true;                                             // 44D6E(1, 28h)
     fx_pal_mix(0x60, 0x100, 0, 0x28);                                    // 30824(0, 28h)
     wait_retrace(2);                                                     // 30824 = 5F945 + 5FD1C
+    video_.present();                                                    // mixed palette is shown during the 5F9AE wait
     wait_retrace(1);                                                     // 5F9AE waits before writing the DAC
     pal_load_range(0, 256, &battle_master_palette_[0][0]);                // 5F9AE(0, 100h, unk_12824C)
     for (int ti : battle_target_list_) {                                 // 1214F

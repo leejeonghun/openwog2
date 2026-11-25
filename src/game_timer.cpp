@@ -2,6 +2,7 @@
 #include "input.h"
 #include <SDL.h>
 #include <algorithm>
+#include <cmath>
 
 namespace GameTimer {
 uint64_t now_us() {
@@ -32,12 +33,25 @@ static bool wait_retrace_impl(Input* input, int retraces) {
     double deadline = next_retrace_us + span_us;
     if (next_retrace_us <= 0.0 || now - next_retrace_us > 4.0 * kVgaPeriodUs) {
         deadline = now + span_us;
-    } else if (deadline <= now) {
-        // Elapsed work since the previous retrace exceeded span_us (e.g., synchronous vsync
-        // present). Return immediately without double-waiting, keeping phase lock for brief
-        // jitter while clamping larger lag so subsequent waits neither burst nor stall.
-        next_retrace_us = (now - deadline < 0.5 * kVgaPeriodUs) ? deadline : now;
-        return input ? !input->poll_quit() : true;
+    } else {
+        // A wait must never fall below (retraces-1) periods measured from now. Without this,
+        // a long wait issued shortly after a previous one would end early: the deadline was
+        // chained to the previous edge, so up to one period of the span was already spent.
+        // Raise it to the next point of the existing retrace grid to keep the phase lock.
+        if (retraces > 1) {
+            const double min_deadline = now + (double)(retraces - 1) * kVgaPeriodUs;
+            if (deadline < min_deadline) {
+                deadline = next_retrace_us +
+                           std::ceil((min_deadline - next_retrace_us) / kVgaPeriodUs) * kVgaPeriodUs;
+            }
+        }
+        if (deadline <= now) {
+            // Elapsed work since the previous retrace exceeded span_us (e.g., synchronous vsync
+            // present). Return immediately without double-waiting, keeping phase lock for brief
+            // jitter while clamping larger lag so subsequent waits neither burst nor stall.
+            next_retrace_us = (now - deadline < 0.5 * kVgaPeriodUs) ? deadline : now;
+            return input ? !input->poll_quit() : true;
+        }
     }
     for (;;) {
         if (input && input->poll_quit()) {
