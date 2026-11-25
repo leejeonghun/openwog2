@@ -286,15 +286,15 @@ int CombatII::battle_fx_276b9(int unit_index, int tx, int ty, int k) {
     present_cutscene_frame();                                      // sub_45559
     wait_game_tick();                                              // sub_499E4
     for (int t = 0x64; t > 3 && !should_exit_; t -= 3) {
+        wait_retrace(2);                                           // sub_5E943 + sub_5FD1C(5E943)
         pal_shift_fade(t, 0xFE);                                   // 5FD1C restore (end 0FEh)
         present_cutscene_frame();
-        wait_retrace(2);                                           // sub_5E943 + sub_5FD1C(5E943)
     }
     cam_fine_x_ = CAM_FINE_X_REST;                                 // dword_7001C = 0Ch
     cam_fine_y_ = CAM_FINE_Y_REST;                                 // dword_BA838 = 0
+    wait_retrace(1);                                              // 5F9AE: wait for the retrace edge, then write the DAC
     pal_load_range(0, 256, &battle_master_palette_[0][0]);         // 5F9AE restore master
     video_.present();
-    wait_retrace(1);                                              // 5F9AE: 5E943 wait, then DAC write
     battle_nsp_release();                                          // sub_1FFCD
     if (battle_trace_)
         fprintf(stderr, "COMBAT: 276B9 amagedon unit=%d\n", units_[(size_t)unit_index].id);
@@ -366,15 +366,15 @@ int CombatII::battle_fx_2799a(int unit_index, int tx, int ty, int k) {
     // Step 3: 45559 + palette restore (si=0x64 down by 4, no sprites, 1 retrace/step) + 5F9AE + shake 0.
     present_cutscene_frame();                                      // sub_45559
     for (int t = 0x64; t > 4 && !should_exit_; t -= 4) {
-        pal_shift_fade(t);                                         // 5FD1C (sub_5E943)
+        wait_retrace(1);                                           // sub_5E943 inside sub_5FD1C
+        pal_shift_fade(t);                                         // 5FD1C
         present_cutscene_frame();
-        wait_retrace(1);
     }
     cam_fine_x_ = CAM_FINE_X_REST;                                 // dword_7001C = 0Ch
     cam_fine_y_ = CAM_FINE_Y_REST;
+    wait_retrace(1);                                              // 5F9AE: wait for the retrace edge, then write the DAC
     pal_load_range(0, 256, &battle_master_palette_[0][0]);         // sub_5F9AE restore master
     video_.present();
-    wait_retrace(1);                                              // 5F9AE: 5E943 wait, then DAC write
     battle_nsp_release();                                          // sub_1FFCD
     if (battle_trace_)
         fprintf(stderr, "COMBAT: 2799A atomicbl unit=%d\n", units_[(size_t)unit_index].id);
@@ -454,15 +454,15 @@ int CombatII::battle_fx_27c5a(int unit_index, int tx, int ty, int k) {
     // Step 3: restore the palette only (sub_5E943 + sub_5FD1C = 2 retraces/step); pct is the
     // pre-decrement value, 100,97,...,4.
     for (int t = 0x64; t > 3 && !should_exit_; t -= 3) {
+        wait_retrace(2);                                           // sub_5E943 + sub_5FD1C(5E943)
         pal_shift_fade(t, 0xFE);                                   // 5FD1C restore (end 0FEh)
         present_cutscene_frame();
-        wait_retrace(2);
     }
     cam_fine_x_ = CAM_FINE_X_REST;                                 // dword_7001C = 0Ch
     cam_fine_y_ = CAM_FINE_Y_REST;                                 // dword_BA838 = 0
+    wait_retrace(1);                                              // 5F9AE: wait for the retrace edge, then write the DAC
     pal_load_range(0, 256, &battle_master_palette_[0][0]);         // sub_5F9AE restore master
     video_.present();
-    wait_retrace(1);                                              // 5F9AE: 5E943 wait, then DAC write
     battle_nsp_release();                                          // sub_1FFCD
     if (battle_trace_)
         fprintf(stderr, "COMBAT: 27C5A amagedon-multi unit=%d\n", units_[(size_t)unit_index].id);
