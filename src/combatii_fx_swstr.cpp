@@ -114,10 +114,12 @@ int CombatII::battle_fx_2d7d2(int unit_index, int k) {
             grey[i * 3 + 1] = 0x3F;
             grey[i * 3 + 2] = 0x3F;
         }
+        wait_retrace(1);                                             // sub_5F9AE waits before writing the DAC
         pal_load_range(0, 0x100, grey);                              // sub_5F9AE(grey buffer)
         video_.present();                                            // DAC write is visible on the current frame
         game_timer_set(0x23);                                        // sub_1033B(al)
         wait_game_tick();                                            // sub_499E4
+        wait_retrace(1);                                                   // sub_5F9AE waits before writing the DAC
         pal_load_range(0, 0x100, &battle_master_palette_[0][0]);            // sub_5F9AE(unk_12824C)
         video_.present();
     }

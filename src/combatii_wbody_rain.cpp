@@ -550,6 +550,7 @@ int CombatII::battle_fx_39a49_anim(int unit_index) {
         if (ti >= 0 && (size_t)ti < units_.size()) reset_unit_pose(units_[(size_t)ti]);
     }
     weather_tick_enabled_ = true;                                              // sub_103A0
+    wait_retrace(1);                                                           // sub_5F9AE waits before writing the DAC
     pal_load_range(0, 0x100, &battle_master_palette_[0][0]);                   // sub_5F9AE(unk_12824C)
     battle_dim_row0_ = false;                                                  // sub_44D6E(0)
     battle_nsp_release();                                                      // sub_1FFCD

@@ -201,6 +201,7 @@ int CombatII::battle_fx_377a6_anim(int unit_index) {
 
     // ---- 8. tail ----
     battle_highlight_clear();                                            // sub_44D75
+    wait_retrace(1);                                                     // sub_5F9AE waits before writing the DAC
     pal_load_range(0, 0x100, &battle_master_palette_[0][0]);             // sub_5F9AE(unk_12824C)
     battle_dim_row0_ = false;                                            // sub_44D6E(0)
     battle_fx_commit();                                                  // sub_5E9E8

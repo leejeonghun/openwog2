@@ -361,6 +361,7 @@ int CombatII::battle_fx_2799a(int unit_index, int tx, int ty, int k) {
         battle_fx_commit();                                        // sub_5E9E8
         wait_game_tick();                                          // sub_499E4
         pal_cycle_entries(fx_pal_cycle_, 256);                     // loc_27B88
+        wait_retrace(1);                                           // sub_5F9AE waits before the DAC write
         pal_load_range(0, 256, fx_pal_cycle_);                     // sub_5F9AE (rotated copy)
     }
     // Step 3: 45559 + palette restore (si=0x64 down by 4, no sprites, 1 retrace/step) + 5F9AE + shake 0.

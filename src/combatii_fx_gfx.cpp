@@ -250,6 +250,7 @@ void CombatII::pal_scroll_step() {
         } else {
             if (++s.counter == 0) s.counter = s.len;    // loc_604F7
         }
+        wait_retrace(1);                                // sub_5F9AE waits before the DAC write
         pal_load_range(s.start, s.end, s.buf);          // sub_5F9AE
     }
 }
@@ -355,6 +356,7 @@ void CombatII::battle_fx_white_flash_down(int down_step) {
     white_palette_284a3(master, white);
     if (battle_trace_) fprintf(stderr, "COMBAT: white flash down=%d\n", down_step);
     pal_crossfade(0, 0x100, white, master, down_step); // 49A3E(white -> master)
+    wait_retrace(1);                                   // 5F9AE waits before writing the DAC
     pal_load_range(0, 0x100, master);                  // 5F9AE(0,100h,unk_12824C)
     video_.present();
 }

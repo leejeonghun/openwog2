@@ -290,14 +290,13 @@ int CombatII::battle_fx_23882(int unit_index, int tx, int ty, int k) {
 // sub_241F7(caster in eax, (strength-1) in dl) - p_light.nsp 16-particle pillar.
 //   1FDAE (16 word x offsets) / 1FDCE (16 word y offsets) / 1FDEE (16 particle progress bytes,
 //   all zero). Particle position = 10971(caster x + tblx)+0Ch, 10988(caster y + tbly). 1033B(5).
-//   Total frames = cl*32 + 11. Every 5 frames: palette upload (5F9E9) -> wait -> second upload
-//   (5F9AE) + sfx(0x32).
+//   Total frames = cl*32 + 11. Every 5 frames: 5F9E9 (fill the DAC with palette entry 1) ->
+//   499E4 -> 5F9AE (restore the master) -> sfx(0x32).
 //   Particle i is alive only while i*4 < current frame; for progress p (0..11), p < 8 draws
 //   frame p at (x, y) and frame p+8 at the four corners (x+-4p, y+-4p) plus the centre. p then
 //   advances by one. Ends with 1FFCD.
-//   Port: 5F9E9 and 5F9AE are the same DAC upload loop and differ only in the first entry
-//   (5F9E9 starts at 1, 5F9AE at 0), so one pal_load_range(0, 0x100, master) plus sfx(32h)
-//   reproduces the pair.
+//   Port: 5F9E9 writes palette entry 1 over the whole DAC (a one-tick solid-colour hold) and
+//   5F9AE restores the master; both uploads are reproduced separately below.
 int CombatII::battle_fx_241f7(int unit_index, int tx, int ty, int k) {
     (void)tx; (void)ty;                         // the original does not use the target tile either
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return 0;
@@ -323,10 +322,21 @@ int CombatII::battle_fx_241f7(int unit_index, int tx, int ty, int k) {
     for (int frame = 0; frame < total && !should_exit_; ++frame, ++tick) {
         battle_fx_454b3();                                             // 454B3 every frame
         if (tick % 5 == 0) {                                           // var_10 % 5 == 0
-            // sub_5F9E9(0, 100h, unk_12824C, 1): restore the weather/time-adjusted master palette
-            pal_load_range(0, 256, &battle_master_palette_[0][0]);
+            // sub_5F9E9(0, 100h, unk_12824C, 1): fill the DAC with palette entry 1
+            uint8_t solid1[0x100 * 3];
+            for (int i = 0; i < 0x100; ++i) {
+                solid1[i * 3 + 0] = battle_master_palette_[1][0];
+                solid1[i * 3 + 1] = battle_master_palette_[1][1];
+                solid1[i * 3 + 2] = battle_master_palette_[1][2];
+            }
+            wait_retrace(1);                                           // sub_5F9E9 waits before writing the DAC
+            pal_load_range(0, 0x100, solid1);
+            video_.present();
+            wait_game_tick();                                          // sub_499E4
+            wait_retrace(1);                                           // sub_5F9AE waits before writing the DAC
+            pal_load_range(0, 0x100, &battle_master_palette_[0][0]);   // 5F9AE restore master
+            video_.present();
             sfx(0x32);                                                 // 4F4CD(32h)
-            wait_game_tick();
         }
         for (int i = 0; i < particle_count; ++i) {
             if (frame < i * 4) continue;                               // `cmp edx, ebx` (i*4) / jl
@@ -361,7 +371,8 @@ int CombatII::battle_fx_241f7(int unit_index, int tx, int ty, int k) {
 //       frame < 16 -> particles 8..15 with frames (f-8, f)
 //       otherwise  -> particles 0..15 with frames (f%8, f%8+8)
 //       Off-screen positions (x <= -50 or y >= 200) are skipped. Ends with 1FFCD.
-//   Port: one pal_load_range(0, 0x100, master) covers both 5F9E9 and 5F9AE (see sub_241F7).
+//   Port: the 5F9E9 solid fill and the 5F9AE master restore are reproduced separately
+//   (see sub_241F7).
 int CombatII::battle_fx_24466(int unit_index, int tx, int ty, int k) {
     (void)tx; (void)ty; (void)k;
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return 0;
@@ -381,9 +392,21 @@ int CombatII::battle_fx_24466(int unit_index, int tx, int ty, int k) {
     for (int frame = 0; frame < 0x30 && !should_exit_; ++frame) {
         battle_fx_454b3();                                             // 454B3 every frame
         if (frame == 0 || frame == 8) {                                // `test cx,cx` / `cmp cx,8`
-            pal_load_range(0, 256, &battle_master_palette_[0][0]);             // sub_5F9E9 palette restore
+            // sub_5F9E9(0, 100h, unk_12824C, 1): fill the DAC with palette entry 1
+            uint8_t solid1[0x100 * 3];
+            for (int i = 0; i < 0x100; ++i) {
+                solid1[i * 3 + 0] = battle_master_palette_[1][0];
+                solid1[i * 3 + 1] = battle_master_palette_[1][1];
+                solid1[i * 3 + 2] = battle_master_palette_[1][2];
+            }
+            wait_retrace(1);                                           // sub_5F9E9 waits before writing the DAC
+            pal_load_range(0, 0x100, solid1);
+            video_.present();
+            wait_game_tick();                                          // sub_499E4
+            wait_retrace(1);                                           // sub_5F9AE waits before writing the DAC
+            pal_load_range(0, 0x100, &battle_master_palette_[0][0]);   // 5F9AE restore master
+            video_.present();
             sfx(0x32);                                                 // sub_4F4CD(32h)
-            wait_game_tick();
         }
         if (frame % 16 == 0) {                                         // `idiv 10h` / `test edx,edx`
             for (int i = 0; i < 16; ++i) {                            // push 0x18/0x10 away from the caster

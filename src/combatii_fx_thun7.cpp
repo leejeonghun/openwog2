@@ -142,6 +142,7 @@ int CombatII::battle_fx_58c87(int unit_index, int tx, int ty, int k) {
     for (int oi : hit) {
         if ((size_t)oi < units_.size()) reset_unit_pose(units_[(size_t)oi]); // sub_12124
     }
+    wait_retrace(1);                                                        // sub_5F9AE waits before writing the DAC
     pal_load_range(0, 0x100, &battle_master_palette_[0][0]);                       // sub_5F9AE
     battle_dim_row0_ = false;                                               // sub_44D6E(0)
     weather_tick_enabled_ = true;                                           // sub_103A0
@@ -276,6 +277,7 @@ int CombatII::battle_fx_58e95(int unit_index, int tx, int ty, int k) {
     for (int oi : hit) {
         if ((size_t)oi < units_.size()) reset_unit_pose(units_[(size_t)oi]);
     }
+    wait_retrace(1);                                                        // sub_5F9AE waits before writing the DAC
     pal_load_range(0, 0x100, &battle_master_palette_[0][0]);                       // sub_5F9AE
     battle_dim_row0_ = false;
     weather_tick_enabled_ = true;                                           // sub_103A0
@@ -395,6 +397,7 @@ int CombatII::battle_fx_592b0(int unit_index, int tx, int ty, int k) {
     for (int oi : hit) {
         if ((size_t)oi < units_.size()) reset_unit_pose(units_[(size_t)oi]);
     }
+    wait_retrace(1);                                                        // sub_5F9AE waits before writing the DAC
     pal_load_range(0, 0x100, &battle_master_palette_[0][0]);                       // sub_5F9AE
     battle_dim_row0_ = false;
     weather_tick_enabled_ = true;                                           // sub_103A0

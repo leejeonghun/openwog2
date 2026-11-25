@@ -803,9 +803,9 @@ void CombatII::battle_fx_341c7_anim(int unit_index) {
         solid[i * 3 + 1] = master[0x10][1];
         solid[i * 3 + 2] = master[0x10][2];
     }
+    wait_retrace(1);                                                  // 5F9AE: wait for the edge, then write the DAC
     pal_load_range(0, 0x100, solid);                                  // 5F9AE (solid 10h)
     video_.present();
-    wait_retrace(1);                                                  // sub_5E943 (retrace) in 5F9AE
     battle_highlight_clear();                                         // 44D75
     A.fx_sprite_hidden = false;                                       // sub_11E04 (re-occupy)
     battle_fx_world();                                                // 45559 = 454B3
@@ -1185,6 +1185,7 @@ void CombatII::battle_fx_34c48_anim(int unit_index) {
     for (int ti : battle_target_list_) {
         if (ti >= 0 && (size_t)ti < units_.size()) reset_unit_pose(units_[(size_t)ti]);
     }
+    wait_retrace(1);                                                     // 5F9AE waits before writing the DAC
     pal_load_range(0, 256, &battle_master_palette_[0][0]);                // 5F9AE(unk_12824C)
     battle_dim_row0_ = false;                                            // 44D6E(0)
     battle_highlight_clear();                                            // 44D75
@@ -1317,6 +1318,7 @@ void CombatII::battle_fx_32589_anim(int unit_index, int target_index) {
     // (10) original 47275~47310: 44D6E(0,100h), 5F9AE, 11E04(caster), 1DB1D(caster, target),
     //      1FFCD, 103A0
     battle_dim_row0_ = false;                                            // 44D6E(0, 100h)
+    wait_retrace(1);                                                     // 5F9AE waits before writing the DAC
     pal_load_range(0, 256, &battle_master_palette_[0][0]);               // 5F9AE(unk_12824C)
     A.fx_sprite_hidden = false;                                          // 11E04 (caster only)
     // The original leaves the target released and 1DB1D still animates it because 44DCC
@@ -1785,6 +1787,7 @@ bool CombatII::battle_fx_32bcb_anim(int unit_index) {
                 caster_id, cnt, frame_counter + 2, nframes);
     // Frame 428 tail in original op order: hlclr, pal, dim, occ-, pose0, 2CAF7, nsprl, wx+
     battle_highlight_clear();                                              // 44D75
+    wait_retrace(1);                                                       // 5F9AE waits before writing the DAC
     pal_load_range(0, 256, &battle_master_palette_[0][0]);                 // 5F9AE(0, unk_12824C)
     battle_dim_row0_ = false;                                              // 44D6E(0)
     A.anim_frame = 4;                                                      // [64h] = 4 (pose 0)
@@ -2030,6 +2033,7 @@ void CombatII::battle_fx_367ee_anim(int unit_index) {
         present();
     }
     battle_dim_row0_ = false;                                              // 44D6E(0, 100h)
+    wait_retrace(1);                                                       // 5F9AE waits before writing the DAC
     pal_load_range(0, 256, &battle_master_palette_[0][0]);                 // 5F9AE(0, unk_12824C)
     cam_fine_y_ = 0;                                                       // mov word ptr dword_BA838, si (si=0)
     // (8) 8 frames (cx=7..0, F0DAA[cx] only when cx>=4), then 4 frames (cx=3..0)
@@ -2286,6 +2290,7 @@ void CombatII::battle_fx_3aee8_anim(int unit_index) {
                                      : (palette_has_color(weather_cur_palette_)
                                             ? weather_cur_palette_
                                             : battle_palette_);
+    wait_retrace(1);                                                       // 5F9AE waits before writing the DAC
     pal_load_range(0, 256, &master[0][0]);                                 // 5F9AE(0)
     battle_dim_row0_ = false;                                              // 44D6E(0)
     battle_highlight_clear();                                              // 44D75

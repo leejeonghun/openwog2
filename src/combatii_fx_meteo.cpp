@@ -59,6 +59,7 @@ int CombatII::battle_fx_21e16(int unit_index, int tx, int ty, int k) {
         battle_fx_454b3();                                           // sub_454B3 (world + fall-through 454D5)
         // (1) palette advance (loc_21EBD) + DAC update (sub_5F9AE)
         pal_cycle_entries(pal, 0x100);
+        wait_retrace(1);                                             // 5F9AE waits before writing the DAC
         pal_load_range(0, 0x100, pal);
         // (2) three meteors
         for (int i = 0; i < 3 && !should_exit_; ++i) {
@@ -102,6 +103,7 @@ int CombatII::battle_fx_21e16(int unit_index, int tx, int ty, int k) {
         battle_fx_present_454d5();                                   // sub_454D5 + sub_5E9E8 (second overlay)
         wait_game_tick();                                            // sub_499E4
     }
+    wait_retrace(1);                                                       // 5F9AE waits before writing the DAC
     pal_load_range(0, 0x100, &battle_master_palette_[0][0]);                // 5F9AE(unk_12824C)
     battle_nsp_release();                                            // sub_1FFCD
     cam_fine_x_ = CAM_FINE_X_REST;                                   // dword_7001C = 0Ch

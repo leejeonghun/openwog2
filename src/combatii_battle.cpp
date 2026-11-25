@@ -11510,10 +11510,12 @@ int CombatII::battle_weapon_f1474(int unit_index, int idx, int dx) {
                 // sub_2D48A(14h): full-palette 3Fh flash, restored 14h ticks later.
                 uint8_t flash[0x100 * 3];
                 for (int p = 0; p < 0x100 * 3; ++p) flash[p] = 0x3F;
+                wait_retrace(1);                          // 5F9AE waits before writing the DAC
                 pal_load_range(0, 0x100, flash);
                 video_.present();
                 game_timer_set(0x14);
                 wait_game_tick();
+                wait_retrace(1);                          // 5F9AE waits before writing the DAC
                 pal_load_range(0, 0x100, &battle_master_palette_[0][0]);
                 video_.present();
                 game_timer_set(3);                                // 2D48A -> 1033B(3)
@@ -13137,6 +13139,7 @@ int CombatII::battle_weapon_37fa4(int unit_index) {
     // Tail (54199..54220): 44D75, 44D6E(0), 5F9AE (master palette restore), 12124, 1FFCD.
     battle_highlight_clear();                           // 44D75
     battle_dim_row0_ = false;                           // 44D6E(0, 100h)
+    wait_retrace(1);                                    // 5F9AE waits before writing the DAC
     pal_load_range(0, 256, &battle_master_palette_[0][0]); // 5F9AE(unk_12824C)
     reset_unit_pose(units_[(size_t)unit_index]);        // 12124 (caster)
     if (ti >= 0 && (size_t)ti < units_.size()) reset_unit_pose(units_[(size_t)ti]); // 12124 (F0648)

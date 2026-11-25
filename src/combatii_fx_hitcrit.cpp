@@ -19,8 +19,9 @@
 //   al = wait ticks. Fill 768 bytes (256 x RGB) with 0x3F, upload them to the DAC with
 //   5F9AE(0,100h) (white), set the period with 1033B(al), wait one 499E4, then restore the
 //   master palette with 5F9AE(0,100h,unk_12824C). The port runs the same order as
-//   pal_load_range(0,0x100,flash) -> video_.present() -> game_timer_set(delay) ->
-//   wait_game_tick() -> pal_load_range(0,0x100,&battle_master_palette_[0][0]) -> video_.present().
+//   wait_retrace(1) -> pal_load_range(0,0x100,flash) -> video_.present() -> game_timer_set(delay)
+//   -> wait_game_tick() -> wait_retrace(1) -> pal_load_range(0,0x100,&battle_master_palette_[0][0])
+//   -> video_.present().
 //   2D5A3 passes 0Ah and 2D684 passes 14h (2D684's `mov ecx,5` is dead because sub_2D48A
 //   overwrites cl with al).
 //   The original programs VGA 3C8h/3C9h directly, so the flash is visible on the current
@@ -64,10 +65,12 @@ int CombatII::battle_fx_2d5a3(int unit_index) {
             // sub_2D48A(0Ah): cover the palette with 0x3F, restore it 10 ticks later
             uint8_t flash[0x100 * 3];
             for (int p = 0; p < 0x100 * 3; ++p) flash[p] = 0x3F;
+            wait_retrace(1);                           // 5F9AE waits before writing the DAC
             pal_load_range(0, 0x100, flash);           // sub_5F9AE(0,100h,buffer)
             video_.present();                          // DAC write is visible on the current frame
             game_timer_set(0x0A);                     // sub_1033B(0Ah)
             wait_game_tick();                         // sub_499E4
+            wait_retrace(1);                           // 5F9AE waits before writing the DAC
             pal_load_range(0, 0x100, &battle_master_palette_[0][0]); // 5F9AE(0,100h,unk_12824C)
             video_.present();
         }
@@ -145,10 +148,12 @@ int CombatII::battle_fx_2d684(int unit_index) {
     // sub_2D48A(14h)
     uint8_t flash[0x100 * 3];
     for (int p = 0; p < 0x100 * 3; ++p) flash[p] = 0x3F;
+    wait_retrace(1);                                  // 5F9AE waits before writing the DAC
     pal_load_range(0, 0x100, flash);                  // sub_5F9AE(0,100h,buffer)
     video_.present();                                 // DAC write is visible on the current frame
     game_timer_set(0x14);                             // sub_1033B(14h)
     wait_game_tick();                                 // sub_499E4
+    wait_retrace(1);                                  // 5F9AE waits before writing the DAC
     pal_load_range(0, 0x100, &battle_master_palette_[0][0]); // sub_5F9AE(0,100h,unk_12824C)
     video_.present();
     for (int i = 5; i < 0x0B && !should_exit_; ++i) { // mov ecx,5 -> cmp cx,0Bh; jl
