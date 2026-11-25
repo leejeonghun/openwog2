@@ -218,7 +218,7 @@ int CombatII::battle_fx_26e1f(int unit_index, int tx, int ty, int k) {
 //     preserves ecx itself.
 //   The palette is then rebuilt from 100h copies of palette[1] (5F945/5FC21), 4F4CD(0x33)
 //   plays and 50
-//   frames run (si<0x64, si+=2) { 5FD1C(palette, si, end=0FEh), shake (di>>1)&1, 454B3,
+//   frames run (si<0x64, si+=2) { 5E943 + 5FD1C(palette, si, end=0FEh), shake (di>>1)&1, 454B3,
 //   frame = di%3+4 cycling 4,5,6, 5F570 (the counter grows by 3 before the blit, so
 //   41,44,...,188; centring uses size/2 rounded down) } -> 454D5+5E9E8+499E4.
 //   Finally 1033B(0x0C) + 45559, the palette steps back by 3 while si>3 (no sprites), 5F9AE
@@ -268,6 +268,9 @@ int CombatII::battle_fx_276b9(int unit_index, int tx, int ty, int k) {
     // Step 2: 50 frames (si 0 -> 0x64, +2), frame = di%3+4 (cycling 4,5,6), size +3 before the
     // blit (41..188).
     for (int i = 0, di = 0; i < 0x64 && !should_exit_; i += 2, ++di) {
+        // Explicit sub_5E943 plus sub_5FD1C's own 5E943: two retraces before the palette write.
+        // The trailing 499E4 (period 5 = the same 28.5ms) then returns immediately.
+        wait_retrace(2);
         cam_fine_y_ = (int16_t)(((di >> 1) & 1) ? 0 : -4);
         pal_shift_fade(i, 0xFE);                                   // sub_5FD1C (si, end 0FEh)
         battle_fx_world_454b3_12d65();                             // sub_454B3 + sub_12D65
@@ -291,6 +294,7 @@ int CombatII::battle_fx_276b9(int unit_index, int tx, int ty, int k) {
     cam_fine_y_ = CAM_FINE_Y_REST;                                 // dword_BA838 = 0
     pal_load_range(0, 256, &battle_master_palette_[0][0]);         // 5F9AE restore master
     video_.present();
+    wait_retrace(1);                                              // 5F9AE: 5E943 wait, then DAC write
     battle_nsp_release();                                          // sub_1FFCD
     if (battle_trace_)
         fprintf(stderr, "COMBAT: 276B9 amagedon unit=%d\n", units_[(size_t)unit_index].id);
@@ -370,6 +374,7 @@ int CombatII::battle_fx_2799a(int unit_index, int tx, int ty, int k) {
     cam_fine_y_ = CAM_FINE_Y_REST;
     pal_load_range(0, 256, &battle_master_palette_[0][0]);         // sub_5F9AE restore master
     video_.present();
+    wait_retrace(1);                                              // 5F9AE: 5E943 wait, then DAC write
     battle_nsp_release();                                          // sub_1FFCD
     if (battle_trace_)
         fprintf(stderr, "COMBAT: 2799A atomicbl unit=%d\n", units_[(size_t)unit_index].id);
@@ -383,7 +388,7 @@ int CombatII::battle_fx_2799a(int unit_index, int tx, int ty, int k) {
 //     different centres: (64h,46h) (E8h,46h) (A6h,64h) (64h,82h) (E8h,82h).
 //     Top-left = centre - (target+1)/2 + frame offset (xo/yo) and the size grows by 1 per blit
 //     (1..180).
-//   - copy+3 -> 5FC21 (delta) -> 4F4CD(0x33) -> from di=3 in steps of 3: 5FD1C(di) + shake
+//   - copy+3 -> 5FC21 (delta) -> 4F4CD(0x33) -> from di=1 in steps of 3: 5FD1C(di) + shake
 //     (di>>1)&1 + 454B3/12D65 draw frame = (var_8%3)+4 (cycling 5,6,4) at the same five centres.
 //   - while di>3 only the palette steps back by 3 (no sprites) -> 5F9AE (master) +
 //     dword_7001C=0Ch -> 1FFCD.
@@ -432,10 +437,10 @@ int CombatII::battle_fx_27c5a(int unit_index, int tx, int ty, int k) {
         ++fc;
     }
     sfx(0x33);                                                     // sub_4F4CD(33h)
-    // Step 2: di 3 -> 63h (+3), palette 5FD1C(di), frame = (fc%3)+4 cycling 5,6,4.
+    // Step 2: di 1 -> 61h (+3), palette 5FD1C(di) = 1,4,...,97, frame = (fc%3)+4 cycling 5,6,4.
     //   This loop has no sub_499E4 in the original (it ends with 12E01 -> 454D5 -> 5E9E8);
     //   5FD1C calls sub_5E943 (vertical retrace) once on entry, pacing the frame at 70.086Hz.
-    for (int di = 3; di < 0x64 && !should_exit_; di += 3) {
+    for (int di = 1; di < 0x64 && !should_exit_; di += 3) {
         cam_fine_y_ = (int16_t)(((fc >> 1) & 1) ? 0 : -4);
         pal_shift_fade(di);                                        // sub_5FD1C
         battle_fx_world_12d65();                                   // sub_10AEB + sub_12D65
@@ -446,8 +451,9 @@ int CombatII::battle_fx_27c5a(int unit_index, int tx, int ty, int k) {
         wait_retrace(1);                                           // sub_5E943 inside sub_5FD1C
         ++fc;
     }
-    // Step 3: restore the palette only (sub_5E943 + sub_5FD1C = 2 retraces/step).
-    for (int t = 0x66; t > 3 && !should_exit_; t -= 3) {
+    // Step 3: restore the palette only (sub_5E943 + sub_5FD1C = 2 retraces/step); pct is the
+    // pre-decrement value, 100,97,...,4.
+    for (int t = 0x64; t > 3 && !should_exit_; t -= 3) {
         pal_shift_fade(t, 0xFE);                                   // 5FD1C restore (end 0FEh)
         present_cutscene_frame();
         wait_retrace(2);
@@ -456,6 +462,7 @@ int CombatII::battle_fx_27c5a(int unit_index, int tx, int ty, int k) {
     cam_fine_y_ = CAM_FINE_Y_REST;                                 // dword_BA838 = 0
     pal_load_range(0, 256, &battle_master_palette_[0][0]);         // sub_5F9AE restore master
     video_.present();
+    wait_retrace(1);                                              // 5F9AE: 5E943 wait, then DAC write
     battle_nsp_release();                                          // sub_1FFCD
     if (battle_trace_)
         fprintf(stderr, "COMBAT: 27C5A amagedon-multi unit=%d\n", units_[(size_t)unit_index].id);
