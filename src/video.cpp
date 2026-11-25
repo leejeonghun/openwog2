@@ -143,6 +143,7 @@ void Video::present() {
     }
 
     if (!present_thread_.joinable()) {
+        sync_submit_us_ = video_now_us();
         blit_frame(backbuffer_, &g_palette[0][0]);
         return;
     }
@@ -251,10 +252,10 @@ void Video::present_loop() {
 // show every single frame, such as animations (the expanding dialogue ellipse); an ordinary game
 // loop is fine with present() alone.
 void Video::wait_presented() {
-    if (!present_thread_.joinable()) return;   // synchronous sending already finished inside present()
-
     double submit_us = 0.0;
-    {
+    if (!present_thread_.joinable()) {
+        submit_us = sync_submit_us_;
+    } else {
         std::unique_lock<std::mutex> lock(present_mutex_);
         const uint64_t target = present_seq_;
         present_done_cv_.wait(lock, [&] {
@@ -262,12 +263,13 @@ void Video::wait_presented() {
         });
         submit_us = presented_submit_us_;
     }
+    if (submit_us <= 0.0) return;
 
     // Fill 15 ms from the moment the frame was queued - one 60 Hz frame (16.7 ms) minus a margin.
     // With real vsync, present already waited for vblank, so this deadline has passed and nothing
     // waits here (the next frame goes out on the next vblank). Without vsync (software fallback,
-    // offscreen) sending returns immediately and the animation frame would flash by, so 15 ms is
-    // filled in to make the sequence visible.
+    // offscreen) or on high-refresh displays (>60Hz), 15 ms is filled so animations (dialogue
+    // ellipse) stay visible and keep a consistent ~60fps cadence.
     const double remain = (submit_us + 15000.0) - video_now_us();
     if (remain > 0.0) SDL_Delay((Uint32)((remain + 999.0) / 1000.0));
 }

@@ -1,6 +1,7 @@
 #include "palette.h"
+#include "game_timer.h"
+#include "video.h"
 #include <cstring>
-#include <SDL.h>
 
 // Global VGA palette (6-bit per channel, 0-63)
 uint8_t g_palette[256][3];
@@ -33,7 +34,12 @@ void palette_get_range(uint8_t start, uint8_t end, uint8_t data[][3]) {
     }
 }
 
-void palette_fade_to_black(int steps) {
+void palette_fade_to_black(int steps, Video* video) {
+    if (steps <= 0) {
+        memset(g_palette, 0, sizeof(g_palette));
+        if (video) video->present();
+        return;
+    }
     uint8_t temp[256][3];
     memcpy(temp, g_palette, sizeof(g_palette));
 
@@ -44,12 +50,18 @@ void palette_fade_to_black(int steps) {
                 g_palette[i][c] = val > 0 ? val : 0;
             }
         }
-        SDL_Delay(16); // ~60fps
+        if (video) video->present();
+        GameTimer::wait_retrace(1);
     }
     memset(g_palette, 0, sizeof(g_palette));
+    if (video) video->present();
 }
 
-void palette_fade_from_black(int steps) {
+void palette_fade_from_black(int steps, Video* video) {
+    if (steps <= 0) {
+        if (video) video->present();
+        return;
+    }
     uint8_t target[256][3];
     memcpy(target, g_palette, sizeof(g_palette));
     memset(g_palette, 0, sizeof(g_palette));
@@ -60,9 +72,11 @@ void palette_fade_from_black(int steps) {
                 g_palette[i][c] = target[i][c] * (step + 1) / steps;
             }
         }
-        SDL_Delay(16);
+        if (video) video->present();
+        GameTimer::wait_retrace(1);
     }
     memcpy(g_palette, target, sizeof(g_palette));
+    if (video) video->present();
 }
 
 void palette_set_all_black() {

@@ -141,11 +141,19 @@ int CombatII::battle_fx_25dfe(int unit_index, int k) {
     std::vector<int> px((size_t)slot_count, 0);                                // 0x4C8
     std::vector<int> py((size_t)slot_count, 0);                                // 0x300
 
-    // Step 2 palette ramp: 5FC21(delta) + 5FD1C at pct 0,20,40,60,80 (ends at pct = 100).
-    for (int pct = 0; pct < 0x64; pct += 0x14) pal_shift_fade(pct);
+    // Step 2 palette ramp: 5FC21(delta) + 5FD1C at pct 0,20,40,60,80 (1 retrace per step).
+    for (int pct = 0; pct < 0x64 && !should_exit_; pct += 0x14) {
+        pal_shift_fade(pct);
+        video_.present();
+        wait_retrace(1);
+    }
     sfx(0x32);                                                                 // sub_4F4CD(32h)
-    // Step 4 dim: pct 100 -> 10 in steps of 0x0A; the original leaves the loop at 0.
-    for (int pct = 0x64; pct > 0; pct -= 0x0A) pal_shift_fade(pct);
+    // Step 4 dim: pct 100 -> 10 in steps of 0x0A (1 retrace per step).
+    for (int pct = 0x64; pct > 0 && !should_exit_; pct -= 0x0A) {
+        pal_shift_fade(pct);
+        video_.present();
+        wait_retrace(1);
+    }
 
     int n_target = 0;                                                          // [esp+0x564]
     int pal_pct = 0;                                                           // [esp+0x568]
@@ -200,9 +208,13 @@ int CombatII::battle_fx_25dfe(int unit_index, int k) {
         return 1;
     }
 
-    // Step 6 exit: 45559, palette pct 100..8 (-4), 1FFCD, then restore the camera.
+    // Step 6 exit: 45559, palette pct 96..0 (-4, 1 retrace per step), 1FFCD, then restore the camera.
     battle_fx_present_454b3();                                                  // sub_45559 = 454B3 + 5E9E8
-    for (int pct = 0x64; pct > 4; pct -= 4) pal_shift_fade(pct);
+    for (int pct = 0x60; pct >= 0 && !should_exit_; pct -= 4) {
+        pal_shift_fade(pct);
+        video_.present();
+        wait_retrace(1);
+    }
     battle_nsp_release();                                                       // sub_1FFCD
     camera_center_on(cx, cy);                                                   // sub_1124A
     return 1;

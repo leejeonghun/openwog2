@@ -636,7 +636,7 @@ L_restart:
         else if (in(0x7F, 0x94, 0x84, 0x90)) {
             if (!g_cls.ok_btn.empty()) blit_sprite_rle(0x7F, 0x84, g_cls.ok_btn.data());
             video_.present();
-            GameTimer::delay_with_pump(input_, 33 * 16);   // sub_1199E
+            GameTimer::wait_retrace(input_, 33);   // sub_1199E
             uint8_t* r = party_rec(ebp);
             if (r && sel_class >= 0 && req_ok(r, sel_class)) {
                 play_sfx(2);

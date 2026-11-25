@@ -772,6 +772,7 @@ private:
     void game_timer_set(int period);  // sub_1033B
     bool game_timer_poll();           // sub_10364
     void wait_game_tick();            // sub_499E4
+    void wait_retrace(int retraces = 1); // sub_5E943 (70.086Hz virtual retrace)
     bool wait_key_or_ticks(int ticks); // sub_499EF (true = exit or skip requested)
 
     // ---- INT8 frame ticks (loc_101F4 / sub_1031D / sub_102FF) ----

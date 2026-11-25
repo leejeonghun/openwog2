@@ -165,6 +165,7 @@ int CombatII::battle_fx_356db_anim(int unit_index) {
         camera_center_on(ux, uy);                            // sub_200DE(unit, 0)
         for (int i = 0; i < 4 && !should_exit_; ++i) {       // `cmp bx,4; jl`
             fx_pal_mix(0x60, 0x100, 0, 0x0A);                // sub_30824(0, 0Ah)
+            video_.present();
             wait_game_tick();                                // sub_499E4
         }
 

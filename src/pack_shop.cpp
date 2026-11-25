@@ -190,7 +190,7 @@ void Pack::change_gold(int delta) {
     play_pack_sfx(2);
     draw_gold_box();
     video_.present();
-    GameTimer::delay_with_pump(input_, 714);   // sub_1189F: 50 retrace
+    GameTimer::wait_retrace(input_, 50);   // sub_1189F: ~50 retraces
 }
 
 // ==== Inventory (sub_22E57) ====
@@ -210,7 +210,7 @@ int Pack::inv_insert_at(int item0, int pos) {
     while (b < pos && slot_item(s, b) != 0) b++;
     if (b == pos) {
         show_message_box(kPackMsgInvFull100);
-        GameTimer::delay_with_pump(input_, 2142);   // sub_1189F x3
+        GameTimer::wait_retrace(input_, 150);   // sub_1189F x3
         return -1;
     }
     while (b < pos) { b++; slot_item(s, b - 1) = slot_item(s, b); }
@@ -656,7 +656,7 @@ void Pack::shop_bubble(int npc_idx, int portrait_id, const char* name,
 // sub_25F21 "shop owner" branch: bubble -> 50 retrace -> repeat (list -> sell)
 void Pack::handle_shop_owner(int npc_idx) {
     shop_bubble(npc_idx, 0x54, kPackNameShopOwner, "", kPackMsgShowGoods, "");
-    GameTimer::delay_with_pump(input_, 714);                 // sub_1189F
+    GameTimer::wait_retrace(input_, 50);                 // sub_1189F
     while (true) {
         const int sel = run_item_list();
         if (sel < 0) return;                                 // quit requested
@@ -774,7 +774,7 @@ int Pack::hire_merc(int npc_idx, int id) {
         shop_restore_screen();
         video_.present();
         join_team(merc[R_ID]);                                  // sub_237F0(byte_F787F, team, 1)
-        GameTimer::delay_with_pump(input_, 471);                // sub_1199E: 33 retrace
+        GameTimer::wait_retrace(input_, 33);                    // sub_1199E: 33 retraces
         for (int i = 0; i < 256; i++) palette_set_entry((uint8_t)i, pal[i][0], pal[i][1], pal[i][2]);   // byte_54041 = 1
     };
     if (!paid) {
@@ -921,7 +921,7 @@ int Pack::rejoin_member(int npc_idx, int member) {
         shop_restore_screen();
         video_.present();
         join_team(rec[R_ID]);                                   // sub_22A53(character_id, 1)
-        GameTimer::delay_with_pump(input_, 471);                // sub_1199E
+        GameTimer::wait_retrace(input_, 33);                    // sub_1199E: 33 retraces
         for (int i = 0; i < 256; i++) palette_set_entry((uint8_t)i, pal[i][0], pal[i][1], pal[i][2]);
     };
     bool paid = false;
@@ -1021,7 +1021,7 @@ void Pack::eve_scroll_text(int talk_id) {
         }
         memcpy(bb, snap.data(), 0x1900);                                   // restore the top 20 rows
         memset(bb + 0xA280, 0, 0x1900);                                    // rows 130..149 = unk_17C4A4 (zero)
-        GameTimer::delay_with_pump(input_, 43);                            // sub_2B206 x3
+        GameTimer::wait_retrace(input_, 3);                                // sub_2B206 x3
         video_.present();
         const int cur = dy;
         dy = cur - 1;
@@ -1113,7 +1113,7 @@ void Pack::handle_options_menu() {
             } else if (in(0xF8, 0x11E, 0x97, 0xA5)) {
                 blit_sprite_rle(0xF8, 0x97, option_sprites_[7].data());                    // pressed "quit"
                 video_.present();
-                GameTimer::delay_with_pump(input_, 471);                                    // sub_1199E
+                GameTimer::wait_retrace(input_, 33);                                        // sub_1199E
                 wait_buttons_released();
                 fill_black();
                 const int ans = confirm_box(kPackQuitAsk);

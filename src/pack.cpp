@@ -4021,7 +4021,7 @@ void Pack::fade_out_to_black_rendered(int retraces_per_step) {
         render_town_frame(false);
         video_.present();
         pack_maybe_dump_shot(video_);
-        GameTimer::delay_with_pump(input_, retraces_per_step >= 2 ? 33 : 16);
+        GameTimer::wait_retrace(input_, retraces_per_step >= 2 ? 2 : 1);
     }
 }
 
@@ -4123,8 +4123,8 @@ bool Pack::run_eve_script(int event_id) {
     // passes while the actor is moving is therefore skipped forever and stalls that actor.
     int eve_pc[51] = {};
     bool eve_auto_fast = (dbg_env("G2_PACK_AUTO"));
-    // 60 Hz pacer, mirroring the sub_2B470 vsync wait so movement looks smooth.
-    GameTimer::FramePacer eve_pacer(60.0);
+    // 70.086 Hz pacer, mirroring the sub_2B470 vsync wait.
+    GameTimer::FramePacer eve_pacer(GameTimer::kVgaHz);
     for (int frame = 0; frame < eve.total; frame++) {
         if (should_exit_) break;
         bool saw_visual = false, saw_dialog = false, saw_move_setup = false;
@@ -4464,7 +4464,7 @@ bool Pack::run_eve_script(int event_id) {
 
 // ---- sub_19528: town main interaction loop ----
 void Pack::town_loop() {
-    GameTimer::FramePacer pacer(60.0);
+    GameTimer::FramePacer pacer(GameTimer::kVgaHz);
     while (!should_exit_) {
         input_.update();
         if (input_.quit_requested()) {

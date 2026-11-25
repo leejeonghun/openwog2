@@ -371,7 +371,7 @@ private:
     bool travel_fade_step();                        // sub_1E4CD(pal,0,255,2): true while still fading
     void travel_flip();                             // sub_1DA88 + sub_1D83A (present + vertical sync)
     void play_travel_sfx();                         // sub_35755(C5CE0*10, 3 = flying.VOC, 1)
-    int  travel_frame_ms() const;                   // C5CDE: 0 = wait for retrace (70Hz), 1 = no wait
+    bool wait_travel_frame();                       // C5CDE: 0 = wait for retrace (70.086Hz), 1 = no wait
     bool travel_fx_ = false;                        // travel effect in use for this move
     SPRParser travel_sprites_;                      // unk_9C720 slot 8 (bigong1/2.spr, seal.spr)
     std::vector<uint8_t> travel_sky_;               // unk_DA370 (sky xcp, 960x151)

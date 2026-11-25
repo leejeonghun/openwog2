@@ -148,12 +148,13 @@ bool FLIPlayer::play(const std::string& fli_path, const std::string& voc_path,
         return false;
     }
 
-    // Calculate frame delay (FLI speed is in 1/70s ticks)
-    uint32_t frame_delay_ms = header.speed ? (header.speed * 1000 / 70) : 71;
+    // Calculate frame delay (FLI speed is in 1/70s ticks; preserve sub-ms precision to avoid A/V drift)
+    constexpr double kDefaultFrameUs = 5.0 * 1e6 / GameTimer::kFliTickHz;
+    double frame_us = header.speed ? ((double)header.speed * 1e6 / GameTimer::kFliTickHz) : kDefaultFrameUs;
     if (header.type == 0xAF12 && header.speed > 0) {
-        frame_delay_ms = header.speed; // FLC speed is in milliseconds
+        frame_us = (double)header.speed * 1000.0; // FLC speed is in milliseconds
     }
-    if (frame_delay_ms < 10) frame_delay_ms = 71;
+    if (frame_us < 10000.0) frame_us = kDefaultFrameUs;
 
     // Start VOC audio playback if file exists
     if (!voc_path.empty() && file_exists(voc_path.c_str())) {
@@ -178,7 +179,7 @@ bool FLIPlayer::play(const std::string& fli_path, const std::string& voc_path,
 
     bool skipped = false;
 
-    GameTimer::FramePacer pacer(frame_delay_ms > 0 ? 1000.0 / frame_delay_ms : 14.0);
+    GameTimer::FramePacer pacer = GameTimer::FramePacer::from_period_us(frame_us);
     for (uint16_t f = 0; f < header.frames && !skipped; f++) {
         if (ptr + sizeof(FLIFrameHeader) > end_ptr) break;
 

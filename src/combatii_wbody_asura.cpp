@@ -111,9 +111,9 @@
 //     61115 (release tint LUT) is a no-op because the port caches no LUT; the two palette
 //     ramps run through 5FA2C(0..100h), present each DAC step and wait for it to be shown,
 //     then consume one 499E4 tick.
-//   - 5FA2C's 5E943 retrace is approximated with Video::present + Video::wait_presented so
-//     every palette step is actually displayed. This follows the monitor (typically 60Hz)
-//     instead of the original 70Hz retrace, making the ramps slightly slower.
+//   - 5FA2C's 5E943 retrace uses Video::present + wait_retrace(1) so every palette step
+//     is handed to the display at the original 70.086Hz retrace cadence regardless of
+//     monitor refresh rate.
 //   - Frame selection in (7)(8)(9) uses unk_F0DAA entry offsets, and magic_frames_ holds
 //     the same order, so it is expressed as frame numbers (0..8, reusing 0). The 12-frame
 //     column at 10h spacing in 30FD1 follows the same rule.
@@ -349,15 +349,14 @@ int CombatII::battle_fx_31283_anim(int unit_index) {
         }
     }
     game_timer_set(1);                                       // sub_1033B(1); 32h is the esi palette start
-    // sub_5FA2C writes one DAC step after 5E943. pal_scale_range is immediate, so present
-    // the new palette and wait for that frame to reach the screen before the 499E4 tick.
+    // sub_5FA2C waits for the 70.086Hz retrace (5E943) before writing DAC, so 1 tick (5.7ms)
+    // is already satisfied on return. Present each step and wait one virtual retrace.
     auto fade_palette_step = [&](int pct) {
         pal_scale_range(0, 0x100, &battle_master_palette_[0][0], pct);   // sub_5FA2C
         if (!auto_advance_) {
             video_.present();
-            video_.wait_presented();                              // sub_5E943 (display frame)
+            wait_retrace(1);                                      // sub_5E943 (70.086Hz retrace)
         }
-        wait_game_tick();                                         // sub_499E4
     };
     for (int pct = 0x32; pct >= 0 && !should_exit_; pct -= 4) {
         fade_palette_step(pct);

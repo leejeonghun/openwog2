@@ -188,6 +188,7 @@ int CombatII::battle_fx_59a70(int caster_index, int revived_index) {
         }
         battle_fx_present_454b3();                                 // 454B3 + 5E9E8
         apply_pal(0x60, 0x100, hue, 1);                            // 5FD1C(60h,100h,delta,1%)
+        video_.present();
         wait_game_tick();                                          // sub_499E4
     }
 
@@ -195,7 +196,11 @@ int CombatII::battle_fx_59a70(int caster_index, int revived_index) {
     uint8_t wash[kPalLen];
     for (int k = 0; k < kPalLen; ++k)                              // 5FC21((buf2+1), buf2)
         wash[k] = (uint8_t)(wash_pal[(k + 1) % kPalLen] - wash_pal[k]);
-    for (int pct = 0x0A; pct <= 0x64; pct += 0x0A) apply_pal(0, 0x100, wash, pct);
+    for (int pct = 0x0A; pct <= 0x64 && !should_exit_; pct += 0x0A) {
+        apply_pal(0, 0x100, wash, pct);
+        video_.present();
+        wait_retrace(1);                                           // sub_5FD1C -> sub_5E943
+    }
 
     // ---- (6) 10 frames (light pillar + wash fade) ----
     fx_shade_lut_build(0x31, 0x32);                                // sub_6106C(3,31h,32h)
@@ -215,6 +220,7 @@ int CombatII::battle_fx_59a70(int caster_index, int revived_index) {
         }
         battle_fx_present_454b3();
         apply_pal(0, 0x100, wash, 0x64 - f * 0x0A);                // 5FD1C(pct 64h,5Ah,...)
+        video_.present();
         wait_game_tick();
     }
 
@@ -261,6 +267,7 @@ int CombatII::battle_fx_59a70(int caster_index, int revived_index) {
         battle_fx_commit();                                         // sub_5E9E8
         magic_fx_draws_.clear();
         apply_pal(0, 0x100, wash, (f & 1) * 0x14);                 // 5FD1C(pct (edi&1)*14h)
+        video_.present();
         wait_game_tick();
     }
 
@@ -273,6 +280,7 @@ int CombatII::battle_fx_59a70(int caster_index, int revived_index) {
     apply_pal(0, 0x100, wash, 0x64);                               // sub_5FD1C(pct 6Eh -> 64h)
     apply_pal(0, 0x100, rev, 0x64);                                // sub_5FD1C(pct 66h -> 64h)
     pal_load_range(0, 0x100, master);                              // restore master palette
+    video_.present();
     weather_tick_enabled_ = true;                                  // sub_103A0
     battle_nsp_release();                                          // sub_1FFCD
     reset_unit_pose(A);                                            // sub_12124 (caster)

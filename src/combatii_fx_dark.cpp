@@ -60,13 +60,17 @@ int CombatII::battle_fx_26c9a(int unit_index, int tx, int ty, int k) {
     // pal_shift_fade(pct) over the full 100h entries (ASM 31727-31813).
     sfx(0x33);                                                     // sub_4F4CD(33h)
     battle_dim_row0_ = true;                                       // sub_44D6E(1)
-    auto fade = [&](int pct) { pal_shift_fade(pct, 0x100); };      // sub_5FD1C(0,100h,...)
+    auto fade = [&](int pct) {
+        pal_shift_fade(pct, 0x100);                                // sub_5FD1C(0,100h,...)
+        video_.present();
+        wait_retrace(1);
+    };
     for (int pass = 0; pass < 2 && !should_exit_; ++pass) {
         // loc_26D34: pct 0,14h,28h,3Ch,50h, then a single 45559 present.
         for (int t = 0; t <= 0x50 && !should_exit_; t += 0x14) fade(t);
         battle_fx_present_454b3();                                 // sub_45559 = 454B3 + 5E9E8
-        // loc_26D58: pct 64h,5Ah,...,0Ah without presenting.
-        for (int t = 0x64; t > 0 && !should_exit_; t -= 0x0A) fade(t);
+        // loc_26D58: sub esi,0Ah before 5FD1C -> pct 5Ah,50h,...,0.
+        for (int t = 0x5A; t >= 0 && !should_exit_; t -= 0x0A) fade(t);
         if (pass == 1) break;                                     // cmp di,1 -> 26E0A
         game_timer_set(0x10);                                     // sub_1033B(10h)
         for (int i = 0; i < nframes && !should_exit_; ++i) {
@@ -273,18 +277,19 @@ int CombatII::battle_fx_276b9(int unit_index, int tx, int ty, int k) {
         battle_fx_commit();                                        // sub_5E9E8
         wait_game_tick();                                          // sub_499E4
     }
-    // Step 3: 1033B(0x0C) + 45559 + palette restore (-3 while si>3). No sprites are drawn here;
-    // only the screen-wide palette cools down.
+    // Step 3: 1033B(0x0C) + 45559 + 499E4, then palette restore (-3 while si>3: 5E943 + 5FD1C = 2 retraces).
     game_timer_set(0x0C);                                          // sub_1033B(0Ch)
     present_cutscene_frame();                                      // sub_45559
+    wait_game_tick();                                              // sub_499E4
     for (int t = 0x64; t > 3 && !should_exit_; t -= 3) {
         pal_shift_fade(t, 0xFE);                                   // 5FD1C restore (end 0FEh)
         present_cutscene_frame();
-        wait_game_tick();
+        wait_retrace(2);                                           // sub_5E943 + sub_5FD1C(5E943)
     }
     cam_fine_x_ = CAM_FINE_X_REST;                                 // dword_7001C = 0Ch
     cam_fine_y_ = CAM_FINE_Y_REST;                                 // dword_BA838 = 0
-    pal_load_range(0, 256, &battle_master_palette_[0][0]);                // 5F9AE restore master
+    pal_load_range(0, 256, &battle_master_palette_[0][0]);         // 5F9AE restore master
+    video_.present();
     battle_nsp_release();                                          // sub_1FFCD
     if (battle_trace_)
         fprintf(stderr, "COMBAT: 276B9 amagedon unit=%d\n", units_[(size_t)unit_index].id);
@@ -353,16 +358,17 @@ int CombatII::battle_fx_2799a(int unit_index, int tx, int ty, int k) {
         pal_cycle_entries(fx_pal_cycle_, 256);                     // loc_27B88
         pal_load_range(0, 256, fx_pal_cycle_);                     // sub_5F9AE (rotated copy)
     }
-    // Step 3: 45559 + palette restore (si=0x64 down by 4, no sprites) + 5F9AE + shake 0.
+    // Step 3: 45559 + palette restore (si=0x64 down by 4, no sprites, 1 retrace/step) + 5F9AE + shake 0.
     present_cutscene_frame();                                      // sub_45559
     for (int t = 0x64; t > 4 && !should_exit_; t -= 4) {
-        pal_shift_fade(t);                                         // 5FD1C
+        pal_shift_fade(t);                                         // 5FD1C (sub_5E943)
         present_cutscene_frame();
-        wait_game_tick();
+        wait_retrace(1);
     }
     cam_fine_x_ = CAM_FINE_X_REST;                                 // dword_7001C = 0Ch
     cam_fine_y_ = CAM_FINE_Y_REST;
-    pal_load_range(0, 256, &battle_master_palette_[0][0]);                // sub_5F9AE restore master
+    pal_load_range(0, 256, &battle_master_palette_[0][0]);         // sub_5F9AE restore master
+    video_.present();
     battle_nsp_release();                                          // sub_1FFCD
     if (battle_trace_)
         fprintf(stderr, "COMBAT: 2799A atomicbl unit=%d\n", units_[(size_t)unit_index].id);
@@ -426,9 +432,8 @@ int CombatII::battle_fx_27c5a(int unit_index, int tx, int ty, int k) {
     }
     sfx(0x33);                                                     // sub_4F4CD(33h)
     // Step 2: di 3 -> 63h (+3), palette 5FD1C(di), frame = (fc%3)+4 cycling 5,6,4.
-    //   This loop has no sub_499E4 in the original (it ends with 12E01 -> 454D5 -> 5E9E8).
-    //   5FD1C calls sub_5E943 (vertical retrace) once on entry, which paces the frame; the port's
-    //   pal_shift_fade does not wait, so one wait_game_tick() stands in for it.
+    //   This loop has no sub_499E4 in the original (it ends with 12E01 -> 454D5 -> 5E9E8);
+    //   5FD1C calls sub_5E943 (vertical retrace) once on entry, pacing the frame at 70.086Hz.
     for (int di = 3; di < 0x64 && !should_exit_; di += 3) {
         cam_fine_y_ = (int16_t)(((fc >> 1) & 1) ? 0 : -4);
         pal_shift_fade(di);                                        // sub_5FD1C
@@ -437,18 +442,19 @@ int CombatII::battle_fx_27c5a(int unit_index, int tx, int ty, int k) {
         battle_fx_flush();                                         // sub_12E01
         battle_fx_overlay();                                       // sub_454D5
         battle_fx_commit();                                        // sub_5E9E8
-        wait_game_tick();                                          // instead of sub_5E943 (see above)
+        wait_retrace(1);                                           // sub_5E943 inside sub_5FD1C
         ++fc;
     }
-    // Step 3: restore the palette only; the original draws no sprites here.
+    // Step 3: restore the palette only (sub_5E943 + sub_5FD1C = 2 retraces/step).
     for (int t = 0x66; t > 3 && !should_exit_; t -= 3) {
         pal_shift_fade(t, 0xFE);                                   // 5FD1C restore (end 0FEh)
         present_cutscene_frame();
-        wait_game_tick();
+        wait_retrace(2);
     }
     cam_fine_x_ = CAM_FINE_X_REST;                                 // dword_7001C = 0Ch
     cam_fine_y_ = CAM_FINE_Y_REST;                                 // dword_BA838 = 0
-    pal_load_range(0, 256, &battle_master_palette_[0][0]);                // sub_5F9AE restore master
+    pal_load_range(0, 256, &battle_master_palette_[0][0]);         // sub_5F9AE restore master
+    video_.present();
     battle_nsp_release();                                          // sub_1FFCD
     if (battle_trace_)
         fprintf(stderr, "COMBAT: 27C5A amagedon-multi unit=%d\n", units_[(size_t)unit_index].id);

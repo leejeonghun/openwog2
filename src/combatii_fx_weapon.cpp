@@ -800,7 +800,7 @@ void CombatII::battle_fx_341c7_anim(int unit_index) {
     }
     pal_load_range(0, 0x100, solid);                                  // 5F9AE (solid 10h)
     video_.present();
-    wait_game_tick();                                                 // equivalent of 5E943 (retrace) in 5F9AE
+    wait_retrace(1);                                                  // sub_5E943 (retrace) in 5F9AE
     battle_highlight_clear();                                         // 44D75
     A.fx_sprite_hidden = false;                                       // sub_11E04 (re-occupy)
     battle_fx_world();                                                // 45559 = 454B3

@@ -294,7 +294,7 @@ void CombatII::pal_crossfade(int start, int end, const uint8_t* from, const uint
         }
         video_.present();
         if (should_exit_) return;
-        wait_game_tick();
+        wait_retrace(1);                             // sub_5FD1C -> sub_5E943 (vertical retrace)
     }
 }
 

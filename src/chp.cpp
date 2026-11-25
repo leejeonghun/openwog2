@@ -1404,7 +1404,7 @@ void CHP::zoom_out_effect() {
 
         memcpy(back, dest.px, sizeof(src));           // sub_1DA88
         video_.present();
-        GameTimer::delay_with_pump(input_, travel_frame_ms());   // sub_1DA88 vsync (C5CDE == 0: 70 Hz, 1: no wait)
+        if (!wait_travel_frame()) { transition_exit("EXIT"); return; }   // sub_1DA88 vsync (C5CDE == 0: 70.086 Hz, 1: no wait)
 
         x_off -= 9 - ebp / 0x50;                      // idiv truncates toward zero, like C
         y_off -= 3 - K / 0x78;
@@ -1469,7 +1469,7 @@ void CHP::zoom_in_effect() {
 
         memcpy(back, dest.px, sizeof(src));           // sub_1DA88
         video_.present();
-        GameTimer::delay_with_pump(input_, travel_frame_ms());   // sub_1DA88 vsync (C5CDE == 0: 70 Hz, 1: no wait)
+        if (!wait_travel_frame()) { transition_exit("EXIT"); return; }   // sub_1DA88 vsync (C5CDE == 0: 70.086 Hz, 1: no wait)
 
         x_off += 4 - (width - 0x140) / 0xFA;
         y_off += 4 - (height - 0xC8) / 0x6E;
@@ -2263,10 +2263,10 @@ bool CHP::wait_for_input() {
     return true;
 }
 
-// sub_1D83A x retraces: approximate a 70 Hz vertical retrace wait.
+// sub_1D83A x retraces: 70.086 Hz vertical retrace wait.
 void CHP::flip_wait(int retraces) {
     if (retraces <= 0) return;
-    if (!GameTimer::delay_with_pump(input_, (uint32_t)(retraces * 1000 / 70))) dos_exit_ = true;
+    if (!GameTimer::wait_retrace(input_, retraces)) dos_exit_ = true;
 }
 
 // sub_1CAB0: replace every pixel whose mask byte is not 0xFF with a dark palette
@@ -3684,7 +3684,7 @@ int CHP::show_chapter_select(int mode) {
 
         video_.present();                                        // sub_1DA88
         phase = (phase == 0x1E) ? 0 : phase + 1;
-        GameTimer::delay_with_pump(input_, 14);                  // approximate 70 Hz retrace
+        if (!GameTimer::wait_retrace(input_, 1)) { transition_exit(IPC::EXIT); return 0; }
     }
 }
 
@@ -3717,7 +3717,7 @@ void CHP::chapter_select_scroll(int dir, int page, std::vector<uint8_t>& pages,
             if (input_.quit_requested()) { transition_exit(IPC::EXIT); return; }
             memcpy(screen, pages.data() + off, kPageBytes);       // sub_1DABB(C5C5C+off -> C5EA4)
             video_.present();
-            GameTimer::delay_with_pump(input_, 14);
+            if (!GameTimer::wait_retrace(input_, 1)) { transition_exit(IPC::EXIT); return; }
         }
     } else {
         memcpy(screen, pages.data() + kPageBytes, kPageBytes);    // sub_1DABB(C5C5C+0xFA00 -> C5EA4)
@@ -3727,7 +3727,7 @@ void CHP::chapter_select_scroll(int dir, int page, std::vector<uint8_t>& pages,
             if (input_.quit_requested()) { transition_exit(IPC::EXIT); return; }
             memcpy(screen, pages.data() + off, kPageBytes);
             video_.present();
-            GameTimer::delay_with_pump(input_, 14);
+            if (!GameTimer::wait_retrace(input_, 1)) { transition_exit(IPC::EXIT); return; }
         }
     }
 }
@@ -3787,15 +3787,18 @@ void CHP::advance_time_phase() {
 // (dword_9ECB2..9ECCE); sprite 2 is the side view used for takeoff and landing.
 static constexpr int kSkyW = 960, kSkyH = 151;      // 0x23640 = 960 * 151 bytes
 
-// sub_1D83A/sub_1DA88: C5CDE == 0 waits for the 70 Hz retrace, 1 does not wait (C5C58 = 0).
-int CHP::travel_frame_ms() const { return state_.config_data[0] == 1 ? 1 : 14; }
+// sub_1D83A/sub_1DA88: C5CDE == 0 waits for the 70.086 Hz retrace, 1 does not wait (C5C58 = 0).
+bool CHP::wait_travel_frame() {
+    if (state_.config_data[0] == 1) return GameTimer::delay_with_pump(input_, 1);
+    return GameTimer::wait_retrace(input_, 1);
+}
 
 // Present a frame: sub_1DA88 (buffer -> VGA) plus sub_1D83A (retrace wait).
 void CHP::travel_flip() {
     video_.present();
     input_.update();
     if (input_.quit_requested()) { dos_exit_ = true; return; }
-    GameTimer::delay_with_pump(input_, travel_frame_ms());
+    if (!wait_travel_frame()) dos_exit_ = true;
 }
 
 // sub_35755(volume = byte_C5CE0 * 10, 3, 1): effect 3 is flying.VOC. byte_C5CE0 is 1
@@ -4361,7 +4364,7 @@ void CHP::camera_pan(int x0, int y0, int x1, int y1) {
         if (s % 60 == 0) advance_time_phase();
         input_.update();
         if (input_.quit_requested()) { dos_exit_ = true; break; }
-        GameTimer::delay_with_pump(input_, travel_frame_ms());
+        if (!wait_travel_frame()) { dos_exit_ = true; break; }
     }
     render_map_and_points();                  // last frame, still the flying view (7BCA4 becomes 1 after this)
     pan_active_ = false;                      // byte_7BCA4 = 1
@@ -4504,7 +4507,7 @@ void CHP::world_map_loop() {
     first_frame_ = true;     // byte_80320: no party sprite on the first frame
     click_latch_ = false;
 
-    GameTimer::FramePacer pacer(60.0);
+    GameTimer::FramePacer pacer(GameTimer::kVgaHz);
     while (!state_.transition_pending && !dos_exit_) {
         input_.update();
         if (input_.quit_requested()) { transition_exit("EXIT"); return; }

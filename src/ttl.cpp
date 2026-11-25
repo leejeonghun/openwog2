@@ -163,7 +163,7 @@ void TTL::play_intro(bool with_hicom) {
     // 2. Softmax Intro (SOFTMAX.FLI + SOFTMAX.VOC)
     play_fli_with_audio("SOFTMAX.FLI", "SOFTMAX.VOC");
 
-    palette_fade_to_black(16);
+    palette_fade_to_black(16, &video_);
     video_.clear();
     video_.present();
 }
@@ -475,7 +475,7 @@ void TTL::cleanup_and_exit(int code) {
     video_.cursor_reset();   // sub_14521: reset the mouse driver -> back to the system cursor
 
     if (code != 0) {
-        palette_fade_to_black(16);
+        palette_fade_to_black(16, &video_);
     } else {
         video_.set_text_mode();
     }

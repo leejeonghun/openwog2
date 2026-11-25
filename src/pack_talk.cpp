@@ -133,7 +133,7 @@ int Pack::run_talk_engine(int npc_idx, int eve_actor, int portrait_id, const std
                 if (!poll_mouse(st, mx, my)) return false;
                 const bool pressed = (st == 1) || key_down();
                 // Wait 3 retraces; skipped while pressed and the latch is clear (fast output).
-                if (!pressed || latch) GameTimer::delay_with_pump(input_, 43);
+                if (!pressed || latch) GameTimer::wait_retrace(input_, 3);
                 if (!pressed) latch = false;
                 if (c == 0) break;
             }

@@ -2,6 +2,7 @@
 #include "input.h"
 #include <SDL.h>
 #include <algorithm>
+#include <cmath>
 
 namespace GameTimer {
 uint64_t now_us() {
@@ -24,6 +25,47 @@ bool delay_with_pump(Input& input, uint32_t ms) {
     return !input.poll_quit();
 }
 
+static bool wait_retrace_impl(Input* input, int retraces) {
+    if (retraces <= 0) return input ? !input->poll_quit() : true;
+    static thread_local double next_retrace_us = 0.0;
+    const double now = (double)now_us();
+    const double span_us = (double)retraces * kVgaPeriodUs;
+    double deadline = next_retrace_us + span_us;
+    if (next_retrace_us <= 0.0 || now - next_retrace_us > 4.0 * kVgaPeriodUs) {
+        deadline = now + span_us;
+    } else if (deadline <= now) {
+        const double missed = now - deadline;
+        const double steps = std::floor(missed / kVgaPeriodUs) + 1.0;
+        deadline += steps * kVgaPeriodUs;
+    }
+    for (;;) {
+        if (input && input->poll_quit()) {
+            next_retrace_us = 0.0;
+            return false;
+        }
+        const double cur = (double)now_us();
+        const double remain_us = deadline - cur;
+        if (remain_us <= 0.0) break;
+        if (remain_us > 1800.0) {
+            const uint64_t max_chunk = input ? 5ULL : 20ULL;
+            const uint64_t chunk_ms = std::min<uint64_t>((uint64_t)((remain_us - 800.0) / 1000.0), max_chunk);
+            SDL_Delay((Uint32)chunk_ms);
+        } else {
+            SDL_Delay(0);
+        }
+    }
+    next_retrace_us = deadline;
+    return input ? !input->poll_quit() : true;
+}
+
+bool wait_retrace(Input& input, int retraces) {
+    return wait_retrace_impl(&input, retraces);
+}
+
+void wait_retrace(int retraces) {
+    (void)wait_retrace_impl(nullptr, retraces);
+}
+
 bool wait_for_press(Input& input, uint32_t max_ms) {
     const uint64_t end = (max_ms == 0) ? 0 : now_us() + (uint64_t)max_ms * 1000;
     for (;;) {
@@ -40,15 +82,31 @@ FramePacer::FramePacer(double target_fps) {
     reset();
 }
 
-void FramePacer::reset() { start_us_ = now_us(); }
+FramePacer FramePacer::from_period_us(double period_us) {
+    FramePacer p(0.0);
+    if (period_us > 0.0) p.frame_us_ = period_us;
+    p.reset();
+    return p;
+}
+
+void FramePacer::reset() { next_us_ = (double)now_us() + frame_us_; }
 
 bool FramePacer::pace(Input& input) {
-    const uint64_t now = now_us();
-    if (now - start_us_ < (uint64_t)frame_us_) {
-        const uint32_t remain_ms = (uint32_t)((start_us_ + (uint64_t)frame_us_ - now) / 1000);
-        if (!delay_with_pump(input, remain_ms)) return false;
+    for (;;) {
+        if (input.poll_quit()) return false;
+        const double now = (double)now_us();
+        const double remain_us = next_us_ - now;
+        if (remain_us <= 0.0) break;
+        if (remain_us > 1800.0) {
+            const uint64_t chunk_ms = std::min<uint64_t>((uint64_t)((remain_us - 800.0) / 1000.0), 5ULL);
+            SDL_Delay((Uint32)chunk_ms);
+        } else {
+            SDL_Delay(0);
+        }
     }
-    start_us_ = now_us();
+    next_us_ += frame_us_;
+    const double now = (double)now_us();
+    if (now - next_us_ > 4.0 * frame_us_) next_us_ = now + frame_us_;
     return true;
 }
 }  // namespace GameTimer

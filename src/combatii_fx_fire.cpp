@@ -14,7 +14,7 @@
 //  - Palette ramps use the shared runtime: 5623E -> pal_ramp_set_width, 562C1 -> pal_ramp_step,
 //    56245/5FA2C -> pal_ramp_apply. The four ramped drivers reproduce the ASM's pre-loop
 //    562C1(4Bh,0) fade-in and tail 562C1(4Bh,0) fade-out with video_.present() +
-//    video_.wait_presented() per step (the DAC ramp needs the existing buffer shown; 5FD1C
+//    wait_retrace(1) per step (the DAC ramp needs the existing buffer shown; 5FD1C
 //    waits for the retrace 5E943; wait_game_tick() would wait a whole 1033B period instead).
 //  - sub_10AEB/sub_12BEE map passes use render_battle_map(); loops that start at 454B3 and end
 //    with 5E9E8 use battle_fx_present_454b3(), and their 454D5+5E9E8 tails use
@@ -161,7 +161,7 @@ int CombatII::battle_fx_5666e(int unit_index, int tx, int ty, int k) {
         if (should_exit_) break;
         const int ramp = pal_ramp_step(0x4B, 0);
         video_.present();
-        video_.wait_presented();                 // sub_5E943 (one display frame)
+        wait_retrace(1);                         // sub_5E943 (70.086Hz retrace)
         if (ramp == 1) break;
     }
     int spawned = 5, ticks = 5;          // ASM var_10 (kill count) and var_8 both start at 5
@@ -205,7 +205,7 @@ int CombatII::battle_fx_5666e(int unit_index, int tx, int ty, int k) {
         if (should_exit_) break;
         const int ramp = pal_ramp_step(0x4B, 0);
         video_.present();
-        video_.wait_presented();                 // sub_5E943
+        wait_retrace(1);                         // sub_5E943
         if (ramp == 0) break;
     }
     pal_ramp_apply(0);                               // release the ramp (DAC = master)
@@ -232,7 +232,7 @@ int CombatII::battle_fx_56896(int unit_index, int tx, int ty, int k) {
         if (should_exit_) break;
         const int ramp = pal_ramp_step(0x4B, 0);
         video_.present();
-        video_.wait_presented();
+        wait_retrace(1);
         if (ramp == 1) break;
     }
     int spawned = 0, ticks = 0;
@@ -290,7 +290,7 @@ int CombatII::battle_fx_56896(int unit_index, int tx, int ty, int k) {
         if (should_exit_) break;
         const int ramp = pal_ramp_step(0x4B, 0);
         video_.present();
-        video_.wait_presented();
+        wait_retrace(1);
         if (ramp == 0) break;
     }
     pal_ramp_apply(0);                               // release the ramp (DAC = master)
@@ -321,7 +321,7 @@ int CombatII::battle_fx_56bd4(int unit_index, int tx, int ty, int k) {
         if (should_exit_) break;
         const int ramp = pal_ramp_step(0x4B, 0);
         video_.present();
-        video_.wait_presented();
+        wait_retrace(1);
         if (ramp == 1) break;
     }
     int spawned = 0, ticks = 0, frames = -1;
@@ -400,7 +400,7 @@ int CombatII::battle_fx_56bd4(int unit_index, int tx, int ty, int k) {
         if (should_exit_) break;
         const int ramp = pal_ramp_step(0x4B, 0);
         video_.present();
-        video_.wait_presented();
+        wait_retrace(1);
         if (ramp == 0) break;
     }
     pal_ramp_apply(0);                               // release the ramp (DAC = master)
@@ -617,7 +617,7 @@ int CombatII::battle_fx_57f18(int unit_index, int tx, int ty, int k) {
         if (should_exit_) break;
         const int ramp = pal_ramp_step(0x4B, 0);
         video_.present();                        // show the DAC ramp on the existing buffer
-        video_.wait_presented();                 // sub_5E943 inside 5FD1C
+        wait_retrace(1);                         // sub_5E943 inside 5FD1C
         if (ramp == 1) break;
     }
     sfx(0x33);                                       // 4F4CD(33)
@@ -724,11 +724,12 @@ int CombatII::battle_fx_57f18(int unit_index, int tx, int ty, int k) {
         if (should_exit_) break;
         battle_fx_454b3();                           // sub_454B3 (incl. fall-through 454D5)
         const int ramp = pal_ramp_step(0x4B, 0);     // sub_562C1 -> 56245 -> 5FD1C
-        video_.wait_presented();                     // sub_5E943 inside 5FD1C
+        wait_retrace(1);                             // sub_5E943 inside 5FD1C
         if (ramp == 0) break;                        // test ax,ax; jz loc_5859F
         battle_fx_commit();                          // sub_5E9E8
     }
     pal_ramp_apply(0);                               // release the ramp (DAC = master)
+    video_.present();
     battle_nsp_release();
     fx_particles_free();
     (void)ticks;

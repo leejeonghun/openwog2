@@ -2,6 +2,7 @@
 #include "combatii.h"
 #include "combatii_internal.h"
 #include "audio.h"
+#include "game_timer.h"
 
 // Video/Input are the single instances owned by gene2.cpp, so the window survives module switches.
 CombatII::CombatII(Video& video, Input& input) : video_(video), input_(input) {}
@@ -501,6 +502,11 @@ void CombatII::wait_game_tick() {
     }
 }
 
+void CombatII::wait_retrace(int retraces) {
+    if (auto_advance_ || retraces <= 0) return;
+    if (!GameTimer::wait_retrace(input_, retraces)) should_exit_ = true;
+}
+
 bool CombatII::wait_key_or_ticks(int ticks) {
     // sub_499EF: set the period to `ticks` with `sub_1033B(ticks)`, poll keys through
     // sub_5D22E/sub_5D839 and return as soon as one arrives (consumed by getch_). Otherwise loop
@@ -989,6 +995,10 @@ bool CombatII::handle_scroll_input(double now_us, const std::function<void()>& d
         }
         return moved;
     };
+    auto advance_scroll_deadline = [&](double& next_us) {
+        if (next_us > 0.0 && now_us - next_us <= 4.0 * kStepUs) next_us += kStepUs;
+        else next_us = now_us + kStepUs;
+    };
     // ---- X axis ----
     if(scroll_hold_x_ != 0) {
         // Keep holding while the key stays down (4A3FF) or the mouse stays in the inner band
@@ -1000,7 +1010,7 @@ bool CombatII::handle_scroll_input(double now_us, const std::function<void()>& d
         } else if(now_us >= scroll_next_x_us_) {
             const bool moved = step_tile(0, scroll_hold_x_);
             if(!moved) scroll_hold_x_ = 0; // boundary refused (ebx=0) -> stop; outer cooldown retries
-            scroll_next_x_us_ = now_us + kStepUs;
+            advance_scroll_deadline(scroll_next_x_us_);
         }
     }
     if(scroll_hold_x_ == 0 && outer_x != 0) {
@@ -1023,7 +1033,7 @@ bool CombatII::handle_scroll_input(double now_us, const std::function<void()>& d
         } else if(now_us >= scroll_next_y_us_) {
             const bool moved = step_tile(1, scroll_hold_y_);
             if(!moved) scroll_hold_y_ = 0;
-            scroll_next_y_us_ = now_us + kStepUs;
+            advance_scroll_deadline(scroll_next_y_us_);
         }
     }
     if(scroll_hold_y_ == 0 && outer_y != 0) {

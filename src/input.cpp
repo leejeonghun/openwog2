@@ -94,6 +94,7 @@ bool Input::is_key_held(SDL_Keycode key) const {
 }
 
 bool Input::poll_quit() {
+    if (initialized_) SDL_PumpEvents();
     SDL_Event ev;
     if (SDL_PeepEvents(&ev, 1, SDL_GETEVENT, SDL_QUIT, SDL_QUIT) > 0) {
         quit_ = true;

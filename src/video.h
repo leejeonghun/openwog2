@@ -122,6 +122,7 @@ private:
     uint64_t presented_seq_ = 0;
     double present_frame_submit_us_ = 0.0;   // when the frame was queued
     double presented_submit_us_ = 0.0;       // when the frame that is now visible was queued
+    double sync_submit_us_ = 0.0;            // synchronous fallback timestamp for wait_presented
     std::condition_variable present_done_cv_;
     // An OpenGL renderer binds its context to a thread: init detaches it from the main thread so
     // the present thread can take it over. If the platform refuses the move, present_gl_failed_

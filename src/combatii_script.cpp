@@ -2507,16 +2507,12 @@ void CombatII::next_scenario_fade_out() {
     uint8_t saved[256][3];
     memcpy(saved, g_palette, sizeof(saved));
     game_timer_set(3);                                   // sub_1033B(3)
-    constexpr double kVretraceUs = 1e6 / 70.086;         // sub_5E943
-    for (int brightness = 100; brightness >= 0; brightness -= 5) {
-        const double t0 = timer_now_us();
+    for (int brightness = 100; brightness >= 0 && !should_exit_; brightness -= 5) {
         for (int i = 0; i < 256; ++i)
             for (int ch = 0; ch < 3; ++ch)
                 g_palette[i][ch] = (uint8_t)((int)saved[i][ch] * brightness / 100); // sub_5FA2C scale
         video_.present();
-        wait_game_tick();                                // sub_499E4 (3 ticks)
-        const double remain = kVretraceUs - (timer_now_us() - t0);
-        if (remain > 1000.0) SDL_Delay((Uint32)(remain / 1000.0));
+        wait_game_tick();                                // sub_499E4 (3 ticks = 17.1ms > 1 retrace)
     }
     memset(g_palette, 0, sizeof(g_palette));
     video_.present();

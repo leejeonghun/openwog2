@@ -2879,7 +2879,7 @@ void CombatII::apply_weather_palette(bool animate) {
         // 51 steps x one vertical retrace each = about 0.7s. sub_49A3E keeps start=0, end=0x100
         // fixed and passes the percentage step f = 0,2,...,100 into sub_5FD1C, updating all 256
         // DAC entries together at each step.
-        for (int f = 0; f <= 100; f += 2) {
+        for (int f = 0; f <= 100 && !should_exit_; f += 2) {
             for (int i = 0; i < 256; ++i) {
                 uint8_t v[3];
                 for (int ch = 0; ch < 3; ++ch) {
@@ -2889,7 +2889,7 @@ void CombatII::apply_weather_palette(bool animate) {
                 palette_set_entry((uint8_t)i, v[0], v[1], v[2]);
             }
             video_.present();
-            SDL_Delay(14);                                   // sub_5E943 (vertical retrace)
+            wait_retrace(1);                                 // sub_5E943 (vertical retrace)
         }
     }
     // sub_44F30 (ASM 71388-71400): copy unk_12824C -> unk_F9188 and commit [0, 256) via sub_5F9AE.

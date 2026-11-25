@@ -114,10 +114,11 @@ int CombatII::battle_fx_58619(int unit_index, int tx, int ty, int k) {
     game_timer_set(1);                                         // sub_1033B(1)
     sfx(0x32);                                                 // sub_4F4CD(32h)
 
-    // (2) 5FA2C: 100% -> 0% (step -2)
+    // (2) 5FA2C: 100% -> 0% (step -2). sub_5FA2C waits 1 retrace (5E943 = 14.27ms > 1 tick).
     for (int pct = 0x64; pct >= 0 && !should_exit_; pct -= 2) {
         pal_scale_range(0, 0x100, &battle_master_palette_[0][0], pct);
-        wait_game_tick();
+        video_.present();
+        wait_retrace(1);
     }
     if (should_exit_) { weather_tick_enabled_ = true; battle_nsp_release(); return 1; }
 
@@ -143,7 +144,8 @@ int CombatII::battle_fx_58619(int unit_index, int tx, int ty, int k) {
     wait_game_tick();                                          // 499E4 after the first 5E9E8
     for (int pct = 0; pct <= 0x64 && !should_exit_; pct += 2) {
         pal_scale_range(0, 0x100, &battle_master_palette_[0][0], pct);
-        wait_game_tick();
+        video_.present();
+        wait_retrace(1);
     }
     game_timer_set(5);                                         // sub_1033B(5)
     present_existing();                                        // sub_5E9E8 (same buffer)
@@ -233,17 +235,21 @@ int CombatII::battle_fx_58619(int unit_index, int tx, int ty, int k) {
     cam_fine_y_ = CAM_FINE_Y_REST;                             // dword_BA838 = 0
 
     // (6) Finish: darken -> one frame -> brighten -> LUT and pose restore
+    game_timer_set(1);                                         // sub_1033B(1) (loc_58AFC)
     for (int pct = 0x64; pct >= 0 && !should_exit_; pct -= 2) {
         pal_scale_range(0, 0x100, &battle_master_palette_[0][0], pct);
-        wait_game_tick();
+        video_.present();
+        wait_retrace(1);
     }
     battle_fx_world();                                         // sub_454B3
     battle_fx_commit();                                        // sub_5E9E8
     for (int pct = 0; pct <= 0x64 && !should_exit_; pct += 2) {
         pal_scale_range(0, 0x100, &battle_master_palette_[0][0], pct);
-        wait_game_tick();
+        video_.present();
+        wait_retrace(1);
     }
     pal_scale_range(0, 0x100, &battle_master_palette_[0][0], 100);    // 61115 counterpart (original palette)
+    video_.present();
     for (int oi : list) {
         if ((size_t)oi < units_.size()) reset_unit_pose(units_[(size_t)oi]);   // sub_12124
     }
@@ -335,6 +341,7 @@ int CombatII::battle_fx_5a267(int unit_index, int tx, int ty, int k) {
 
     caster.fx_sprite_hidden = false;                           // sub_11E04(caster)
     pal_shift_fade(0);                                         // 5FD1C(0) - original palette
+    video_.present();
     weather_tick_enabled_ = true;                              // sub_103A0
     battle_nsp_release();                                      // sub_1FFCD
     return 1;
@@ -416,6 +423,7 @@ int CombatII::battle_fx_5a566(int unit_index, int tx, int ty, int k) {
     caster.fx_sprite_hidden = false;                           // sub_11E04(caster)
     sfx(0x33);                                                 // sub_4F4CD(33h)
     pal_shift_fade(0);                                         // 5FD1C(0)
+    video_.present();
     weather_tick_enabled_ = true;                              // sub_103A0
     battle_nsp_release();                                      // sub_1FFCD
     return 1;
