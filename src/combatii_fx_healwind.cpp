@@ -208,9 +208,10 @@ int CombatII::battle_fx_25dfe(int unit_index, int k) {
         return 1;
     }
 
-    // Step 6 exit: 45559, palette pct 96..0 (-4, 1 retrace per step), 1FFCD, then restore the camera.
+    // Step 6 exit: 45559, then 5FD1C at pct 100,96,...,8 (`mov esi,64h`, the pushed value is read
+    // before `sub esi,4`, `cmp si,4; jg`), 1FFCD, then restore the camera.
     battle_fx_present_454b3();                                                  // sub_45559 = 454B3 + 5E9E8
-    for (int pct = 0x60; pct >= 0 && !should_exit_; pct -= 4) {
+    for (int pct = 0x64; pct > 4 && !should_exit_; pct -= 4) {
         pal_shift_fade(pct);
         video_.present();
         wait_retrace(1);

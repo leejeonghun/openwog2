@@ -69,8 +69,9 @@ int CombatII::battle_fx_26c9a(int unit_index, int tx, int ty, int k) {
         // loc_26D34: pct 0,14h,28h,3Ch,50h, then a single 45559 present.
         for (int t = 0; t <= 0x50 && !should_exit_; t += 0x14) fade(t);
         battle_fx_present_454b3();                                 // sub_45559 = 454B3 + 5E9E8
-        // loc_26D58: sub esi,0Ah before 5FD1C -> pct 5Ah,50h,...,0.
-        for (int t = 0x5A; t >= 0 && !should_exit_; t -= 0x0A) fade(t);
+        // loc_26D58: si is pushed for 5FD1C before `sub esi,0Ah`, so pct is the pre-decrement
+        // value: 64h,5Ah,50h,...,0Ah (10 steps). The loop ends at si==0, so pct 0 is never called.
+        for (int t = 0x64; t > 0 && !should_exit_; t -= 0x0A) fade(t);
         if (pass == 1) break;                                     // cmp di,1 -> 26E0A
         game_timer_set(0x10);                                     // sub_1033B(10h)
         for (int i = 0; i < nframes && !should_exit_; ++i) {
