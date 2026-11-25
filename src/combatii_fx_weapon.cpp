@@ -774,7 +774,10 @@ void CombatII::battle_fx_341c7_anim(int unit_index) {
         }
         battle_fx_commit();                                           // 5E9E8
         wait_game_tick();                                             // 499E4
-        if (si > 0x3A) fx_pal_mix(0x00, 0x68, 0x10, 0x24);             // 307A6(10h, 24h)
+        if (si > 0x3A) {                                               // 307A6(10h, 24h)
+            fx_pal_mix(0x00, 0x68, 0x10, 0x24);
+            wait_retrace(2);                                           // 307A6 = 5F945 + 5FD1C
+        }
         if (si == 0x0A) sfx(0x34);                                     // 4F4CD(34h)
         if (si % 12 == 0) sfx(0x33);                                   // 4F4CD(33h)
     }
@@ -1082,6 +1085,8 @@ void CombatII::battle_fx_34c48_anim(int unit_index) {
     A.fx_sprite_hidden = true;                                           // sub_11EE4
     battle_dim_row0_ = true;                                             // 44D6E(1, 28h)
     fx_pal_mix(0x60, 0x100, 0, 0x28);                                    // 30824(0, 28h)
+    wait_retrace(2);                                                     // 30824 = 5F945 + 5FD1C
+    wait_retrace(1);                                                     // 5F9AE waits before writing the DAC
     pal_load_range(0, 256, &battle_master_palette_[0][0]);                // 5F9AE(0, 100h, unk_12824C)
     for (int ti : battle_target_list_) {                                 // 1214F
         if (ti < 0 || (size_t)ti >= units_.size()) continue;
@@ -1241,6 +1246,7 @@ void CombatII::battle_fx_32589_anim(int unit_index, int target_index) {
     // (4)
     battle_dim_row0_ = true;                                            // 44D6E(1, 0Ah)
     fx_pal_mix(0x60, 0x100, 0, 0x0A);                                   // 30824(0, 0Ah)
+    wait_retrace(2);                                                    // 30824 = 5F945 + 5FD1C
     game_timer_set(5);                                                  // 1033B(5)
     const int ax = (A.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X + 0x0B;
     const int ay = (A.y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y - 2;
@@ -1263,6 +1269,7 @@ void CombatII::battle_fx_32589_anim(int unit_index, int target_index) {
     // (5) stage A (27 frames)
     for (int k = 0; k <= 8 && !should_exit_; ++k) {
         fx_pal_mix(0x60, 0x100, 0, 6);                                   // 30824(0, 6)
+        wait_retrace(2);                                                 // 30824 = 5F945 + 5FD1C
         for (int r = 0; r < 3 && !should_exit_; ++r) frame({dir_base + k});
     }
     // (6) stage B (15 frames): var_8 toggles 7/8 and the frame is var_8 + var_C.
@@ -1376,6 +1383,7 @@ bool CombatII::battle_fx_32bcb_anim(int unit_index) {
     for (int ti : battle_target_list_) battle_highlight_add(ti);           // 44D89 all targets
     battle_dim_row0_ = true;                                               // 44D6E(1, 28h)
     fx_pal_mix(0x60, 0x100, 0, 0x28);                                      // 30824(0, 28h)
+    wait_retrace(2);                                                       // 30824 = 5F945 + 5FD1C
     A.anim_frame = 8;                                                      // [64h] = 8
     const int ax = (A.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + UNIT_ANCHOR_X;
     const int ay = (A.y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + UNIT_ANCHOR_Y;
@@ -1909,10 +1917,12 @@ void CombatII::battle_fx_367ee_anim(int unit_index) {
     // (3) 6 frames: F0DAA[4..9] at y = 14h (the original starts at ecx = 4 and stops below 0Ah)
     for (int cx = 4; cx <= 9 && !should_exit_; ++cx) {
         fx_pal_mix(0x60, 0x100, 0, 0x0A);                                 // 30824(0, 0Ah)
+        wait_retrace(2);                                                  // 30824 = 5F945 + 5FD1C
         frame(); gblit(); ring(cx, si, 0x14); present();
     }
     game_timer_set(4);                                                    // 1033B(4, 0Ah)
     fx_pal_mix(0x60, 0x100, 0, 0x0A);                                     // 30824(0, 0Ah)
+    wait_retrace(2);                                                      // 30824 = 5F945 + 5FD1C
     present();
     // (4) 3 frames: F0DAA[33h..35h]
     for (int cx = 0; cx <= 2 && !should_exit_; ++cx) {
@@ -2104,6 +2114,7 @@ void CombatII::battle_fx_3aee8_anim(int unit_index) {
     const int di = ay0 + 2;                                               // sub_10988 + 2
     battle_dim_row0_ = true;                                              // 44D6E(1, 28h)
     fx_pal_mix(0x60, 0x100, 0, 0x28);                                     // 30824(0, 28h)
+    wait_retrace(2);                                                      // 30824 = 5F945 + 5FD1C
     game_timer_set(0x14);                                                 // 1033B(14h)
     auto ring = [&](int idx, int x, int y) {                              // 5EE51(F0DAA[idx])
         if (idx < 0 || idx >= nframes) return;
