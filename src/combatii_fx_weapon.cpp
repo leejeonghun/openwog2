@@ -573,6 +573,7 @@ void CombatII::battle_fx_341c7_anim(int unit_index) {
         else fx_trail_step(-1, 0);                                    // 305A2(0,0)
         battle_fx_commit();                                           // 5E9E8
         fx_pal_mix(0x60, 0x100, 0, 0x0C);                             // 30824(0,0Ch)
+        video_.present();
         wait_game_tick();                                             // 499E4
     }
 
@@ -946,6 +947,7 @@ void CombatII::battle_fx_37fa4_anim(int unit_index) {
         fx_trail_step(unit_index, (int)A.anim_frame);                  // 305A2(caster, dir)
         battle_fx_commit();                                            // 5E9E8
         fx_pal_mix(0x60, 0x100, 0, 0x0C);                              // 30824(0,0Ch)
+        video_.present();
         wait_game_tick();                                              // 499E4
         A.anim_frame = (uint8_t)(A.anim_frame + 1);                     // inc [64h]
     }
@@ -957,6 +959,7 @@ void CombatII::battle_fx_37fa4_anim(int unit_index) {
         fx_trail_step(-1, 0);                                          // 305A2(0,0)
         battle_fx_commit();                                            // 5E9E8
         fx_pal_mix(0x60, 0x100, 0, 0x0C);                               // 30824(0,0Ch)
+        video_.present();
         wait_game_tick();                                              // 499E4
     }
     // (6)

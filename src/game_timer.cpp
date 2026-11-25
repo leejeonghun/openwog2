@@ -2,7 +2,6 @@
 #include "input.h"
 #include <SDL.h>
 #include <algorithm>
-#include <cmath>
 
 namespace GameTimer {
 uint64_t now_us() {
@@ -34,9 +33,11 @@ static bool wait_retrace_impl(Input* input, int retraces) {
     if (next_retrace_us <= 0.0 || now - next_retrace_us > 4.0 * kVgaPeriodUs) {
         deadline = now + span_us;
     } else if (deadline <= now) {
-        const double missed = now - deadline;
-        const double steps = std::floor(missed / kVgaPeriodUs) + 1.0;
-        deadline += steps * kVgaPeriodUs;
+        // Elapsed work since the previous retrace exceeded span_us (e.g., synchronous vsync
+        // present). Return immediately without double-waiting, keeping phase lock for brief
+        // jitter while clamping larger lag so subsequent waits neither burst nor stall.
+        next_retrace_us = (now - deadline < 0.5 * kVgaPeriodUs) ? deadline : now;
+        return input ? !input->poll_quit() : true;
     }
     for (;;) {
         if (input && input->poll_quit()) {
