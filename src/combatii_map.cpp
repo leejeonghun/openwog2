@@ -3643,6 +3643,7 @@ void CombatII::show_dialogue_line(const std::string& text, int portrait_id,
             // modern PC the loop ends in a few milliseconds. At 60Hz each presented frame shows the
             // ellipse spreading; on a vsync-less renderer the wait fills ~15ms.
             video_.wait_presented();
+            isr_advance();
             frames++;
 
             rx += delta;                           // add edx,eax  (horizontal: accelerating)

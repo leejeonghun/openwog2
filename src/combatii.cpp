@@ -503,8 +503,16 @@ void CombatII::wait_game_tick() {
 }
 
 void CombatII::wait_retrace(int retraces) {
-    if (auto_advance_ || retraces <= 0) return;
-    if (!GameTimer::wait_retrace(input_, retraces)) should_exit_ = true;
+    if (auto_advance_) {
+        if (weather_tick_enabled_) weather_tick_phase();
+        return;
+    }
+    if (retraces <= 0) return;
+    if (!GameTimer::wait_retrace(input_, retraces)) {
+        should_exit_ = true;
+        return;
+    }
+    isr_advance();
 }
 
 bool CombatII::wait_key_or_ticks(int ticks) {
