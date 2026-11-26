@@ -97,6 +97,7 @@ int CombatII::battle_fx_58c87(int unit_index, int tx, int ty, int k) {
         u.anim_frame = (u.sprite_type < 0x12C) ? (uint8_t)0x0A : (uint8_t)0x00;
     }
     fx_pal_mix(0x60, 0x100, 0, 0x28);                                       // sub_30824(0, 28h)
+    wait_retrace(2);                                                        // 30824 = 5F945 + 5FD1C
     battle_dim_row0_ = true;                                                // sub_44D6E(1)
     for (int oi : hit) battle_highlight_add(oi);                            // sub_44D89
 
@@ -186,6 +187,7 @@ int CombatII::battle_fx_58e95(int unit_index, int tx, int ty, int k) {
         u.anim_frame = (u.sprite_type < 0x12C) ? (uint8_t)0x0A : (uint8_t)0x00;
     }
     fx_pal_mix(0x60, 0x100, 0, 0x28);                                       // sub_30824
+    wait_retrace(2);                                                        // 30824 = 5F945 + 5FD1C
     battle_dim_row0_ = true;                                                // sub_44D6E(1)
     for (int oi : hit) battle_highlight_add(oi);                            // sub_44D89
 
@@ -318,6 +320,7 @@ int CombatII::battle_fx_592b0(int unit_index, int tx, int ty, int k) {
         u.anim_frame = (u.sprite_type < 0x12C) ? (uint8_t)0x0A : (uint8_t)0x00;
     }
     fx_pal_mix(0x60, 0x100, 0, 0x28);                                       // sub_30824
+    wait_retrace(2);                                                        // 30824 = 5F945 + 5FD1C
     battle_dim_row0_ = true;                                                // sub_44D6E(1)
     for (int oi : hit) battle_highlight_add(oi);                            // sub_44D89
 
@@ -373,15 +376,23 @@ int CombatII::battle_fx_592b0(int unit_index, int tx, int ty, int k) {
             if (beam_life == 9) {                                           // loc_59569
                 sfx(0x34);                                                  // sub_4F4CD(34h)
                 battle_dim_row0_ = false;                                   // sub_44D6E(0)
+                wait_retrace(1);                                            // sub_5FA2C -> sub_5E943
                 pal_scale_range(0, 0x100, &battle_master_palette_[0][0], 0x64);    // sub_5FA2C(100)
+                video_.present();
             } else if (beam_life > 2) {                                     // loc_5959B
                 battle_dim_row0_ = true;                                    // sub_44D6E(1)
                 const int pct = beam_life * 5 + 0x3C;                       // imul 5; add 3Ch
+                wait_retrace(1);                                            // sub_5FA2C -> sub_5E943
                 pal_scale_range(0, 0x100, &battle_master_palette_[0][0], pct);     // sub_5FA2C
+                video_.present();
             } else if (beam_life == 2) {                                    // loc_595C5
+                wait_retrace(1);                                            // sub_5FA2C -> sub_5E943
                 pal_scale_range(0, 0x100, &battle_master_palette_[0][0], 0x64);    // full palette
+                video_.present();
                 battle_dim_row0_ = true;                                    // sub_44D6E(1)
                 fx_pal_mix(0x60, 0x100, 0, 0x28);                           // sub_30824(0, 28h)
+                wait_retrace(2);                                            // 30824 = 5F945 + 5FD1C
+                video_.present();
             }
             --beam_life;                                                    // dec var_4
         } else {

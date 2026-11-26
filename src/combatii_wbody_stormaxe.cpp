@@ -86,6 +86,7 @@ int CombatII::battle_fx_35fc2_anim(int unit_index) {
     // (4) dim, palette, tick period and pose
     battle_dim_row0_ = true;                                            // sub_44D6E(1, 28h)
     fx_pal_mix(0x60, 0x100, 0, 0x28);                                   // sub_30824(0, 28h)
+    wait_retrace(2);                                                    // 30824 = 5F945 + 5FD1C
     game_timer_set(7);                                                  // sub_1033B(7)
     A.anim_frame = 9;                                                   // [64h] = 9
 

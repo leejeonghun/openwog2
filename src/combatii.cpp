@@ -1224,6 +1224,22 @@ int CombatII::run(const std::string& scenario_param){
     auto_advance_ = (getenv("G2_AUTOADVANCE") != nullptr);
     frame_trace_ = (getenv("G2_FRAME_TRACE") != nullptr);
     battle_trace_ = (getenv("G2_BATTLE_TRACE") != nullptr);
+    // sub_55B59: load genesis.pal into unk_12824C and commit via sub_5F9AE(0, 0x100, unk_12824C).
+    {
+        std::string gen = game_path("genesis.pal");
+        if (!file_exists(gen.c_str())) gen = game_path("GENESIS.PAL");
+        if (file_exists(gen.c_str())) {
+            if (FILE* pf = fopen(gen.c_str(), "rb")) {
+                uint8_t sys[256 * 3] = {};
+                if (fread(sys, 1, sizeof(sys), pf) == sizeof(sys)) {
+                    wait_retrace(1);                               // sub_5F9AE waits before DAC write
+                    pal_load_range(0, 256, sys);
+                    memcpy(battle_master_palette_, g_palette, sizeof(battle_master_palette_));
+                }
+                fclose(pf);
+            }
+        }
+    }
     if (const char* bt = getenv("G2_BATTLE_TICK")) {
         if (!strcmp(bt, "free")) battle_tick_period_ = 0;
         else if (!strcmp(bt, "frame")) battle_tick_period_ = kFrameTickPeriod;
@@ -1351,6 +1367,8 @@ int CombatII::run(const std::string& scenario_param){
             bool manual_scroll = handle_scroll_input(timer_now_us());
             if (!manual_scroll) camera_update_frame();
             render_battle_viewer();
+            pal_cycle_step();                                      // sub_600D4
+            pal_scroll_step();                                     // sub_602E3
             video_.present();
             // Verification: dump only player-wait (state 1) frames so move-range shading and lava
             // animation can be compared in one scene. With no input the camera centres on the first

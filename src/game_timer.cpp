@@ -30,10 +30,16 @@ static bool wait_retrace_impl(Input* input, int retraces) {
     static thread_local double next_retrace_us = 0.0;
     const double now = (double)now_us();
     const double span_us = (double)retraces * kVgaPeriodUs;
-    double deadline = next_retrace_us + span_us;
-    if (next_retrace_us <= 0.0 || now - next_retrace_us > 4.0 * kVgaPeriodUs) {
+    double deadline;
+    if (next_retrace_us <= 0.0) {
         deadline = now + span_us;
+    } else if (now - next_retrace_us > 4.0 * kVgaPeriodUs) {
+        // Long idle gap (> 4 periods): advance the virtual CRT grid to the latest edge <= now so
+        // the next r retraces still span ((r-1)P, rP] like free-running 70.086Hz hardware.
+        next_retrace_us += std::floor((now - next_retrace_us) / kVgaPeriodUs) * kVgaPeriodUs;
+        deadline = next_retrace_us + span_us;
     } else {
+        deadline = next_retrace_us + span_us;
         // A wait must never fall below (retraces-1) periods measured from now. Without this,
         // a long wait issued shortly after a previous one would end early: the deadline was
         // chained to the previous edge, so up to one period of the span was already spent.
@@ -53,18 +59,33 @@ static bool wait_retrace_impl(Input* input, int retraces) {
             return input ? !input->poll_quit() : true;
         }
     }
+    double last_poll_us = now;
+    if (input && input->poll_quit()) {
+        next_retrace_us = 0.0;
+        return false;
+    }
     for (;;) {
-        if (input && input->poll_quit()) {
-            next_retrace_us = 0.0;
-            return false;
-        }
         const double cur = (double)now_us();
+        if (input && cur - last_poll_us >= 1000.0) {
+            last_poll_us = cur;
+            if (input->poll_quit()) {
+                next_retrace_us = 0.0;
+                return false;
+            }
+        }
         const double remain_us = deadline - cur;
         if (remain_us <= 0.0) break;
-        if (remain_us > 1800.0) {
+        if (remain_us > 1500.0) {
             const uint64_t max_chunk = input ? 5ULL : 20ULL;
-            const uint64_t chunk_ms = std::min<uint64_t>((uint64_t)((remain_us - 800.0) / 1000.0), max_chunk);
+            const uint64_t chunk_ms = std::min<uint64_t>((uint64_t)((remain_us - 500.0) / 1000.0), max_chunk);
             SDL_Delay((Uint32)chunk_ms);
+            if (input) {
+                last_poll_us = (double)now_us();
+                if (input->poll_quit()) {
+                    next_retrace_us = 0.0;
+                    return false;
+                }
+            }
         } else {
             SDL_Delay(0);
         }
@@ -107,14 +128,21 @@ FramePacer FramePacer::from_period_us(double period_us) {
 void FramePacer::reset() { next_us_ = (double)now_us() + frame_us_; }
 
 bool FramePacer::pace(Input& input) {
+    if (input.poll_quit()) return false;
+    double last_poll_us = (double)now_us();
     for (;;) {
-        if (input.poll_quit()) return false;
         const double now = (double)now_us();
+        if (now - last_poll_us >= 1000.0) {
+            last_poll_us = now;
+            if (input.poll_quit()) return false;
+        }
         const double remain_us = next_us_ - now;
         if (remain_us <= 0.0) break;
-        if (remain_us > 1800.0) {
-            const uint64_t chunk_ms = std::min<uint64_t>((uint64_t)((remain_us - 800.0) / 1000.0), 5ULL);
+        if (remain_us > 1500.0) {
+            const uint64_t chunk_ms = std::min<uint64_t>((uint64_t)((remain_us - 500.0) / 1000.0), 5ULL);
             SDL_Delay((Uint32)chunk_ms);
+            last_poll_us = (double)now_us();
+            if (input.poll_quit()) return false;
         } else {
             SDL_Delay(0);
         }

@@ -2496,6 +2496,9 @@ private:
     void pal_scroll_step();                                            // sub_602E3 (rotate + upload every slot)
     void pal_scroll_resync();                                          // sub_60275 (re-read slots from the DAC)
     void pal_scroll_end();                                             // sub_602BF (free the last slot, no restore)
+    void pal_cycle_begin(int start, int delta);                        // sub_5FFB5 (register a unidirectional DAC cycle slot)
+    void pal_cycle_step();                                             // sub_600D4 (rotate + upload every cycle slot)
+    void pal_cycle_resync();                                           // sub_6004E (re-read cycle slots from the DAC)
     uint8_t fx_pal_cycle_[256 * 3] = {};                               // 5F945 copy cycled by step 2 of 2799A
     // byte_128564 / byte_12820C[n*4] / unk_127EDC: active DAC scroll slots. The original keeps 16
     // colours per slot (unk_127EDC + n*30h) and passes `buf - start*3` to 5F945/5F9AE so those
@@ -2508,6 +2511,14 @@ private:
         uint8_t buf[256 * 3] = {};
     };
     std::vector<PalScrollSlot> pal_scroll_slots_;
+    // byte_128568 / unk_1281DC[n*3] / unk_127A4C: unidirectional map palette cycle slots (mode == 0).
+    struct PalCycleSlot {
+        int start = 0;      // +0: first DAC index
+        int end = 0;        // +1: one past the last (start+delta; swapped when delta < 0)
+        int delta = 0;      // +2: signed rotation count, 0 = stops iteration
+        uint8_t buf[256 * 3] = {};
+    };
+    std::vector<PalCycleSlot> pal_cycle_slots_;
     int pal_ramp_color_ = 0;        // word_11233C = high word of unk_11233A (palette entry the ramp targets)
     int pal_ramp_pos_ = 0;          // word_7550C (current ramp %)
     int pal_ramp_dir_ = 0;          // word_7550E (0 = rising, 1 = falling)

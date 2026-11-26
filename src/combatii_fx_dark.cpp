@@ -363,6 +363,7 @@ int CombatII::battle_fx_2799a(int unit_index, int tx, int ty, int k) {
         pal_cycle_entries(fx_pal_cycle_, 256);                     // loc_27B88
         wait_retrace(1);                                           // sub_5F9AE waits before the DAC write
         pal_load_range(0, 256, fx_pal_cycle_);                     // sub_5F9AE (rotated copy)
+        video_.present();
     }
     // Step 3: 45559 + palette restore (si=0x64 down by 4, no sprites, 1 retrace/step) + 5F9AE + shake 0.
     present_cutscene_frame();                                      // sub_45559
@@ -442,6 +443,7 @@ int CombatII::battle_fx_27c5a(int unit_index, int tx, int ty, int k) {
     //   This loop has no sub_499E4 in the original (it ends with 12E01 -> 454D5 -> 5E9E8);
     //   5FD1C calls sub_5E943 (vertical retrace) once on entry, pacing the frame at 70.086Hz.
     for (int di = 1; di < 0x64 && !should_exit_; di += 3) {
+        wait_retrace(1);                                           // sub_5E943 inside sub_5FD1C
         cam_fine_y_ = (int16_t)(((fc >> 1) & 1) ? 0 : -4);
         pal_shift_fade(di);                                        // sub_5FD1C
         battle_fx_world_12d65();                                   // sub_10AEB + sub_12D65
@@ -449,7 +451,6 @@ int CombatII::battle_fx_27c5a(int unit_index, int tx, int ty, int k) {
         battle_fx_flush();                                         // sub_12E01
         battle_fx_overlay();                                       // sub_454D5
         battle_fx_commit();                                        // sub_5E9E8
-        wait_retrace(1);                                           // sub_5E943 inside sub_5FD1C
         ++fc;
     }
     // Step 3: restore the palette only (sub_5E943 + sub_5FD1C = 2 retraces/step); pct is the

@@ -417,6 +417,7 @@ int CombatII::battle_fx_570a1(int unit_index, int tx, int ty, int k) {
         // sub_10AEB + sub_12BEE, then shake camera fine y by rand%3-1.
         render_battle_map();                                 // sub_10AEB + sub_12BEE
         cam_fine_y_ = (int16_t)(combat_rand(3) - 1);         // word dword_BA838
+        wait_retrace(1);                                     // sub_562C1 -> sub_5FD1C -> sub_5E943
         pal_ramp_step(0x4B, 0x32);                           // sub_562C1(4Bh,32h); the result is unused
         // loc_5724A: slots 0..0x4D, the only pass that counts kills.
         for (int i = 0; i < 0x4E && !should_exit_; ++i) {
@@ -510,7 +511,12 @@ int CombatII::battle_fx_570a1(int unit_index, int tx, int ty, int k) {
         }
         battle_fx_present_454d5();                       // sub_454D5 + sub_5E9E8
         wait_game_tick();
-        if (pal_ramp_step(0x4B, 0) == 0) break;          // `test ax,ax; jnz`: exit when it returns 0
+        wait_retrace(1);                                 // sub_562C1 -> sub_5FD1C -> sub_5E943
+        if (pal_ramp_step(0x4B, 0) == 0) {
+            video_.present();
+            break;                                       // `test ax,ax; jnz`: exit when it returns 0
+        }
+        video_.present();
     }
 
     // (4) Final horizontal sweep: cx 0 -> -0x4C by 4, frames 0x53+ / 0x4C+ (cx/2)%7.

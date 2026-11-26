@@ -125,13 +125,13 @@ int CombatII::battle_fx_59a70(int caster_index, int revived_index) {
         wash_pal[i * 3 + 2] = src[2];
     }
 
-    // sub_5FD1C: DAC[i] = master[i] + delta[i]*pct/100 - only [start,end) is written.
+    // sub_5FD1C: DAC[i] = base[i] + delta[i]*pct/100 - only [start,end) is written.
     uint8_t cur[kPalLen];
-    auto apply_pal = [&](int start, int end, const uint8_t* delta, int pct) {
+    auto apply_pal = [&](int start, int end, const uint8_t* base_pal, const uint8_t* delta, int pct) {
         pal_snapshot_range(0, 0x100, cur);
         for (int i = start; i < end; ++i) {
             for (int c = 0; c < 3; ++c) {
-                const int base = (int)master[i * 3 + c];
+                const int base = (int)base_pal[i * 3 + c];
                 const int d = (int)(int8_t)delta[i * 3 + c];       // 5FD1C reads with movsx
                 cur[i * 3 + c] = (uint8_t)(base + d * pct / 100);
             }
@@ -187,19 +187,24 @@ int CombatII::battle_fx_59a70(int caster_index, int revived_index) {
             ++life[i];
         }
         battle_fx_present_454b3();                                 // 454B3 + 5E9E8
-        apply_pal(0x60, 0x100, hue, 1);                            // 5FD1C(60h,100h,delta,1%)
+        wait_retrace(1);                                           // sub_5FD1C -> sub_5E943
+        apply_pal(0x60, 0x100, master, hue, 1);                    // 5FD1C(60h,100h,master,delta,1%)
         video_.present();
         wait_game_tick();                                          // sub_499E4
     }
 
     // ---- (5) full-screen wash (loc_59E09/59E40) ----
+    // loc_59E09 fills buf1 with 0x100 copies of buf2+3 (wash_pal[1]), then sub_5FC21(buf2, buf1)
+    // computes wash[k] = wash_pal[1][c] - wash_pal[k].
     uint8_t wash[kPalLen];
-    for (int k = 0; k < kPalLen; ++k)                              // 5FC21((buf2+1), buf2)
-        wash[k] = (uint8_t)(wash_pal[(k + 1) % kPalLen] - wash_pal[k]);
+    for (int i = 0; i < 0x100; ++i) {
+        for (int c = 0; c < 3; ++c)
+            wash[i * 3 + c] = (uint8_t)(wash_pal[3 + c] - wash_pal[i * 3 + c]);
+    }
     for (int pct = 0x0A; pct <= 0x64 && !should_exit_; pct += 0x0A) {
-        apply_pal(0, 0x100, wash, pct);
-        video_.present();
         wait_retrace(1);                                           // sub_5FD1C -> sub_5E943
+        apply_pal(0, 0x100, wash_pal, wash, pct);
+        video_.present();
     }
 
     // ---- (6) 10 frames (light pillar + wash fade) ----
@@ -219,9 +224,10 @@ int CombatII::battle_fx_59a70(int caster_index, int revived_index) {
                                             {0x01, 0x30, 0x31, 0x32, 0x33, 0x34, 0x35}); // sub_5F29D(611AA)
         }
         battle_fx_present_454b3();
-        apply_pal(0, 0x100, wash, 0x64 - f * 0x0A);                // 5FD1C(pct 64h,5Ah,...)
-        video_.present();
         wait_game_tick();
+        wait_retrace(1);                                           // sub_5FD1C -> sub_5E943
+        apply_pal(0, 0x100, wash_pal, wash, 0x64 - f * 0x0A);      // 5FD1C(pct 64h,5Ah,...)
+        video_.present();
     }
 
     // ---- (7) 36 frames (the unit returns) ----
@@ -266,20 +272,25 @@ int CombatII::battle_fx_59a70(int caster_index, int revived_index) {
         }
         battle_fx_commit();                                         // sub_5E9E8
         magic_fx_draws_.clear();
-        apply_pal(0, 0x100, wash, (f & 1) * 0x14);                 // 5FD1C(pct (edi&1)*14h)
-        video_.present();
         wait_game_tick();
+        wait_retrace(1);                                           // sub_5FD1C -> sub_5E943
+        apply_pal(0, 0x100, wash_pal, wash, (f & 1) * 0x14);       // 5FD1C(pct (edi&1)*14h)
+        video_.present();
     }
 
     // ---- (8) restore ----
     A.fx_sprite_hidden = false;                                    // sub_11E04(caster)
     battle_fx_454b3();                                             // sub_454B3 (incl. fall-through 454D5)
+    // loc_5A1BD -> 5FD1C(wash_pal, wash, 100%) holds the wash flash for one retrace,
+    // then loc_5A1E3 + 5FC21 + loc_5A225 -> 5FD1C(wash, master - wash, 100%) restores master.
     uint8_t rev[kPalLen];
-    for (int k = 0; k < kPalLen; ++k)                              // "swap copy - master"
-        rev[k] = (uint8_t)(master[k] - wash_pal[k]);
-    apply_pal(0, 0x100, wash, 0x64);                               // sub_5FD1C(pct 6Eh -> 64h)
-    apply_pal(0, 0x100, rev, 0x64);                                // sub_5FD1C(pct 66h -> 64h)
-    pal_load_range(0, 0x100, master);                              // restore master palette
+    for (int k = 0; k < kPalLen; ++k)
+        rev[k] = (uint8_t)(master[k] - wash[k]);
+    wait_retrace(1);                                               // sub_5FD1C -> sub_5E943
+    apply_pal(0, 0x100, wash_pal, wash, 0x64);                     // sub_5FD1C(pct 6Eh -> 64h)
+    video_.present();
+    wait_retrace(1);                                               // sub_5FD1C -> sub_5E943
+    apply_pal(0, 0x100, wash, rev, 0x64);                          // sub_5FD1C(pct 66h -> 64h -> master)
     video_.present();
     weather_tick_enabled_ = true;                                  // sub_103A0
     battle_nsp_release();                                          // sub_1FFCD

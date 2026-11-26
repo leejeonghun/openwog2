@@ -87,6 +87,7 @@ int CombatII::battle_fx_23074(int unit_index, int tx, int ty, int k) {
     // ---- (4) palette strobe + coordinate advance (30 frames) ----
     int drift = 0;                                      // var_C
     for (int i = 0; i < 0x1E && !should_exit_; ++i) {
+        wait_retrace(2);                                // loc_23296: 5E943 + 5FD1C(5E943)
         pal_shift_fade(-8 + 3 * i, 0xFE);               // 5F945 -> 5FC21 -> 5FD1C (pct = -8+3i)
         if (i % 10 == 0) drift += 2;                    // loc_23320
         // 1FFFE(eax=x, edx=y): eax addresses the 35Ah (var_74) array and edx the 2FEh
@@ -104,6 +105,7 @@ int CombatII::battle_fx_23074(int unit_index, int tx, int ty, int k) {
 
     // ---- (5) spread (20 frames, loc_234DA) ----
     for (int i = 0; i < 0x14 && !should_exit_; ++i) {
+        wait_retrace(2);                                // loc_234DA: 5E943 + 5FD1C(5E943)
         pal_shift_fade(-8 + 3 * (0x1E + i), 0xFE);      // pct += 3/frame
         for (int j = 0; j < 3; ++j) { px[j] -= 2; py[j] += 2; }   // loc_23527 (first three only)
         if (i % 10 == 0) drift += 2;
@@ -143,6 +145,7 @@ int CombatII::battle_fx_23074(int unit_index, int tx, int ty, int k) {
     // (100 = full brightness.)
     int pct = 0x64;
     for (int i = 0; i < 0x32 && !should_exit_; ++i) {
+        wait_retrace(2);                                // loc_23777: 5E943 + 5FD1C(5E943)
         pal_shift_fade(pct, 0xFE);                      // [var_10+2] -> 5FD1C
         if (pct > 0) pct -= 3;                          // `test cx,cx; jle; sub 3`
         for (int j = 0; j < kM; ++j) {

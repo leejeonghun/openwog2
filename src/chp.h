@@ -281,7 +281,7 @@ private:
     static float equip_thumb_h(int count);                        // thumb length (123 when count < 6)
 
     // ---- sub_20BC8 options / sub_16AFA save / sub_1716E load / sub_28E8A confirm (chp_option.cpp) ----
-    static constexpr int kVsync1366E = 51;                        // sub_1366E = sub_1D83A x 51
+    static constexpr int kVsync1366E = 84;                        // sub_1366E = sub_1D83A x 51 + fall-through sub_1376D x 33
     static constexpr int kVsync1376D = 33;                        // sub_1376D = sub_1D83A x 33
     void option_screen();                                         // sub_20BC8
     bool confirm_dialog(const char* msg);                         // sub_28E8A (true = yes)

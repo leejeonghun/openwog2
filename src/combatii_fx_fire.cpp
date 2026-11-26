@@ -166,6 +166,7 @@ int CombatII::battle_fx_5666e(int unit_index, int tx, int ty, int k) {
     }
     int spawned = 5, ticks = 5;          // ASM var_10 (kill count) and var_8 both start at 5
     for (int guard = 0; guard < 0x800 && !should_exit_; ++guard) {
+        wait_retrace(1);                           // sub_562C1 -> sub_5FD1C -> sub_5E943
         pal_ramp_step(0x4B, 0x32);                 // sub_562C1 (3% ramp per frame)
         render_battle_map(false, false, true);     // sub_10AEB + sub_12BEE
         for (int i = 0; i < FX_SLOTS && !should_exit_; ++i) {
@@ -238,6 +239,7 @@ int CombatII::battle_fx_56896(int unit_index, int tx, int ty, int k) {
     int spawned = 0, ticks = 0;
     bool done = false;
     for (int guard = 0; guard < 0x2000 && !should_exit_ && !done; ++guard) {
+        wait_retrace(1);                           // sub_562C1 -> sub_5FD1C -> sub_5E943
         pal_ramp_step(0x4B, 0x32);                 // sub_562C1 (3% ramp per frame)
         render_battle_map(false, false, true);     // sub_10AEB + sub_12BEE
         // Group A: slots 0..0x4F
@@ -327,6 +329,7 @@ int CombatII::battle_fx_56bd4(int unit_index, int tx, int ty, int k) {
     int spawned = 0, ticks = 0, frames = -1;
     bool done = false;
     for (int guard = 0; guard < 0x4000 && !should_exit_ && !done; ++guard) {
+        wait_retrace(1);                           // sub_562C1 -> sub_5FD1C -> sub_5E943
         pal_ramp_step(0x4B, 0x32);                 // sub_562C1 (3% ramp per frame)
         ++frames;                                  // ASM var_14 starts at -1
         // (1) light slots 0x5A..0x5C every 15 frames while the frame counter is < 0x28
@@ -629,6 +632,7 @@ int CombatII::battle_fx_57f18(int unit_index, int tx, int ty, int k) {
                        y + magic_frames_[(size_t)frame].yo);
     };
     for (int guard = 0; guard < 0x6000 && !should_exit_; ++guard) {
+        wait_retrace(1);                           // sub_562C1 -> sub_5FD1C -> sub_5E943
         pal_ramp_step(0x4B, 0x32);                 // sub_562C1 (3% ramp per frame)
         cam_fine_y_ = (int16_t)(fx_rand_mod(3) - 1);  // low word of dword_BA838 (screen shake)
         for (int i = 0x0A; i < 0x0E; ++i) {

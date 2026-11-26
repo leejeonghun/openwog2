@@ -134,7 +134,7 @@ bool CHP::equip_insert(int item0, int idx) {
         while (b < idx && (inv_ref(s, b) & 0xFF)) b++;
         if (b == idx) {
             status_message(kChpEquipMsgFull);
-            flip_wait(kVsync1366E); flip_wait(kVsync1366E); flip_wait(kVsync1366E);   // sub_1366E x 3 (51 vsync each)
+            flip_wait(kVsync1366E); flip_wait(kVsync1366E); flip_wait(kVsync1366E);   // sub_1366E x 3 (84 vsync each)
             return false;
         }
         while (b < idx) { inv_ref(s, b) = inv_ref(s, b + 1); b++; }

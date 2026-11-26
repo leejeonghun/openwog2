@@ -777,6 +777,7 @@ void CombatII::battle_fx_341c7_anim(int unit_index) {
         if (si > 0x3A) {                                               // 307A6(10h, 24h)
             fx_pal_mix(0x00, 0x68, 0x10, 0x24);
             wait_retrace(2);                                           // 307A6 = 5F945 + 5FD1C
+            video_.present();
         }
         if (si == 0x0A) sfx(0x34);                                     // 4F4CD(34h)
         if (si % 12 == 0) sfx(0x33);                                   // 4F4CD(33h)

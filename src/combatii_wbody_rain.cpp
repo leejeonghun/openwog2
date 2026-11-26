@@ -203,6 +203,7 @@ int CombatII::battle_fx_39a49_anim(int unit_index) {
     // Step 4: 4-frame intro - 30824(0, 0Ah) darkens, then the frame is presented.
     for (int i = 0; i < 4 && !should_exit_; ++i) {
         fx_pal_mix(0x60, 0x100, 0, 0x0A);                                      // sub_30824(0, 0Ah)
+        wait_retrace(2);                                                       // 30824 = 5F945 + 5FD1C
         frame_flush();
     }
     if (should_exit_) {                                                        // ESC: restore state only

@@ -199,9 +199,11 @@ int CombatII::battle_fx_25dfe(int unit_index, int k) {
             if (combat_rand(0x0A) == 0) sfx(0x33);                             // 4F4CD(33h)
         }
         --sprite_y;                                                            // ASM 30787-30793: dec [esp+0x560]
-        pal_shift_fade(pal_pct);                                               // sub_5FD1C([esp+0x568])
         battle_fx_present_454b3();                                             // 454B3 (incl. 454D5) -> 1FFFE -> 5E9E8
-        wait_game_tick();                                                      // 5E943 + 499E4
+        wait_retrace(2);                                                       // explicit 5E943 + 5FD1C(5E943)
+        pal_shift_fade(pal_pct);                                               // sub_5FD1C([esp+0x568])
+        video_.present();
+        wait_game_tick();                                                      // 499E4
     }
     if (should_exit_) {
         battle_nsp_release();

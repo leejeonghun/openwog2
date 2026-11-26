@@ -101,6 +101,7 @@ int CombatII::battle_fx_377a6_anim(int unit_index) {
     battle_fx_world();                                                   // sub_454B3
     battle_dim_row0_ = true;                                             // sub_44D6E(1)
     fx_pal_mix(0x60, 0x100, 0, 0x28);                                    // sub_30824(0, 28h)
+    wait_retrace(2);                                                     // 30824 = 5F945 + 5FD1C
     battle_fx_commit();                                                  // sub_5E9E8
     wait_game_tick();                                                    // sub_499E4
 

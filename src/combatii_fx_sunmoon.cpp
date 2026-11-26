@@ -334,12 +334,15 @@ int CombatII::battle_fx_5a267(int unit_index, int tx, int ty, int k) {
             render_battle_map(false, false, true);              // sub_10AEB + sub_12BEE
             battle_fx_present_454d5();                          // sub_454D5 + sub_5E9E8
             wait_game_tick();
+            wait_retrace(1);                                    // sub_5FD1C -> sub_5E943
             pal_shift_fade(mul);                               // 5FD1C(old mul)
+            video_.present();
             mul = std::min(0x64, mul + 2);
         }
     }
 
     caster.fx_sprite_hidden = false;                           // sub_11E04(caster)
+    wait_retrace(1);                                           // sub_5FD1C -> sub_5E943
     pal_shift_fade(0);                                         // 5FD1C(0) - original palette
     video_.present();
     weather_tick_enabled_ = true;                              // sub_103A0
@@ -415,13 +418,16 @@ int CombatII::battle_fx_5a566(int unit_index, int tx, int ty, int k) {
             battle_fx_flush();                                 // sub_12E01 (5F29D + 12F2A + 5F570)
             battle_fx_commit();                                // sub_5E9E8 (no 454D5 here)
             wait_game_tick();
+            wait_retrace(1);                                   // sub_5FD1C -> sub_5E943
             pal_shift_fade(fade);                              // 5FD1C
+            video_.present();
             fade = std::min(100, fade + 2);
         }
     }
 
     caster.fx_sprite_hidden = false;                           // sub_11E04(caster)
     sfx(0x33);                                                 // sub_4F4CD(33h)
+    wait_retrace(1);                                           // sub_5FD1C -> sub_5E943
     pal_shift_fade(0);                                         // 5FD1C(0)
     video_.present();
     weather_tick_enabled_ = true;                              // sub_103A0

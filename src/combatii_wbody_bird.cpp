@@ -130,6 +130,7 @@ int CombatII::battle_fx_308ee_anim(int unit_index) {
         A.fx_sprite_hidden = true;                                        // sub_11EE4
         battle_dim_row0_ = true;                                         // sub_44D6E(1)
         fx_pal_mix(0x60, 0x100, 0, 0x23);                                // sub_30824(0, 23h)
+        wait_retrace(2);                                                 // 30824 = 5F945 + 5FD1C
         game_timer_set(5);                                               // sub_1033B(5)
         for (int ti : battle_target_list_) battle_highlight_add(ti);     // sub_44D89
 

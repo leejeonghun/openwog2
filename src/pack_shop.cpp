@@ -190,7 +190,7 @@ void Pack::change_gold(int delta) {
     play_pack_sfx(2);
     draw_gold_box();
     video_.present();
-    GameTimer::wait_retrace(input_, 50);   // sub_1189F: ~50 retraces
+    GameTimer::wait_retrace(input_, 83);   // sub_1189F: 50 calls + fall-through sub_1199E (33) = 83 retraces
 }
 
 // ==== Inventory (sub_22E57) ====
@@ -210,7 +210,7 @@ int Pack::inv_insert_at(int item0, int pos) {
     while (b < pos && slot_item(s, b) != 0) b++;
     if (b == pos) {
         show_message_box(kPackMsgInvFull100);
-        GameTimer::wait_retrace(input_, 150);   // sub_1189F x3
+        GameTimer::wait_retrace(input_, 249);   // sub_1189F x3 (83 * 3)
         return -1;
     }
     while (b < pos) { b++; slot_item(s, b - 1) = slot_item(s, b); }
@@ -656,7 +656,7 @@ void Pack::shop_bubble(int npc_idx, int portrait_id, const char* name,
 // sub_25F21 "shop owner" branch: bubble -> 50 retrace -> repeat (list -> sell)
 void Pack::handle_shop_owner(int npc_idx) {
     shop_bubble(npc_idx, 0x54, kPackNameShopOwner, "", kPackMsgShowGoods, "");
-    GameTimer::wait_retrace(input_, 50);                 // sub_1189F
+    GameTimer::wait_retrace(input_, 83);                 // sub_1189F (50 + fall-through 33 = 83)
     while (true) {
         const int sel = run_item_list();
         if (sel < 0) return;                                 // quit requested

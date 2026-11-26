@@ -956,6 +956,7 @@ bool CombatII::load_battle_map(const std::string& map_filename, bool use_sce_uni
         fprintf(stderr, "COMBAT: trailer not parsed for %s (short file or unexpected layout)\n", map_filename.c_str());
     }
     fclose(fp);
+    wait_retrace(1);                                               // sub_105AD -> sub_5F9AE waits before DAC write
     for(int i=0;i<256;i++) palette_set_entry(i,battle_palette_[i][0],battle_palette_[i][1],battle_palette_[i][2]);
     // Overlay genesis.pal first 104 entries as PACK does
     std::string gen = game_path("genesis.pal");
@@ -966,6 +967,20 @@ bool CombatII::load_battle_map(const std::string& map_filename, bool use_sce_uni
     }
     // sub_105AD loads the map palette into unk_12824C; keep it separate from the mutable DAC.
     memcpy(battle_master_palette_, g_palette, sizeof(battle_master_palette_));
+    // sub_105AD loc_1082B: register up to 3 palette animation slots from the map trailer.
+    //   mode == 0 -> sub_5FFB5 (unidirectional cyclic), mode != 0 -> sub_601E5 (ping-pong scroll).
+    pal_cycle_slots_.clear();
+    pal_scroll_slots_.clear();
+    if (map_trailer_.valid) {
+        for (int i = 0; i < 3; ++i) {
+            const uint8_t start = map_trailer_.weather_slots[i][0];
+            const int delta = (int)(int8_t)map_trailer_.weather_slots[i][1];
+            const uint8_t mode = map_trailer_.weather_slots[i][2];
+            if (start == 0) continue;
+            if (mode == 0) pal_cycle_begin(start, delta);
+            else           pal_scroll_begin(start, delta);
+        }
+    }
     loaded_map_filename_ = map_filename;
     cam_tile_x_ = (int)map_w_/2 - 6;
     cam_tile_y_ = (int)map_h_/2 - 7;
@@ -2894,8 +2909,10 @@ void CombatII::apply_weather_palette(bool animate) {
     }
     // sub_44F30 (ASM 71388-71400): copy unk_12824C -> unk_F9188 and commit [0, 256) via sub_5F9AE.
     memcpy(weather_cur_palette_, target, sizeof(target));
+    wait_retrace(1);                                               // sub_5F9AE waits before DAC write
     for (int i = 0; i < 256; ++i)
         palette_set_entry((uint8_t)i, target[i][0], target[i][1], target[i][2]);
+    if (animate && !auto_advance_) video_.present();
 }
 
 // ---- sub_450F9: overlay phase counter ----

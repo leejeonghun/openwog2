@@ -219,6 +219,7 @@ int CombatII::battle_fx_31283_anim(int unit_index) {
     game_timer_set(5);                                     // sub_1033B(5)
     battle_dim_row0_ = true;                               // sub_44D6E(1, 28h)
     fx_pal_mix(0x60, 0x100, 0, 0x28);                      // sub_30824(0, 28h); edx from 44D6E
+    wait_retrace(2);                                       // 30824 = 5F945 + 5FD1C
     C.facing = 0;                                          // mov byte [ebp+63h],0
     if (should_exit_) { battle_dim_row0_ = false; battle_nsp_release(); return 1; }
     // sub_11EE4: clear the caster and every target footprint in CC998. The map pass walks

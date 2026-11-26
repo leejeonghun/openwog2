@@ -209,12 +209,13 @@ bool CombatII::battle_rpl_apply(const char* name) {
 //   into its buffer with 5F945.
 void CombatII::pal_scroll_begin(int start, int len) {
     PalScrollSlot s;
-    s.len = len;
-    s.counter = len;
-    if (len > 0) { s.start = start;       s.end = start + len; }
-    else         { s.start = start + len; s.end = start; }
-    s.start &= 0xFF;                                // byte fields in 12820C
-    s.end &= 0xFF;
+    s.len = (int)(int8_t)len;
+    s.counter = s.len;
+    const uint8_t st = (uint8_t)(start & 0xFF);
+    const uint8_t en = (uint8_t)(st + (int8_t)len);
+    if (s.len > 0) { s.start = st; s.end = en; }
+    else           { s.start = en; s.end = st; }
+    wait_retrace(1);                                // sub_5F945 waits before reading DAC
     pal_snapshot_range(s.start, s.end, s.buf);      // sub_5F945
     pal_scroll_slots_.push_back(s);
 }
@@ -231,19 +232,21 @@ void CombatII::pal_scroll_step() {
         if (s.len == 0) break;                          // `test dl,dl; jz loc_60533`
         const int count = (s.len < 0) ? -s.len : s.len; // abs(len)
         if (count > 16) break;                          // unk_127EDC holds 16 colours per slot
-        const int base = s.start;
-        const bool upward = ((s.len < 0) != (s.counter > 0));
-        uint8_t tmp[3];
-        if (upward) {                                   // loc_60341: e[i] = e[i-1]
-            memcpy(tmp, s.buf + (base + count - 1) * 3, 3);
-            for (int i = count - 1; i >= 1; --i)
-                memcpy(s.buf + (base + i) * 3, s.buf + (base + i - 1) * 3, 3);
-            memcpy(s.buf + base * 3, tmp, 3);
-        } else {                                        // loc_603B2: e[i-1] = e[i]
-            memcpy(tmp, s.buf + base * 3, 3);
-            for (int i = 0; i < count - 1; ++i)
-                memcpy(s.buf + (base + i) * 3, s.buf + (base + i + 1) * 3, 3);
-            memcpy(s.buf + (base + count - 1) * 3, tmp, 3);
+        if (s.start < s.end && s.start + count <= 256) {
+            const int base = s.start;
+            const bool upward = ((s.len < 0) != (s.counter > 0));
+            uint8_t tmp[3];
+            if (upward) {                               // loc_60341: e[i] = e[i-1]
+                memcpy(tmp, s.buf + (base + count - 1) * 3, 3);
+                for (int i = count - 1; i >= 1; --i)
+                    memcpy(s.buf + (base + i) * 3, s.buf + (base + i - 1) * 3, 3);
+                memcpy(s.buf + base * 3, tmp, 3);
+            } else {                                    // loc_603B2: e[i-1] = e[i]
+                memcpy(tmp, s.buf + base * 3, 3);
+                for (int i = 0; i < count - 1; ++i)
+                    memcpy(s.buf + (base + i) * 3, s.buf + (base + i + 1) * 3, 3);
+                memcpy(s.buf + (base + count - 1) * 3, tmp, 3);
+            }
         }
         if (s.counter > 0) {
             if (--s.counter == 0) s.counter = -s.len;   // loc_6037A
@@ -259,7 +262,10 @@ void CombatII::pal_scroll_step() {
 //   after it rewrites the palette for the time of day, so a scroll in progress rotates the dimmed
 //   colours instead of uploading its pre-dim snapshot.
 void CombatII::pal_scroll_resync() {
-    for (auto& s : pal_scroll_slots_) pal_snapshot_range(s.start, s.end, s.buf);
+    for (auto& s : pal_scroll_slots_) {
+        wait_retrace(1);                            // sub_5F945 waits before reading DAC
+        pal_snapshot_range(s.start, s.end, s.buf);
+    }
 }
 
 // sub_602BF: free the last slot (count--, len = 0). The DAC is deliberately not restored; the
@@ -268,6 +274,57 @@ void CombatII::pal_scroll_end() {
     if (pal_scroll_slots_.empty()) return;
     pal_scroll_slots_.back().len = 0;
     pal_scroll_slots_.pop_back();
+}
+
+// sub_5FFB5(eax = start, dl = delta): register a unidirectional DAC cycle slot
+//   (byte_128568 / unk_1281DC / unk_127A4C). delta > 0 uses [start, start+delta); delta <= 0 uses
+//   [start+delta, start). Snapshots the range from DAC with sub_5F945.
+void CombatII::pal_cycle_begin(int start, int delta) {
+    PalCycleSlot s;
+    s.delta = (int)(int8_t)delta;
+    const uint8_t st = (uint8_t)(start & 0xFF);
+    const uint8_t en = (uint8_t)(st + (int8_t)delta);
+    if (s.delta > 0) { s.start = st; s.end = en; }
+    else             { s.start = en; s.end = st; }
+    wait_retrace(1);                                // sub_5F945 waits before reading DAC
+    pal_snapshot_range(s.start, s.end, s.buf);      // sub_5F945
+    pal_cycle_slots_.push_back(s);
+}
+
+// sub_600D4: for each active cycle slot, rotate its colours by one in a single direction and
+//   upload the range with sub_5F9AE. Processing stops at the first slot with delta == 0.
+void CombatII::pal_cycle_step() {
+    for (size_t n = 0; n < pal_cycle_slots_.size(); ++n) {
+        PalCycleSlot& s = pal_cycle_slots_[n];
+        if (s.delta == 0) break;                    // `test dl, dl; jz loc_601DC`
+        const int count = (s.delta < 0) ? -s.delta : s.delta;
+        if (count > 16) break;                      // unk_127A4C holds 16 colours (0x30 bytes) per slot
+        if (s.start < s.end && s.start + count <= 256) {
+            const int base = s.start;
+            uint8_t tmp[3];
+            if (s.delta > 0) {                      // loc_60113: e[i] = e[i-1], e[0] = old e[count-1]
+                memcpy(tmp, s.buf + (base + count - 1) * 3, 3);
+                for (int i = count - 1; i >= 1; --i)
+                    memcpy(s.buf + (base + i) * 3, s.buf + (base + i - 1) * 3, 3);
+                memcpy(s.buf + base * 3, tmp, 3);
+            } else {                                // loc_6014E: e[i-1] = e[i], e[count-1] = old e[0]
+                memcpy(tmp, s.buf + base * 3, 3);
+                for (int i = 0; i < count - 1; ++i)
+                    memcpy(s.buf + (base + i) * 3, s.buf + (base + i + 1) * 3, 3);
+                memcpy(s.buf + (base + count - 1) * 3, tmp, 3);
+            }
+        }
+        wait_retrace(1);                            // sub_5F9AE waits before the DAC write
+        pal_load_range(s.start, s.end, s.buf);      // sub_5F9AE
+    }
+}
+
+// sub_6004E: re-read every registered cycle slot's range from the current DAC.
+void CombatII::pal_cycle_resync() {
+    for (auto& s : pal_cycle_slots_) {
+        wait_retrace(1);                            // sub_5F945 waits before reading DAC
+        pal_snapshot_range(s.start, s.end, s.buf);
+    }
 }
 
 // sub_49A3E(eax = start, edx = end, ebx = from, ecx = to, [esp+8] = step): crossfade the DAC

@@ -4439,12 +4439,15 @@ void CombatII::battle_time_of_day_step() {
     }
     tod_factor_ = (tod_phase_ < 8) ? (uint16_t)(100 - tod_phase_ * 6)
                                    : (uint16_t)(0x34 + (tod_phase_ - 8) * 6);
+    wait_retrace(1);                                       // sub_5FA2C -> sub_5E943
     for (int i = 0; i < 256; i++)
         for (int ch = 0; ch < 3; ch++)
             g_palette[i][ch] = (uint8_t)((int)weather_cur_palette_[i][ch] * (int)tod_factor_ / 100);
-    // sub_197CA then reads the dimmed DAC back into unk_12824C. Keep the same palette in the
-    // separate master buffer so effect restores do not depend on the live DAC contents.
+    // sub_197CA then reads the dimmed DAC back into unk_12824C (sub_5F945), then refreshes
+    // the ramp/cycle slots (sub_6004E) and scroll slots (sub_60275).
+    wait_retrace(1);                                       // sub_5F945 -> sub_5E943
     memcpy(battle_master_palette_, g_palette, sizeof(battle_master_palette_));
+    pal_cycle_resync();                                    // sub_6004E
     pal_scroll_resync();                                   // sub_60275
     if (battle_trace_)
         fprintf(stderr, "COMBAT: sub_197CA phase=%u day=%u brightness=%u%%\n", tod_phase_, tod_day_, tod_factor_);
