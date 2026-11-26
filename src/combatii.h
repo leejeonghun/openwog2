@@ -427,7 +427,11 @@ struct MapTrailer {
     // sub_10AEB's Y-parallax formula into its two branches (damped 4px/tile
     // above this row vs. 1px/tile at/below it).
     int16_t fpm_bias = -1;
-    bool valid = false;
+    // The 9 slot bytes are a separate block: sub_105AD loc_1082B registers them before it
+    // reads the 11 MAP_EFFC selectors, so a map whose file ends right after the slots still
+    // gets its (possibly all-zero) slots registered.
+    bool slots_valid = false;
+    bool valid = false;          // the 11 MAP_EFFC selectors (full trailer) were read
 
     bool any_weather_slot_enabled() const {
         for (int i = 0; i < 3; i++) if (weather_slots[i][0] != 0) return true;

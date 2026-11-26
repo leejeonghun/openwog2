@@ -190,7 +190,7 @@ void Pack::change_gold(int delta) {
     play_pack_sfx(2);
     draw_gold_box();
     video_.present();
-    GameTimer::wait_retrace(input_, 83);   // sub_1189F: 50 calls + fall-through sub_1199E (33) = 83 retraces
+    GameTimer::wait_retrace(input_, 84);   // sub_1189F: 51 calls + fall-through sub_1199E (32 calls + tail jmp = 33) = 84
 }
 
 // ==== Inventory (sub_22E57) ====
@@ -210,7 +210,7 @@ int Pack::inv_insert_at(int item0, int pos) {
     while (b < pos && slot_item(s, b) != 0) b++;
     if (b == pos) {
         show_message_box(kPackMsgInvFull100);
-        GameTimer::wait_retrace(input_, 249);   // sub_1189F x3 (83 * 3)
+        GameTimer::wait_retrace(input_, 252);   // sub_1189F x3 (84 * 3)
         return -1;
     }
     while (b < pos) { b++; slot_item(s, b - 1) = slot_item(s, b); }
@@ -653,10 +653,10 @@ void Pack::shop_bubble(int npc_idx, int portrait_id, const char* name,
     video_.present();
 }
 
-// sub_25F21 "shop owner" branch: bubble -> 50 retrace -> repeat (list -> sell)
+// sub_25F21 "shop owner" branch: bubble -> 84 retrace -> repeat (list -> sell)
 void Pack::handle_shop_owner(int npc_idx) {
     shop_bubble(npc_idx, 0x54, kPackNameShopOwner, "", kPackMsgShowGoods, "");
-    GameTimer::wait_retrace(input_, 83);                 // sub_1189F (50 + fall-through 33 = 83)
+    GameTimer::wait_retrace(input_, 84);                 // sub_1189F (51 + fall-through 33 = 84)
     while (true) {
         const int sel = run_item_list();
         if (sel < 0) return;                                 // quit requested

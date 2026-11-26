@@ -2728,11 +2728,20 @@ bool CombatII::battle_quick_load_4fd25() {
         fclose(f);
         // sub_4FD25 already drew sub_44C05; the original's sub_4F85C restores the save data
         // directly and never runs sub_4ED18's start banner a second time.
+        // This reload is port-only (sub_4F85C never reloads a map), so the previous map's DAC
+        // slots must not carry over into the freshly loaded one. load_battle_map appends (as
+        // sub_105AD does), so remember the old prefix and drop it only after a successful load.
+        const size_t old_cycle_slots = pal_cycle_slots_.size();
+        const size_t old_scroll_slots = pal_scroll_slots_.size();
         suppress_start_banner_ = true;
         const bool scen_ok = load_scenario(h.scen);
         suppress_start_banner_ = false;
         if (!scen_ok)
             return fail("quick load scenario load failed (" + h.scen + ")");
+        pal_cycle_slots_.erase(pal_cycle_slots_.begin(),
+                               pal_cycle_slots_.begin() + (std::ptrdiff_t)old_cycle_slots);
+        pal_scroll_slots_.erase(pal_scroll_slots_.begin(),
+                                pal_scroll_slots_.begin() + (std::ptrdiff_t)old_scroll_slots);
         f = fopen(path.c_str(), "rb");
         if (!f)
             return fail("quick load file missing (" + path + ")");

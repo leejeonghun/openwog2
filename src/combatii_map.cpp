@@ -930,6 +930,9 @@ bool CombatII::load_battle_map(const std::string& map_filename, bool use_sce_uni
             for (int i = 0; i < 3; i++)
                 for (int j = 0; j < 3; j++)
                     map_trailer_.weather_slots[i][j] = w9[i*3+j];
+            // sub_105AD loc_1082B registers the slots right after reading these 9 bytes;
+            // loc_1089B reads the selectors afterwards, so EOF here must not discard the slots.
+            map_trailer_.slots_valid = true;
             if (fread(map_trailer_.mapeffc, 1, 11, fp) == 11) {
                 // sub_105AD loc_1089B: `call eof_; cmp eax,1; jz loc_10922`. The 11 selector
                 // bytes are mandatory; the FPM name (16B) and bias (2B) are optional and skipped at
@@ -946,7 +949,7 @@ bool CombatII::load_battle_map(const std::string& map_filename, bool use_sce_uni
             }
         }
     }
-    if (map_trailer_.valid) {
+    if (map_trailer_.slots_valid) {
         fprintf(stderr, "COMBAT: trailer weather=[%d,%d,%d][%d,%d,%d][%d,%d,%d] fpm_name=%s fpm_bias=%d\n",
             map_trailer_.weather_slots[0][0], map_trailer_.weather_slots[0][1], map_trailer_.weather_slots[0][2],
             map_trailer_.weather_slots[1][0], map_trailer_.weather_slots[1][1], map_trailer_.weather_slots[1][2],
@@ -969,9 +972,9 @@ bool CombatII::load_battle_map(const std::string& map_filename, bool use_sce_uni
     memcpy(battle_master_palette_, g_palette, sizeof(battle_master_palette_));
     // sub_105AD loc_1082B: register up to 3 palette animation slots from the map trailer.
     //   mode == 0 -> sub_5FFB5 (unidirectional cyclic), mode != 0 -> sub_601E5 (ping-pong scroll).
-    pal_cycle_slots_.clear();
-    pal_scroll_slots_.clear();
-    if (map_trailer_.valid) {
+    //   sub_105AD never resets byte_128568/byte_128564, so the slots are not cleared here; a
+    //   fresh CombatII (one battle, like the original process) starts with empty vectors.
+    if (map_trailer_.slots_valid) {
         for (int i = 0; i < 3; ++i) {
             const uint8_t start = map_trailer_.weather_slots[i][0];
             const int delta = (int)(int8_t)map_trailer_.weather_slots[i][1];

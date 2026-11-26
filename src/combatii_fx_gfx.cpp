@@ -231,7 +231,9 @@ void CombatII::pal_scroll_step() {
         PalScrollSlot& s = pal_scroll_slots_[n];
         if (s.len == 0) break;                          // `test dl,dl; jz loc_60533`
         const int count = (s.len < 0) ? -s.len : s.len; // abs(len)
-        if (count > 16) break;                          // unk_127EDC holds 16 colours per slot
+        // sub_602E3 has no 16-colour limit; it rotates the whole signed length. The port's
+        // per-slot buffer is palette-sized, so it can do the same without the original's
+        // 0x30-byte slot-stride aliasing. (LIOS/PERIS register a 119-colour slot first.)
         if (s.start < s.end && s.start + count <= 256) {
             const int base = s.start;
             const bool upward = ((s.len < 0) != (s.counter > 0));
@@ -298,7 +300,8 @@ void CombatII::pal_cycle_step() {
         PalCycleSlot& s = pal_cycle_slots_[n];
         if (s.delta == 0) break;                    // `test dl, dl; jz loc_601DC`
         const int count = (s.delta < 0) ? -s.delta : s.delta;
-        if (count > 16) break;                      // unk_127A4C holds 16 colours (0x30 bytes) per slot
+        // sub_600D4 also rotates the full signed length; the limit is the port's own
+        // palette-sized buffer, guarded by the start/end check below.
         if (s.start < s.end && s.start + count <= 256) {
             const int base = s.start;
             uint8_t tmp[3];
