@@ -2482,7 +2482,7 @@ private:
                                            bool expand_only, bool shrink_only);  // 5F570/5F611 in the 10AEB->12BEE gap
     void battle_fx_draw_magic_effect(const MagicFxDraw& d);                     // one queued draw
     void pal_snapshot_range(int start, int end, uint8_t* out);         // sub_5F945 (DAC -> buffer)
-    void pal_load_range(int start, int end, const uint8_t* src);       // sub_5F9E9 (buffer -> DAC)
+    void pal_load_range(int start, int end, const uint8_t* src);       // sub_5F9AE (buffer -> DAC); 5F9E9 fills from one entry
     void pal_crossfade(int start, int end, const uint8_t* from, const uint8_t* to, int step_pct); // sub_49A3E
     void battle_fx_1e565(int mode);                                    // sub_1E565 red screen flash
     void battle_fx_white_flash_up(int up_step);                        // 49A3E(master -> white)

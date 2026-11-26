@@ -2,14 +2,15 @@
 //   sub_5F570  expand (pixel duplication) blit - growing Barrier/Black Hole/Amagedon frames
 //   sub_5F611  shrink (pixel skipping) blit    - shrinking frames of the same group
 //   sub_5F945  DAC range -> palette buffer     (snapshot taken before a fade)
-//   sub_5F9E9  palette buffer -> DAC range     (restore the original palette)
+//   sub_5F9E9  fill a DAC range from one palette entry (4th arg = source index)
 //   sub_5FA2C  palette buffer * mul% -> DAC range (brightness step)
 //   sub_5FC21  palette buffer - source (accumulate a delta)
 //   sub_5623E  set the ramp reference colour (word_11233C = high word of unk_11233A)
 //   sub_56245  build the ramp palette; calls 5FC21 + 5FD1C (pal_ramp_apply)
 //   sub_562C1  advance the ramp one 3% step (word_7550C/7550E state) (pal_ramp_step)
-//   sub_5F9AE  is the same subroutine as sub_5F9E9 (palette buffer -> DAC);
-//              pal_load_range covers both.
+//   sub_5F9AE  palette buffer -> DAC range. It is not the same routine as sub_5F9E9:
+//              5F9E9 repeats a single entry across [start,end), so pal_load_range
+//              implements 5F9AE and the 241F7/24466 flash builds a solid buffer.
 //   sub_5FD1C  DAC[i] = master[i] + delta[i]*mul/100 - lives inside pal_ramp_apply and
 //              pal_shift_fade.
 //   The "5F945 -> delta -> 5FC21 -> 5FD1C" chain of 276B9/2799A/27C5A is done in one call
@@ -158,9 +159,10 @@ void CombatII::pal_snapshot_range(int start, int end, uint8_t* out) {
     }
 }
 
-// sub_5F9E9(eax = start, edx = end(exclusive), ebx = buffer): write the buffer into DAC
-//   [start,end). 241F7/24466 call `5F9E9(0, 100h, unk_12824C)` every frame to restore the
-//   original palette.
+// sub_5F9AE(eax = start, edx = end(exclusive), ebx = buffer): write the buffer into DAC
+//   [start,end). sub_5F9E9 is a four-argument variant that fills the range with the single
+//   entry selected by its 4th argument; 241F7/24466 call it with entry 1 to flash the screen,
+//   so those call sites build a solid buffer and use this function.
 void CombatII::pal_load_range(int start, int end, const uint8_t* src) {
     if (!src) return;
     if (start < 0) start = 0;
