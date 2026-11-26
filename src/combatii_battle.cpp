@@ -2544,7 +2544,7 @@ bool CombatII::battle_quick_save_4f4ef() {
     ok = ok && qsv_write_u32(f, (uint32_t)units_.size());
     for (const auto& u : units_) {
         if (!ok) break;
-        uint8_t rec[0x88];
+        uint8_t rec[0x88] = {};
         battle_pack_unit_record(u, rec, true);
         ok = fwrite(rec, 1, sizeof(rec), f) == sizeof(rec);
         ok = ok && qsv_write_u32(f, u.list_seq);
@@ -4102,13 +4102,30 @@ bool CombatII::battle_growth_176f1(CombatUnitPlacement& u, int stat) {
         u.spell_charge_2e[slot] = (uint8_t)(u.spell_charge_2e[slot] + 1);
     else
         u.hit_seq_2d = (uint8_t)(u.hit_seq_2d + 1);
+    const int charged = (slot >= 0 && slot < 7) ? (int)u.spell_charge_2e[slot]
+                                                : (int)u.hit_seq_2d;
+    u.combat_stat_3e = 0;                                    // mov byte ptr [ebp+3Eh],0
     if (battle_trace_)
         fprintf(stderr, "COMBAT: magic charge up unit=%d stat=%d slots=%u,%u,%u,%u,%u,%u,%u\n",
                 u.id, stat, (unsigned)u.spell_charge_2e[0], (unsigned)u.spell_charge_2e[1],
                 (unsigned)u.spell_charge_2e[2], (unsigned)u.spell_charge_2e[3],
                 (unsigned)u.spell_charge_2e[4], (unsigned)u.spell_charge_2e[5],
                 (unsigned)u.spell_charge_2e[6]);
-    u.combat_stat_3e = 0;
+    // loc_178B0 message: word_FA784 = 0Ah + <name[stat-0Bh]> + aIbIVeW + itoa(charge) + aPscb,
+    // then sub_482A5(ebp, word_FA784). The 5-byte names are the local copy of dword_17493
+    // (COMBATII.EXE 0x17493). stat 0Ah gives slot -1, which indexes one entry before that
+    // copy in the original (a stack overread); no name is reproduced for it.
+    static const char* const kSpellNames[7] = {
+        "\xD1\xC1\xB5\x71", "\xA7\xB7\xD0\x65", "\xB8\xE5\x89\x62", "\xD2\x41\xA5\xA2",
+        "\xA5\xA1\xB9\xA1", "\xAD\xA1\xD1\xC5", "\xB4\x71\xD3\x62",
+    };
+    std::string msg = "\n";                                 // word_76E60
+    if (slot >= 0 && slot < 7) msg += kSpellNames[slot];
+    msg += "\x89\x81\xB5\x69 \xA2\x85\xB8\x77 ";            // aIbIVeW ("magic level ")
+    msg += std::to_string(charged);                          // itoa_(al, 10)
+    msg += " \xAF\x73\x97\x62!";                             // aPscb
+    battle_unit_message(u, msg);                             // sub_482A5(ebp, word_FA784)
+    if (should_exit_) return false;
     return false;                                            // loc_17723
 }
 
@@ -4272,11 +4289,11 @@ void CombatII::battle_gain_exp(int unit_index, int victim_index) {
         }
     }
     {   // stat 4: max HP += growth*100 (raw); stat 5: max MP += growth
+        // loc_17CAF runs the add and sub_1793D unconditionally, so a 0 growth still counts
+        // toward the 3-message dialogue grouping.
         const int hp_gain = battle_growth_1767e(*prog, 4);
-        if (hp_gain > 0) {
-            prog->max_hp += hp_gain;                         // [+4Ch] += 100*growth
-            grow_msg("\xC1\x41\x9D\x62 \xACw\xAFw!\n");               // "max HP rose"
-        }
+        prog->max_hp += hp_gain;                             // [+4Ch] += 100*growth
+        grow_msg("\xC1\x41\x9D\x62 \xACw\xAFw!\n");                   // "max HP rose"
         const int mp_gain = battle_growth_1767e(*prog, 5);
         prog->combat_mp_max_52 = (uint16_t)(prog->combat_mp_max_52 + mp_gain); // [+52h] += ax
         grow_msg("\xA0\x61\xA4\xF3\x9D\x62 \xACw\xAFw!\n");         // "max MP rose"
@@ -4291,9 +4308,11 @@ void CombatII::battle_gain_exp(int unit_index, int victim_index) {
         if (should_exit_) return;
     }
     battle_recalc_stats_1796b(*prog);
-    if (prog != &u) {                                        // [77h] unit: copy back EXP/level only
+    if (prog != &u) {                                        // [77h] unit: copy back EXP only
+        // loc_17D4C: `mov al,[ebp+3Dh]; mov [edx+3Dh],al` then `cmp si,1; jnz loc_17D7A`.
+        // si is the low word of the aLevelAbMwpwCps pointer advanced by the 27-byte template
+        // copy, so the level copy (and its sub_17E6D call) is never taken by the original.
         u.exp_3d = prog->exp_3d;
-        u.combat_level_2b = prog->combat_level_2b;
     }
 }
 
@@ -6679,6 +6698,7 @@ bool CombatII::battle_wait_heal(int unit_index) {
     if (cur + heal > cap) heal = cap - cur;        // clamp
     if (heal <= 0) return false;
     if (sce_map_kind_ == 3 || weather_ == 3) heal /= 2; // sub_462A7 halving
+    if (heal < 100) return false;                   // cmp ecx,64h; jl loc_46356 (no HP change)
     const int new_raw = cur + heal;
     const int new_hp = (new_raw + 99) / 100;
     u.hp_deficit = new_hp * 100 - new_raw;
@@ -6964,13 +6984,18 @@ inline int summon_tbyte(int row, int off) {
 //   values (the original writes the whole in-memory record).
 namespace {
 void battle_pack_unit_record(const CombatUnitPlacement& u, uint8_t rec[0x88], bool include_owner) {
-    std::memset(rec, 0, 0x88);
+    // The caller supplies the 0x88 buffer: a zero-filled one for qsv (port format) and the
+    // record read from BLACKBOX.DAT for sub_4EAF3. Not clearing here keeps the original's
+    // behaviour of writing the whole in-memory record (unmodelled bytes keep their values).
     auto w16 = [&](int o, int v) { rec[o] = (uint8_t)(v & 0xFF); rec[o + 1] = (uint8_t)((v >> 8) & 0xFF); };
     auto w32 = [&](int o, int v) {
         const uint32_t x = (uint32_t)v;
         rec[o] = (uint8_t)(x & 0xFF); rec[o + 1] = (uint8_t)((x >> 8) & 0xFF);
         rec[o + 2] = (uint8_t)((x >> 16) & 0xFF); rec[o + 3] = (uint8_t)((x >> 24) & 0xFF);
     };
+    // The SCE/BLACKBOX name field is NUL-padded (dev.md: 12 bytes at +0x02..+0x0D), so clear the
+    // bytes the std::string does not cover. [0x0D]/[0x0E] are written below.
+    std::memset(rec + 2, 0, 0x0B);
     const size_t n = std::min<size_t>(u.name.size(), 13u);
     if (n) memcpy(rec + 2, u.name.data(), n);
     rec[0] = (uint8_t)u.x;
@@ -7013,6 +7038,10 @@ void battle_pack_unit_record(const CombatUnitPlacement& u, uint8_t rec[0x88], bo
     rec[0x61] = (uint8_t)(u.sprite_type & 0xFF); rec[0x62] = (uint8_t)((u.sprite_type >> 8) & 0xFF);
     rec[0x63] = (uint8_t)(u.facing & 3);
     rec[0x64] = u.anim_frame;
+    rec[0x65] = (uint8_t)u.walk_off_x;                       // [65h] walk sub-pixel x
+    rec[0x66] = (uint8_t)u.walk_off_y;                       // [66h] walk sub-pixel y
+    w32(0x67, 0);                                            // [67h] = 0: CC968 next pointer
+    rec[0x6B] = u.attacking ? 1 : 0;                         // [6Bh] attacking flag
     rec[0x6C] = u.ai_decision_state;
     rec[0x6D] = u.ai_field_6d; rec[0x6E] = u.ai_field_6e;
     rec[0x6F] = u.ai_home_x; rec[0x70] = u.ai_home_y;
@@ -7070,6 +7099,9 @@ CombatUnitPlacement battle_unpack_unit_record(const uint8_t* rec) {
     p.sprite_type = (int)(uint16_t)(rec[0x61] | (rec[0x62] << 8));
     p.facing = (int8_t)(rec[0x63] & 3);
     p.anim_frame = rec[0x64];
+    p.walk_off_x = (int8_t)rec[0x65];
+    p.walk_off_y = (int8_t)rec[0x66];
+    p.attacking = rec[0x6B] != 0;
     p.ai_decision_state = rec[0x6C];
     p.ai_field_6d = rec[0x6D]; p.ai_field_6e = rec[0x6E];
     p.ai_home_x = rec[0x6F]; p.ai_home_y = rec[0x70];

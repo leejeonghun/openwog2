@@ -1343,6 +1343,7 @@ int CombatII::run(const std::string& scenario_param){
                 std::string restart = current_scenario_name_;
                 if (restart.empty()) restart = map_info_.map_filename;
                 if (restart.empty()) restart = effective_param;
+                next_scenario_fade_out();                    // sub_55EBC (100 -> 0 fade)
                 write_contmap_dat(restart, 0);               // sub_4FD6B(unk_FDF68, 0)
                 return_code_ = 1;                            // sub_61CFF(1): MAIN restarts combatII
                 should_exit_ = true;

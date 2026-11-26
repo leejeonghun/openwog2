@@ -424,6 +424,40 @@ void CombatII::blit_sprite_480(int x, int y, const uint8_t* rle_data) {
     }
 }
 
+// sub_5F4AF (480-stride version): draw only scanlines [0, scan_limit) measured from y.
+// scan_limit == 0 draws nothing and a negative value draws the whole sprite, matching the
+// original's `cmp cx,0 / jz` and 0FFFFh start count.
+void CombatII::blit_sprite_480_clipped(int x, int y, const uint8_t* rle_data, int scan_limit) {
+    if (!rle_data || scan_limit == 0) return;
+    if (scan_limit < 0) { blit_sprite_480(x, y, rle_data); return; }
+    uint8_t* dest = video_.get_backbuffer();
+    if (!dest) return;
+    const uint16_t chunks = (uint16_t)(rle_data[0] | (rle_data[1] << 8));
+    if (chunks == 0 || chunks > 4096) return;
+    const uint8_t* ptr = rle_data + 2;
+    int64_t rel = 0;
+    for (uint16_t i = 0; i < chunks; ++i) {
+        if (ptr + 4 > rle_data + 10000000) break;
+        const uint16_t skip = (uint16_t)(ptr[0] | (ptr[1] << 8));
+        const size_t payload = (size_t)ptr[2] * 4u + ptr[3];
+        ptr += 4;
+        rel += skip;
+        if (ptr + payload > rle_data + 10000000) break;
+        for (size_t b = 0; b < payload; ++b) {
+            const int64_t canvas_raw = (int64_t)x + rel + (int64_t)b;
+            int64_t row = canvas_raw / 480;
+            int64_t cx = canvas_raw % 480;
+            if (cx < 0) { cx += 480; --row; }
+            if (row >= scan_limit) continue;
+            const int64_t py = (int64_t)y + row;
+            if (cx < SCREEN_W && py >= 0 && py < SCREEN_H)
+                dest[(size_t)py * SCREEN_W + (size_t)cx] = ptr[b];
+        }
+        rel += (int64_t)payload;
+        ptr += payload;
+    }
+}
+
 // ---- sub_10420: load MAP_EFFC.SYB ----
 // Standard Softmax "New Fast&Compressed Sprite Ver3.0" SPR file (measured: count = 30 at 0x42,
 // 12-byte headers {u32 size, u16 w, u16 h, s16 xo, s16 yo} + RLE data from 0x80, exactly 30
@@ -1467,6 +1501,12 @@ bool CombatII::parse_sce_header(const uint8_t* data, size_t size) {
     sce_time_byte_ = (int8_t)data[5];
     sce_map_kind_ = data[6];
     sce_deploy_facing_ = data[7];                    // read 1B -> dword_11209E+2
+    // sub_4ED18 reads 1 byte each at file offset 0x189/0x18A into byte_FF0B7/byte_FF0B8
+    // (the SCE BGM and SFX ids) before the `lseek +0Bh` to 0x196.
+    if (size >= 0x18B) {
+        battle_bgm_id_ = (int8_t)data[0x189];
+        battle_sfx_id_ = (int8_t)data[0x18A];
+    }
     battle_deploy_zone_parse(data, size);            // read W*H*2 -> E8F46+2 (-1), dword_11209E low
     std::string mapname((const char*)data + 8, 13);
     mapname = mapname.c_str();                       // truncate at NUL
@@ -2121,10 +2161,12 @@ void CombatII::render_battle_map(bool magic_pass, bool overlay_only, bool skip_m
     std::vector<NC2Frame> dissolve_frames;
     dissolve_frames.reserve(units_.size() + 1);
     int draw_seq = 0;   // insertion order inside one sub_12BEE row/list
-    int top_start_tx = cam_tile_x_ -4;
-    int top_start_ty = cam_tile_y_ -6;
-    int top_end_tx = cam_tile_x_ + (SCREEN_W/TOWN_TILE_W)+6;
-    int top_end_ty = cam_tile_y_ + (SCREEN_H/TOWN_TILE_H)+10;
+    // sub_10C7D starts the row pointer at (camY*mapW + camX); sub_10CBD queues 13 columns and
+    // sub_12BEE repeats 17 rows, so the original window is exactly cam..cam+12 x cam..cam+16.
+    int top_start_tx = cam_tile_x_;
+    int top_start_ty = cam_tile_y_;
+    int top_end_tx = cam_tile_x_ + 13;
+    int top_end_ty = cam_tile_y_ + 17;
     for(int ty=top_start_ty; ty<top_end_ty; ty++){
         for(int tx=top_start_tx; tx<top_end_tx; tx++){
             if(tx<0||tx>=(int)map_w_||ty<0||ty>=(int)map_h_) continue;
@@ -2223,10 +2265,10 @@ void CombatII::render_battle_map(bool magic_pass, bool overlay_only, bool skip_m
             };
             // loc_12B16 passes var_30 + depth; sub_123C1 itself adds [65h]/[66h], so the
             // base argument stays walk-offset free.
-            auto status_overlay = [&](int depth = 0) {
+            auto status_overlay = [&](int depth = 0, int clip_line = -1) {
                 const size_t before = draw_list.size();
                 unit_status_overlay_123c1(u, draw_list, sx - u.walk_off_x,
-                                          sy - u.walk_off_y + depth, foot_y);
+                                          sy - u.walk_off_y + depth, foot_y, clip_line);
                 for (size_t k = before; k < draw_list.size(); ++k) {
                     DrawEntry& e = draw_list[k];
                     e.order_row = (unit_list == 6) ? 0x7FFFFFFF : u.y;
@@ -2472,7 +2514,10 @@ void CombatII::render_battle_map(bool magic_pass, bool overlay_only, bool skip_m
                                        foot_y, 5, 0, nullptr, 0, 0, &ov});
                     }
                     push_stored_form(depth);
-                    status_overlay(depth);   // loc_12B16: var_30 + var_34
+                    // loc_12B16 passes arg_4 = var_48 = var_44 + 8 - depth: base_y+14 for class 0
+                    // (large sprites) and base_y+sil_y+22 for class 1/2, i.e. the same clip line
+                    // the sprite entry uses (entry[4] = arg_4 - entry_y).
+                    status_overlay(depth, sy + (big ? 14 : (int)ncf->sil_y + 22));
                 }
                 continue;
             }
@@ -2644,7 +2689,9 @@ void CombatII::blit_draw_entry(const DrawEntry& e) {
         // canvas. chr_effc_ is stride-converted by sub_11BB8/sub_10031, so drawing it with the
         // 320-stride blit_sprite_rle shears the sprite.
         if (e.ov && !e.ov->rle.empty()) {
-            blit_sprite_480(e.x, e.y, e.ov->rle.data());
+            // loc_12C68: entry[4] == 0 -> sub_5F3FD (whole sprite), otherwise sub_5F4AF.
+            if (e.clip_h != 0) blit_sprite_480_clipped(e.x, e.y, e.ov->rle.data(), e.clip_h);
+            else blit_sprite_480(e.x, e.y, e.ov->rle.data());
         }
     } else if (e.type==8) {
         // sub_18605's item/field sprites: sub_5F3FD, 480-stride (ITEM.SPR/FLD_MISC.SYB have
@@ -3087,9 +3134,10 @@ void CombatII::battle_unit_idle_pose_step() {
 //   group 5: [+15h]&80h -> phase + 1Eh
 // When [+1Eh]==0 only group 5 is tested, otherwise all of 0..5 (loc_123E5).
 // Flying units add -0x18 to y (var_8, loc_123DF).
-// The original's arg_4 clip (entry[4] = arg_4 - y) is 0 for every known caller, so it is omitted.
+// arg_4 is the terrain sink clip line from sub_12567's var_48 (-1 outside that path); when it is
+// >= 0 the entry's byte [+4] becomes `arg_4 - entry_y` and the row pass clips with sub_5F4AF.
 void CombatII::unit_status_overlay_123c1(const CombatUnitPlacement& u, std::vector<DrawEntry>& out,
-                                        int base_x, int base_y, int foot) {
+                                        int base_x, int base_y, int foot, int clip_line) {
     if (chr_effc_.empty()) return;
     const uint8_t status = u.combat_flags_1e;
     static constexpr uint8_t kGroupBit[6] = {0x07, 0x08, 0x10, 0x20, 0x80, 0x00};
@@ -3122,6 +3170,10 @@ void CombatII::unit_status_overlay_123c1(const CombatUnitPlacement& u, std::vect
         e.foot = foot;
         e.type = 7;                                                      // CHR_EFFC 480-stride overlay
         e.ov = &fr;
+        if (clip_line >= 0) {
+            // sub_123C1 loc_12525: `mov bl,[arg_4]; mov bh,[entry+2]; sub bl,bh` -> byte.
+            e.clip_h = (int8_t)(uint8_t)((uint8_t)clip_line - (uint8_t)e.y);
+        }
         out.push_back(e);
     }
 }

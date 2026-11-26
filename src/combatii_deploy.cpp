@@ -128,7 +128,10 @@ void CombatII::battle_deploy_prepare(CombatUnitPlacement& nu, const CombatUnitPl
     nu.deploy_roster = true;
     nu.active = false;
     const bool formed = (edi.code_b != 0) || map_kind == 4;
-    if (!formed) return;                                         // jumps to loc_5536B
+    if (!formed) {                                               // jumps to loc_5536B
+        nu.slot_hint = battle_image_slot((int16_t)(uint16_t)nu.sprite_type);
+        return;
+    }
     auto stored = std::make_shared<CombatUnitPlacement>(nu);     // ecx = copy of esi
     stored->code_b = 0;                                          // [ecx+5Ch]=0
     stored->list_seq = 0;                                        // [ecx+7Bh]=0
@@ -148,6 +151,11 @@ void CombatII::battle_deploy_prepare(CombatUnitPlacement& nu, const CombatUnitPl
         form = t754ae((int)edi.code_b * 2 + (map_kind - 3) * 6);
     }
     battle_form_17e6d(nu, form);                               // sub_17E6D
+    if (nu.stored_77) {                                        // loc_55351: [77h][60h] = sub_1198D(sub_11B77)
+        const int mapped = battle_rider_image_type(nu);
+        nu.stored_77->slot_hint = (mapped >= 0) ? battle_image_slot(mapped) : 0;
+    }
+    nu.slot_hint = battle_image_slot((int16_t)(uint16_t)nu.sprite_type);   // loc_5536B
     nu.hp = nu.max_hp; nu.hp_deficit = nu.max_hp_deficit;        // [48h]=[4Ch]
 }
 
@@ -400,6 +408,7 @@ void CombatII::battle_deploy_54a82(const std::vector<size_t>& party, std::vector
         nu.stored_77.reset();
         edi.battle_gauge = 0x80;
         deploy_finish_unit(nu, x, y, (int)sce_deploy_facing_, battle_next_list_seq());
+        nu.slot_hint = battle_image_slot((int16_t)(uint16_t)nu.sprite_type);   // loc_54B04
         int ci = slot[ri];
         if (ci >= 0 && (size_t)ci < units_.size()) units_[(size_t)ci] = nu;
         else { units_.push_back(nu); slot[ri] = (int)units_.size() - 1; }

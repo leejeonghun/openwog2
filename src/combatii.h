@@ -831,8 +831,9 @@ private:
     void render_ai_ready_markers();      // sub_12161: ETC.ICO marker over units with gauge [+0x56] == 0xFF
     void battle_unit_idle_pose_step();   // sub_12065: toggle idle pose [64h] 0/1 and advance E518E/E4FB6 phases
     // sub_123C1: queue a chr_effc.syb overlay according to the [+1Eh]/[+15h] status bits.
+    // clip_line is the original's arg_4 (var_48): the terrain sink clip line, -1 for none.
     void unit_status_overlay_123c1(const CombatUnitPlacement& u, std::vector<DrawEntry>& out,
-                                   int base_x, int base_y, int foot);
+                                   int base_x, int base_y, int foot, int clip_line = -1);
     void render_player_move_overlay();
     void battle_set_overlay(uint16_t m) { battle_overlay_mode_ = m; }   // sub_44DEC
     uint8_t battle_get_state() const { return battle_state_; }           // sub_19FA3
@@ -1167,6 +1168,8 @@ private:
     // projectiles and trails). Unlike the 320-stride blit_sprite_rle it divides by 480 to find the
     // row (the 11BB8+10031 precondition).
     void blit_sprite_480(int x, int y, const uint8_t* rle_data);
+    // sub_5F4AF on the 480-stride canvas: keep only the top scan_limit scanlines.
+    void blit_sprite_480_clipped(int x, int y, const uint8_t* rle_data, int scan_limit);
     bool load_terrain_overlays(const std::string& map_filename); // sub_10420 (MAP_EFFC.SYB -> unk_789AC)
     void load_effect_sprites();                                  // sub_11BB8 + sub_44AB6 effect frames
     void play_weapon_class5_projectile(CombatUnitPlacement& attacker,
