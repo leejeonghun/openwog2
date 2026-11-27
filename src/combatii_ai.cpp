@@ -2620,7 +2620,10 @@ void CombatII::battle_ai_169d7_reset(int unit_index,
             const size_t i = (size_t)y * (size_t)map_w_ + (size_t)x;
             const int attr = (int)tile_attr_[i];                   // unk_88BD4[i]
             const int cost = (int)(int8_t)mob[attr & 0xFF];        // `jle` on the signed value
-            if (cost <= 0 || battle_cc998_occupant(x, y, true, ignore) >= 0) // CC998[i*4]!=0
+            // sub_169D7 reads dword_CC998[i] directly for every cell; unlike sub_11DB2 it does
+            // not apply the x-2/y-4 query guard. Footprint cells below/left of a base that
+            // itself passed sub_11E04's guard are therefore still occupied here.
+            if (cost <= 0 || battle_cc998_occupant(x, y, false, ignore) >= 0) // CC998[i*4]!=0
                 grid[i] = -2;
         }
     }

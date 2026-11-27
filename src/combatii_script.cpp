@@ -373,7 +373,16 @@ uint32_t CombatII::eval_condition(uint32_t offset, bool& satisfied) const {
     if (hdr != 0) {
         uint8_t cmp_type = c.u8();
         uint32_t t = battle_time_; // sub_19D47() == dword_F0418
-        bool pass = (cmp_type == 0) ? (t == hdr) : (cmp_type == 1) ? (t < hdr) : (cmp_type == 2) ? (t > hdr) : false;
+        // loc_53135/loc_53148/loc_53157 (90866-90885): type 0 = equal, 1 = time >= value,
+        // 2 = time <= value. A type above 2 jumps straight to loc_53169, so the time check
+        // is skipped and the condition passes.
+        bool pass = true;
+        switch (cmp_type) {
+            case 0: pass = (t == hdr); break;
+            case 1: pass = (t >= hdr); break;
+            case 2: pass = (t <= hdr); break;
+            default: break;
+        }
         if (!pass) {
             if (script_trace_) fprintf(stderr, "COMBAT: cond turn fail (time=%u need=%u type=%u)\n", t, hdr, cmp_type);
             return 0;
@@ -1047,9 +1056,20 @@ CombatII::VmResult CombatII::run_vm(uint32_t offset) {
                 const uint8_t* p = script_buffer_.data() + c.off;
                 uint8_t sel = p[0], idx = p[1], mode = p[2];
                 uint8_t step = p[3], dir = p[4];
-                if (ref_mode < 0) { ref_mode = mode; ev.retreat_mode = mode; }
-                else if (mode != ref_mode) { stop = true; break; } // loc_514D8 mode mismatch
                 if (CombatUnitPlacement* u = find_unit_ref_mut(sel, idx)) {
+                    // loc_514D8: the mode comparison (and the var_4 latch of the first
+                    // record) runs only after sub_501BA resolved the unit. An unresolved
+                    // record takes loc_5166E and skips the check entirely, so it neither
+                    // latches nor ends the batch; the next resolved record is the reference.
+                    if (ref_mode < 0) { ref_mode = mode; ev.retreat_mode = mode; }
+                    else if (mode != ref_mode) {
+                        // loc_514D8 `sub ecx,3` then loc_5168C `dec ecx`: the batch ends on
+                        // the preceding separator (4), which the VM re-reads as a new 0x04
+                        // command starting at this record.
+                        --c.off;
+                        stop = true;
+                        break;
+                    }
                     ev.leave_units.push_back((int)(u - units_.data()));
                     // loc_514FA: `mov al,[var_8]; neg al; mov unk_E5A50[i], al`; the value is a
                     // signed byte.
@@ -1304,6 +1324,17 @@ CombatII::VmResult CombatII::run_vm(uint32_t offset) {
             sev.type = VmEventType::Spawn;
             sev.offset = op_pos;
             uint32_t load_off = 0;
+            // sub_50D9F var_24 (ASM 87698-87715, 87974): only a non-zero value reaches the
+            // sub_50D3A drop relocation. The listing never initialises the slot: the
+            // raw-army-0 path always stores a CC990 roster pointer or the sub_112FD copy
+            // pointer, while a non-zero raw army leaves the slot as it was. Observed original
+            // runs (the 1-5 reinforcements land on the tile north of the payload) keep it
+            // non-zero, so the port models that value instead of an arbitrary zero.
+            int spawn_var24 = 1;
+            // Shared E8F46 image of the K==1 drop path: sub_169D7 rebuilds it on the first
+            // record and the later records read/extend the same grid (loc_51108..loc_5117A).
+            std::vector<int> drop_e8;
+            bool drop_grid_ready = false;
             while (!done) {
                 // loc_50DD4: after a separator 3 the original reads the next group's K into
                 // var_4 and compares it with var_10 (the first group's K). On a mismatch it
@@ -1411,6 +1442,10 @@ CombatII::VmResult CombatII::run_vm(uint32_t offset) {
                         fprintf(stderr, "COMBAT: spawn id=%d -> CC990 insert (%zu records)\n",
                                 nu.id, battle_roster_cc990_.size());
                 }
+                // loc_50E71..loc_50F25: var_24 holds the sub_500ED roster pointer or the
+                // newly copied record, so the raw-army-0 path always leaves it non-zero.
+                // Records with a non-zero raw army never write it (the value carries over).
+                if (raw_zero) spawn_var24 = 1;
                 // A single unlinked record whose raw army is nonzero and effective 1..4 (the
                 // assassins in 1-5, for example) follows the same byte-INC path as a static
                 // outer 1..3, so it is treated as a member of the 1x1 uniqueness gate. Raw
@@ -1436,29 +1471,38 @@ CombatII::VmResult CombatII::run_vm(uint32_t offset) {
                 uint8_t count2 = script_buffer_[p]; p += 1;
                 nu.x = script_buffer_[p]; p += 1;
                 nu.y = script_buffer_[p]; p += 1;
-                // sub_50D9F -> sub_50D3A: a K==1 drop does not keep the payload position. It
-                // scans a diamond r=1..0x31 in sub_1AC08/sub_1AC59 order and takes the first
-                // cell whose sub_13CBD value is -1. At this point the original's shared E8 grid
-                // is in its cleared (-1) state (the alternative is that north of the payload
-                // would not be the position measured on the 1-5 saves), so the port reproduces
-                // the scan against an all -1 grid. sub_13CBD returns -128 outside the map, so
-                // those cells are skipped exactly as in the original; this also keeps a spawn
-                // on the top row on its own tile instead of decrementing y out of bounds.
+                // sub_50D9F loc_51108..loc_5117A (K==1 drop path):
+                //   * Only on the first record (var_18 == 0) sub_169D7 rebuilds the shared
+                //     E8F46 grid from dword_F0648[0], the record just inserted: -1 walkable
+                //     and empty, -2 blocked by terrain or CC998. Later records of the same
+                //     command reuse that grid.
+                //   * var_24 is non-zero when the record came through the CC990 roster
+                //     lookup/copy path, and only then is the drop tile relocated by
+                //     sub_50D3A: the first tile of the increasing sub_1AC08/sub_1AC59
+                //     diamond r=1..0x31 whose E8 value is -1.
+                //   * sub_13D02(final x, y, -2) marks the drop tile so the next record's
+                //     diamond skips it (it accepts only -1).
                 if (K == 1) {
-                    std::vector<int> empty_e8((size_t)map_w_ * (size_t)map_h_, -1);
-                    bool drop_found = false;
-                    for (int r = 1; r < 0x32 && !drop_found; ++r) {
-                        Wc5Dia dia;
-                        battle_ai_wc5_dia_init(dia, nu.x, nu.y, r);
-                        int dx = 0, dy = 0;
-                        while (battle_ai_wc5_dia_next(dia, dx, dy)) {
-                            if (battle_ai_wc5_diff_read(empty_e8, dx, dy) != -1) continue;
+                    if (!drop_grid_ready) {
+                        // sub_169D7 takes the mobility selector from the record's unit. It is
+                        // staged for this call only: sub_11EE4 has not run for it yet, so it
+                        // is not in CC998 (units_ occupancy counts active units only).
+                        units_.push_back(nu);
+                        battle_ai_169d7_reset((int)units_.size() - 1, drop_e8); // sub_169D7
+                        units_.pop_back();
+                        drop_grid_ready = true;
+                    }
+                    if (spawn_var24 != 0) {
+                        int dx = nu.x, dy = nu.y;
+                        if (battle_move_50d3a(dx, dy, drop_e8)) {          // sub_50D3A
                             nu.x = dx;
                             nu.y = dy;
-                            drop_found = true;
-                            break;
+                            if (script_trace_)
+                                fprintf(stderr, "COMBAT: vm spawn drop relocated -> (%d,%d)\n",
+                                        nu.x, nu.y);
                         }
                     }
+                    battle_ai_wc5_diff_write(drop_e8, nu.x, nu.y, -2);    // sub_13D02
                 }
                 const size_t path_bytes = (K == 0 && count2 >= 1)
                     ? (size_t)(count2 - 1) * 2u : 0u;
@@ -2002,7 +2046,10 @@ bool CombatII::run_unit_hp_trigger(int victim_index, int other_index, int mode) 
             case 3: hit = v.hp <= 0; break;                    // loc_5389C
             default: break;
         }
-        if (!hit) continue;
+        // loc_538A7: cond > 3 leaves ebx = 0, and a false HP condition jumps to the same
+        // `cmp ebx,1; jne loc_5392E`, which restores dword_11024C and ends the table walk
+        // (91561-91576). Later records for this unit are not evaluated.
+        if (!hit) break;
 
         script_forced_target_ = other_index;                   // loc_538A7
         bool satisfied = false;
@@ -3397,13 +3444,40 @@ void CombatII::battle_spawn_enqueue(const VmEvent& single) {
 void CombatII::battle_spawn_queue_step() {
     if (battle_spawn_queue_.empty()) return;
     std::vector<size_t> pass;
+    // sub_51211 starts word_EDD74 at 0 and, for every slot that passes sub_16699, compares
+    // var_8 = (count2-1) - E5A50 + 2 (= count2 + count1 + 1) against it. A larger value
+    // updates word_EDD74 and immediately recentres the camera on the queue's x/y through
+    // sub_111BE (88125-88135); the first passing slot therefore always moves the camera.
+    int edd74 = 0;
     for (size_t s = 0; s < battle_spawn_queue_.size() && s < 32; ++s) {
         PendingSpawn& ps = battle_spawn_queue_[s];
         if (!ps.used || ps.ev.spawn_units.empty()) continue;
         const int ui = ps.ev.spawn_units[0];
         int x = 0, y = 0, f = 0;
         battle_spawn_dest(ps.ev, ui, x, y, f);
-        if (battle_16699(x, y, f, ui)) pass.push_back(s);
+        if (!battle_16699(x, y, f, ui)) continue;
+        pass.push_back(s);
+        int var8 = 0;
+        for (const VmWalkUnit& w : ps.ev.walk_units)
+            var8 = std::max(var8, (int)w.count2 + w.spawn_delay + 1);
+        if (ps.ev.walk_units.empty()) var8 = (int)ps.ev.walk_frames;
+        if (var8 > edd74) {
+            edd74 = var8;
+            // sub_111BE: cam_tile = (x-6, y-6) clamped to 0..map-12. Unlike sub_1124A it
+            // neither scrolls nor draws, and it leaves the fine camera offsets alone.
+            int cx = x - 6, cy = y - 6;
+            if (cx < 0) cx = 0;
+            if (cy < 0) cy = 0;
+            const int max_x = map_w_ > 12 ? (int)map_w_ - 12 : 0;
+            const int max_y = map_h_ > 12 ? (int)map_h_ - 12 : 0;
+            if (cx > max_x) cx = max_x;
+            if (cy > max_y) cy = max_y;
+            cam_tile_x_ = cx;
+            cam_tile_y_ = cy;
+            if (battle_trace_)
+                fprintf(stderr, "COMBAT: sub_51211 slot=%zu frames=%d camera=(%d,%d)\n",
+                        s, edd74, cx, cy);
+        }
     }
     if (pass.empty()) return;
     VmEvent merged = battle_spawn_queue_[pass[0]].ev;
@@ -3417,6 +3491,10 @@ void CombatII::battle_spawn_queue_step() {
         merged.walk_frames = std::max(merged.walk_frames, ps.ev.walk_frames);
         ps.used = false;
     }
+    // word_EDD74 is the walk duration: sub_16D3E keeps stepping until its frame counter
+    // reaches it (loc_1702A), so the merged event uses the same maximum. (The
+    // `dword_F0B9C+2` write at loc_5141E is the activated record count, not this frame count.)
+    if (edd74 > 0) merged.walk_frames = edd74;
     if (battle_trace_)
         fprintf(stderr, "COMBAT: sub_51211 activated=%zu\n", pass.size());
     battle_spawn_activate(merged);
