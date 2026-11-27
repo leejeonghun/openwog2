@@ -930,9 +930,16 @@ bool CombatII::load_battle_map(const std::string& map_filename, bool use_sce_uni
             for (int i = 0; i < base_tile_count; ++i) {
                 uint8_t raw[20];
                 if (fread(raw, 1, 20, fp) != 20) { stat_ok = false; break; }
+                // loc_10783 (ASM 10783-107B5): the destination is the record's first word, not the
+                // file index (`mov ebx,[esp-2]; sar ebx,10h; imul ebx,14h`), and only words 0..8
+                // are copied into unk_7EBAC[word0*20]. The counters stay file-indexed (sub_10A30).
+                int16_t rec[10];
                 for (int k = 0; k < 10; ++k)
-                    map_base_anim_[(size_t)i * 10 + (size_t)k] =
-                        (int16_t)(raw[2 * k] | (raw[2 * k + 1] << 8));
+                    rec[k] = (int16_t)(raw[2 * k] | (raw[2 * k + 1] << 8));
+                const int dest = rec[0];
+                if (dest < 0 || dest >= base_tile_count) continue;
+                for (int k = 0; k < 9; ++k)
+                    map_base_anim_[(size_t)dest * 10 + (size_t)k] = rec[k];
             }
         }
         if (stat_ok && top_tile_count > 0) {
@@ -940,9 +947,14 @@ bool CombatII::load_battle_map(const std::string& map_filename, bool use_sce_uni
             for (int i = 0; i < top_tile_count; ++i) {
                 uint8_t raw[20];
                 if (fread(raw, 1, 20, fp) != 20) { stat_ok = false; break; }
+                // loc_107D6 (ASM 107D6-10808): same word0 destination rule for unk_7D824.
+                int16_t rec[10];
                 for (int k = 0; k < 10; ++k)
-                    map_top_anim_[(size_t)i * 10 + (size_t)k] =
-                        (int16_t)(raw[2 * k] | (raw[2 * k + 1] << 8));
+                    rec[k] = (int16_t)(raw[2 * k] | (raw[2 * k + 1] << 8));
+                const int dest = rec[0];
+                if (dest < 0 || dest >= top_tile_count) continue;
+                for (int k = 0; k < 9; ++k)
+                    map_top_anim_[(size_t)dest * 10 + (size_t)k] = rec[k];
             }
         }
         if (stat_ok) {
@@ -1198,9 +1210,11 @@ void CombatII::init_dummy_units(bool parse_sce_snapshot) {
                             const int eff = sce_fdaf6_lookup(owner);
                             if (eff < 0) {
                                 p.memory_army = -1;
-                            } else if (eff == 0) {
-                                // sub_4E81F dec 0xFF -> loc_4F02F jl, free (as at 1134A: no
-                                // placement)
+                            } else if (eff == 0 || eff >= 0x81) {
+                                // sub_4E81F stores FDAF6[owner]-1 in [+0Eh] and loc_4F00E tests it
+                                // with a signed `cmp byte ptr [ebp+0Eh],0; jge` (ASM 85159-85164):
+                                // 0 (dec 0xFF) and 0x81..0xFF (negative bytes) are freed, while
+                                // 0x01..0x80 place the unit (loc_4F02F inc dh restores the value).
                                 all_placements_direct = false;
                                 pos += rec_span;
                                 continue;

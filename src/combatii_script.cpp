@@ -1754,6 +1754,9 @@ int CombatII::scan_script_blocks(std::vector<CombatDialogueEntry>& out) {
 bool CombatII::walk_trigger_table(uint32_t base, uint32_t match_id, uint8_t* fire_counter,
                                   bool continue_on_false, VmResult& out) {
     if (!script_loaded_) return false;
+    // sub_53523 (91241) / sub_5358F (91284) clear dword_11024C on entry and never restore it, so
+    // no forced target from an earlier trigger can leak into this table walk.
+    script_forced_target_ = -1;
     ScriptCursor c{script_buffer_.data(), base, (uint32_t)script_buffer_.size()};
     // sub_5358F's esi is incremented (`inc esi`, loc_53610) for every record whose id does not
     // match. When a matching record's condition is true, `inc byte ptr unk_11044C[esi]` fires,
@@ -1856,6 +1859,7 @@ bool CombatII::run_area_trigger(const CombatUnitPlacement& moved_unit, VmResult&
         if (battle_trace_)
             fprintf(stderr, "COMBAT: area trigger rec=%d @0x%X unit=%d pos=(%d,%d) rect=(%u,%u)-(%u,%u) events=%zu\n",
                     rec_index, rec, moved_unit_id, moved_x, moved_y, x1, y1, x2, y2, out.events.size());
+        script_forced_target_ = saved_target;   // loc_53776: mov dword_11024C, ebp (always)
         return true;
     }
     script_forced_target_ = saved_target;
@@ -4093,6 +4097,9 @@ void CombatII::play_vm_events(const std::vector<VmEvent>& events) {
             }
             // loc_51DFE/loc_51E0F: sub_1E61D (attacker) [+ sub_1EF5C]; loc_51E34: pose.
             if (ev.type == VmEventType::Attack) {
+                // loc_51DFE (89090-89096) / loc_51E1F (89111): only attacker mode 1 writes
+                // dword_F0B8A+2=1. Mode 0 leaves the previous tactical hit kind (0/1/2) intact.
+                if (combat.attacker_mode == 1) battle_f0b8a2_ = 1;
                 battle_attack_fx_.clear();
                 play_attack_sequence(combat);
             } else {

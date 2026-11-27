@@ -482,8 +482,10 @@ int CombatII::battle_resolve_list(int attacker_index, bool declare,
         if (battle_target_list_.empty()) return -2;
     }
 
-    // The hit kind (sub_1D6B1) is decided once before the target loop.
+    // The hit kind (sub_1D6B1) is decided once before the target loop and latched into
+    // word ptr dword_F0B8A+2 (1DEA7) before the per-target rolls.
     const int hit_kind = battle_hit_kind(units_[(size_t)attacker_index]);
+    battle_f0b8a2_ = hit_kind;
     const std::vector<int> targets = battle_target_list_;
     std::vector<std::pair<int, BattleAttackRoll>> rolls;
     std::vector<int> damage;

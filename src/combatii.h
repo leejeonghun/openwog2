@@ -1989,6 +1989,10 @@ private:
     // dword_F0648[0] as it survives a zero count: sub_1D124 resets only dword_F0B9C+2, so the
     // array keeps its old first pointer while the count is 0 (read by sub_1F738 loc_1F9B7).
     int battle_f0648_slot0_ = -1;
+    // word ptr dword_F0B8A+2: attack presentation kind read by sub_1E61D. Written by sub_1DDF0
+    // with the raw sub_1D6B1 hit_kind (0/1/2, ASM 20328) and by sub_51C74 only when the scripted
+    // attacker mode is 1 (89092/89111). A mode-0 0x07 command leaves the previous value in place.
+    int battle_f0b8a2_ = 0;
     std::vector<int16_t> battle_range_e8_;        // E8F46+2 range grid (sub_1CC09)
     int battle_atk_tx_ = 0, battle_atk_ty_ = 0;   // dword_FA8B0 / word_FA8B4 (selected tile)
     int battle_line_cx_ = 0, battle_line_cy_ = 0; // sub_1F466 var_10/var_C (2x2 cursor origin)

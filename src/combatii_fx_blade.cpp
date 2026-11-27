@@ -488,18 +488,23 @@ int CombatII::battle_fx_272ad(int unit_index, int tx, int ty, int k) {
     const int nframes = (int)magic_frames_.size();
     constexpr int kSlots = 0x16;                            // 22 entries (init fills 0..20)
     struct TrailPoint { int x = 0; int y = 0; int frame = 0; };
-    std::vector<TrailPoint> trail((size_t)kSlots, TrailPoint{ax, ay, 0});
+    // 27312-273A9: the initial point is cos(0)*160 / sin(0)*160 from the anchor, i.e.
+    // (anchor_x + 160, anchor_y), and it fills slots 0..20 with frame 0; the first frame's shift
+    // copies slot 20 into slot 21, so all 22 slots start on that point.
+    std::vector<TrailPoint> trail((size_t)kSlots, TrailPoint{ax + 160, ay, 0});
     int angle = 0;                                          // var_10
     int radius = 0xA0;                                      // var_C
-    int last_x = ax, last_y = ay;                           // var_4 / var_8
+    int last_x = ax + 160, last_y = ay;                     // var_4 / var_8
     for (int guard = 0; guard < 0x400 && radius > -0x2A && !should_exit_; ++guard) {
         if (radius >= 0) {                                  // `test di,di; jl loc_274BA`
-            angle += 0x14;
-            if (angle >= 0x280) angle = 0;                  // `cmp ax,280h`
+            // 273EE-2746B: the point uses the CURRENT angle and only then the angle advances by
+            // 14h and wraps at 280h, so the first point is exactly the angle-0 initial point.
             const double rad = (double)angle / 100.0;       // flt_77325 = 100.0
             // 272AD: fild anchor -> faddp -> __CHP -> fistp truncates the anchored value.
             last_x = (int)((double)ax + std::cos(rad) * (double)radius);
             last_y = (int)((double)ay + std::sin(rad) * (double)radius);
+            angle += 0x14;
+            if (angle >= 0x280) angle = 0;                  // `cmp ax,280h`
             trail[0].x = last_x;
             trail[0].y = last_y;
             trail[0].frame = std::min(nframes - 1, (radius / 2) % 8);  // (var_C/2) % 8

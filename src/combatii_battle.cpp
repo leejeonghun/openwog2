@@ -1231,7 +1231,11 @@ bool CombatII::battle_resolve_attack(int attacker_index, int target_index, bool 
     // sub_1DDF0: critical kind (sub_1D6B1) -> dodge/guard/hit roll -> damage (sub_1D770)
     // and sub_45BFB preparation before sub_1E61D.
     battle_target_list_.assign(1, target_index);
-    const BattleAttackRoll roll = battle_attack_roll(attacker_index, target_index);
+    // 1DEA7: `call sub_1D6B1; mov word ptr dword_F0B8A+2, ax` - the raw hit kind is latched before
+    // the roll, which may normalise it to 0/1 on a guard.
+    const int hit_kind = battle_hit_kind(units_[(size_t)attacker_index]);
+    battle_f0b8a2_ = hit_kind;
+    const BattleAttackRoll roll = battle_attack_roll(attacker_index, target_index, hit_kind);
     if (out_roll) *out_roll = roll;
     const int result = roll.result;
     int damage = 0;                                              // x100 (negative = healing)
@@ -1441,15 +1445,18 @@ void CombatII::play_attack_sequence(const VmEvent& ev, std::vector<VmAttackTarge
     load_effect_sprites();
     auto& A = units_[(size_t)ev.attacker_unit];
     // dword_F0B8A+2 holds hit_kind (0/1/2) for tactical attacks (sub_1DDF0, 20328: sub_1D6B1 -> +2)
-    // and attacker_mode (0 normal, 1 critical) for scripted events (sub_51C74, 89092/89111).
-    // sub_1E61D's prologue (21054) runs the wind-up when +2 != 0; loc_1E989 (21328) calls 19168
-    // only when +2 == 1. sub_1E2EA normalises s to 1 when +2 != 0 (20702-20704).
-    const int f0b8a2 = ev.attacker_mode;
+    // and is written to 1 by a scripted 0x07 whose attacker mode is 1 (sub_51C74, 89092/89111).
+    // Other script modes do not write it, so the previous tactical hit kind can survive into
+    // sub_1E61D. Its prologue (21054) runs the wind-up when +2 != 0; loc_1E989 (21328) calls
+    // 19168 only when +2 == 1. sub_1E2EA normalises s to 1 when +2 != 0 (20702-20704).
+    const int wclass = weapon_class(A);
+    const int afacing = A.facing & 3;
+    // The global is latched by the caller: sub_1DDF0 stores the raw hit kind, and the scripted
+    // 0x07 path stores 1 only for attacker mode 1 (loc_51DFE/loc_51E1F).
+    const int f0b8a2 = battle_f0b8a2_;
     const bool has_crit_anim = (f0b8a2 != 0); // loc_1E677 preliminary motion (non-zero)
     const bool is_crit_19168 = (f0b8a2 == 1); // loc_1E989 19168 (exactly 1)
     const int swing_s = (f0b8a2 != 0) ? 1 : 0; // sub_1E2EA normalises ebx
-    const int wclass = weapon_class(A);
-    const int afacing = A.facing & 3;
 
     // sub_51C74 loc_51D63: per-target word_F0430 result and knockback setup.
     struct Tgt { int idx; int result; };
