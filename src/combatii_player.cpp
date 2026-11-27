@@ -60,6 +60,12 @@ g2range::Unit CombatII::battle_range_unit(int unit_index) const {
     return r;
 }
 
+// dword_F0648[0] as loc_1F9B7 reads it: the live first target, or the pointer left behind
+// when the count is zero (sub_1D124 only resets dword_F0B9C+2, it does not clear the array).
+int CombatII::battle_f0648_slot0() const {
+    return battle_target_list_.empty() ? battle_f0648_slot0_ : battle_target_list_.front();
+}
+
 // sub_1D124(unit, x, y, facing): rebuild F0648. Returns the count (dword_F0B9C+2).
 int CombatII::battle_range_collect(int unit_index) {
     battle_target_list_.clear();
@@ -68,6 +74,7 @@ int CombatII::battle_range_collect(int unit_index) {
     g2range::Range r(env);
     const int n = r.collect_targets(battle_range_unit(unit_index));
     battle_target_list_ = r.list;
+    if (!battle_target_list_.empty()) battle_f0648_slot0_ = battle_target_list_.front();
     return n;
 }
 
@@ -79,6 +86,7 @@ int CombatII::battle_range_collect_dir(int unit_index, int dir) {
     g2range::Range r(env);
     const int n = r.collect_targets_dir(battle_range_unit(unit_index), dir);
     battle_target_list_ = r.list;
+    if (!battle_target_list_.empty()) battle_f0648_slot0_ = battle_target_list_.front();
     return n;
 }
 
@@ -96,6 +104,7 @@ int CombatII::battle_range_collect_dir_grid(int unit_index, int dir,
     const int n = r.collect_targets_dir(battle_range_unit(unit_index), dir);
     grid = r.e8;                       // ending grid left by 1D124 (shared side effect)
     battle_target_list_ = r.list;
+    if (!battle_target_list_.empty()) battle_f0648_slot0_ = battle_target_list_.front();
     return n;
 }
 
@@ -355,7 +364,8 @@ int CombatII::battle_attack_execute(int unit_index) {
     const int wc = battle_atk_wc_;
     // sub_1F738 entry: `mov ebp, dword_F0648; mov ebp, [ebp+48h]` saves the first target's HP
     // (x100).
-    // At the end (loc_1F9B7) subtracting the same target's HP gives the damage dealt.
+    // loc_1F9B7 subtracts the *current* dword_F0648[0] HP: the counterattack (sub_1EF9A) and
+    // the large path (sub_1D124) rebuild the list in the meantime.
     const int drain_target = battle_target_list_.empty() ? -1 : battle_target_list_.front();
     const int drain_hp_before = (drain_target >= 0 && (size_t)drain_target < units_.size())
                                     ? battle_hp_raw(units_[(size_t)drain_target]) : 0;
@@ -417,9 +427,11 @@ int CombatII::battle_attack_execute(int unit_index) {
     // heal the difference between ebp and the first target's current HP with sub_462A7
     // (no subtraction when the target is gone).
     if ((size_t)ui < units_.size() && kBattleClassData[units_[(size_t)ui].combat_class][2] == 1) {
+        // loc_1F9B7: `mov edx, dword_F0648; test edx,edx; jz` then `sub ebp,[edx+48h]`.
         int amount = drain_hp_before;
-        if (drain_target >= 0 && (size_t)drain_target < units_.size())
-            amount -= battle_hp_raw(units_[(size_t)drain_target]);
+        const int now_target = battle_f0648_slot0();
+        if (now_target >= 0 && (size_t)now_target < units_.size())
+            amount -= battle_hp_raw(units_[(size_t)now_target]);
         battle_heal_462a7(ui, amount);
         if (battle_trace_)
             fprintf(stderr, "COMBAT: drain unit=%d heal_raw=%d (sub_1F738 loc_1F9B7)\n",
@@ -454,10 +466,19 @@ int CombatII::battle_resolve_list(int attacker_index, bool declare,
         }
         if (!alive(attacker_index)) return -1;           // sub_11FF7 == 0
         // Drop vanished targets (null pointers); an empty list returns -2.
+        const bool had_targets = !battle_target_list_.empty();
         battle_target_list_.erase(
             std::remove_if(battle_target_list_.begin(), battle_target_list_.end(),
                            [&](int i) { return !alive(i); }),
             battle_target_list_.end());
+        // loc_1DE52: compact the null entries. When the declaration started with targets, an
+        // empty result leaves slot 0 null (sub_1ED45 already wrote the dead slots); an already
+        // empty list never enters the compaction, so its old slot 0 stays.
+        if (!battle_target_list_.empty()) {
+            battle_f0648_slot0_ = battle_target_list_.front();
+        } else if (had_targets) {
+            battle_f0648_slot0_ = -1;
+        }
         if (battle_target_list_.empty()) return -2;
     }
 

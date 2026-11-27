@@ -1235,6 +1235,7 @@ private:
     // (sub_10971+10h+[65h]+xo, sub_10988+4+[66h]+18h+yo) through sub_5F3FD (480 stride).
     bool load_item_spr();
     void battle_draw_shield_icon(int unit_index);
+    void battle_fx_1e4e1(int caster_index, int target_index, int f8); // sub_1E4E1 elemental impact
     void battle_draw_weapon_trail(int unit_index, int f8, int s); // sub_1E2EA (WEA_EFFC arc)
     // sub_28889: spell-name announce, called by the handlers (F13B0 -> sub_28982/29273/29514/
     // 29722/29F4D/2A75A ...) once the target is fixed. The name is off_7423C[R], stored in
@@ -1985,6 +1986,9 @@ private:
     int battle_atk_phase_ = 0;
     int battle_atk_wc_ = 0;                       // sub_174CF, sampled when the attack starts
     std::vector<int> battle_target_list_;         // dword_F0648 / dword_F0B9C+2 (units_ indices)
+    // dword_F0648[0] as it survives a zero count: sub_1D124 resets only dword_F0B9C+2, so the
+    // array keeps its old first pointer while the count is 0 (read by sub_1F738 loc_1F9B7).
+    int battle_f0648_slot0_ = -1;
     std::vector<int16_t> battle_range_e8_;        // E8F46+2 range grid (sub_1CC09)
     int battle_atk_tx_ = 0, battle_atk_ty_ = 0;   // dword_FA8B0 / word_FA8B4 (selected tile)
     int battle_line_cx_ = 0, battle_line_cy_ = 0; // sub_1F466 var_10/var_C (2x2 cursor origin)
@@ -2141,6 +2145,7 @@ private:
     // sub_1D124: builds F0648 from g2range (cross-checked against the original machine code); the
     // result lands in battle_target_list_.
     int battle_range_collect(int unit_index);                // -> list size
+    int battle_f0648_slot0() const;                          // dword_F0648[0] (stale when count == 0)
     int battle_range_collect_dir(int unit_index, int dir);    // facing-argument variant (sub_3EE2B)
     // Facing-loop form for sub_3EE2B: the original shares the global E8F46, so the 13F8A clear
     // and shadow of one wc5 LOS run survive into the 165C2 test of the next facing. The grid is

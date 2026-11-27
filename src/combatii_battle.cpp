@@ -588,6 +588,24 @@ void CombatII::sfx(int id) {
     }
 }
 
+// sub_1E4E1(caster, target, f8): elemental impact overlay.  Frame index is
+// ((caster[15h] & 7) >> 1) * 3 + 0x15 + f8 into the CHR_EFFC descriptor table (unk_BB878,
+// 12 bytes per entry: +0 x offset, +2 y offset, +4 frame data).  It is drawn at the target's
+// sub_135EB centre plus the entry offsets through sub_5F3FD (480-stride canvas).
+void CombatII::battle_fx_1e4e1(int caster_index, int target_index, int f8) {
+    if (caster_index < 0 || (size_t)caster_index >= units_.size()) return;
+    if (target_index < 0 || (size_t)target_index >= units_.size()) return;
+    const int bits = (int)(units_[(size_t)caster_index].combat_flags_15 & 7);
+    if (bits == 0) return;                                            // test dl,7 ; jz 1E55F
+    const int idx = ((bits >> 1) * 3) + 0x15 + f8;
+    if (idx < 0 || (size_t)idx >= chr_effc_.size()) return;
+    const TerrainOverlayFrame& fr = chr_effc_[(size_t)idx];
+    if (fr.rle.empty()) return;
+    int cx = 0, cy = 0;
+    unit_screen_center(units_[(size_t)target_index], cx, cy);         // sub_135EB
+    blit_sprite_480(cx + fr.x, cy + fr.y, fr.rle.data());             // sub_5F3FD
+}
+
 // sub_135EB: screen centre of a unit's (facing, pose 0) frame.
 //   x = sub_10971(tile x) + 12 + entry[4] + entry[2]/2
 //   y = sub_10988(tile y) + 2 + entry[5] + entry[3]/2
@@ -1577,9 +1595,9 @@ void CombatII::play_attack_sequence(const VmEvent& ev, std::vector<VmAttackTarge
                     // Result 1: sub_1E460 draws the equipped shield (ITEM class 6) sprite.
                     if (T[i].result == 1) battle_draw_shield_icon(T[i].idx);
                     // sub_1E4E1(A, T, f8): elemental impact sprite CHR_EFFC[((A[15h]&7)>>1)*3 +
-                    // 0x15 + f8].
-                    //   The SCE data never sets the [unit+15h] element bits, so this is index 0 and
-                    //   the original draws nothing either.
+                    // 0x15 + f8], drawn for every non-dodged target (21382-21400).  [15h]'s low
+                    // three bits are set by the element enchant (sub_29273, 34619-34637).
+                    battle_fx_1e4e1(ev.attacker_unit, T[i].idx, f8);
                 }
                 // sub_1E2EA(A, edx=p, ebx=dword_F0B8A): weapon trail (WEA_EFFC).
                 // The original (20701 dec edx; 20706 cmp dx,1) uses BA8B3/BA8B4 (+3/+4)
@@ -7543,37 +7561,79 @@ int CombatII::battle_spell_summon(int unit_index, int k, int row, int sprite, in
     // sub_29F4D entry: count = k+1; rows 4..6 (large) take the 2x2 footprint path (sub_29D88).
     const int count = k + 1;                                          // var_14 = dx+1
     const bool large = (row >= 4 && row <= 6);                        // var_10
-    // Facing table filled by sub_29C5A/29D88: dirs[0] = facing, dirs[1] = (facing+1)%4,
-    // dirs[2] = (facing+3)%4. The original only marks the E8F46 grid with 3E8/1/-1 to drive
-    // the 4A483 cursor display; these values have no gameplay effect.
+    // sub_29C5A (small) / sub_29D88 (large) fill the direction table and build the E8F46
+    // range grid used by the placement test below:
+    //   small: table[0] = facing, table[1] = (facing+1)%4, table[2] = (facing+3)%4
+    //          (each entry only when count exceeds its index), grid budget 0x0C;
+    //   large: the fixed table {1, 3} - the caster's facing is not used - grid budget 0x18.
+    // sub_13CBD reads that diffusion grid.  The original also writes 3E8 over the direction
+    // tiles (sub_13D02) and then rewrites the rest of the visible square to -1 (1AC08/1AC59);
+    // both only preserve the >= 0 predicate for the tiles tested here, and the port does not
+    // draw E8F46 during a summon.
     const int caster_facing = (int)units_[(size_t)unit_index].facing & 3;
-    int dirs[3] = { caster_facing, (caster_facing + 1) & 3, (caster_facing + 3) & 3 };
-    // 29F4D: remove old summons -> 28889 announce -> 299DA per tile.
-    battle_remove_old_summons(unit_index);
+    const int dirs[3] = { large ? 1 : caster_facing,
+                          large ? 3 : ((caster_facing + 1) & 3),
+                          large ? 3 : ((caster_facing + 3) & 3) };
+    std::vector<int> summon_grid =
+        battle_ai_build_diffusion(unit_index, large ? 0x18 : 0x0C);     // sub_14300/14032/143F3
+    const int grid_w = (int)map_w_;
+    auto grid_read = [&](int x, int y) -> int {                        // sub_13CBD
+        if (grid_w <= 0 || map_h_ == 0 || x < 0 || y < 0 || x >= grid_w || y >= (int)map_h_)
+            return -0x80;
+        const size_t gi = (size_t)y * (size_t)grid_w + (size_t)x;
+        return gi < summon_grid.size() ? summon_grid[gi] : -0x80;
+    };
+    auto step_tile = [](int& x, int& y, int dir) {                     // sub_49ABC
+        switch (dir & 3) {
+            case 0: y += 1; break;                                     // south
+            case 1: x -= 1; break;                                     // west
+            case 2: y -= 1; break;                                     // north
+            default: x += 1; break;                                    // east
+        }
+    };
+    // 29F4D: sub_28889 announce -> sub_29EE4 remove old summons -> recall.nsp and the two SSPs
+    // once for the whole cast -> sub_299DA per tile (35964-35977).
     battle_spell_announce(unit_index, (battle_spell_name_ && *battle_spell_name_) ? battle_spell_name_ : "Summon");
     if (should_exit_) return 0;
+    battle_remove_old_summons(unit_index);
+    const bool summon_nsp = battle_nsp_load("recall.nsp");             // sub_1FEA4
+    if (summon_nsp) {
+        battle_ssp_play("regen.ssp", 0x32);                            // sub_4F460(32h)
+        battle_ssp_play("summon.ssp", 0x33);                           // sub_4F460(33h)
+    }
     int spawned = 0;
     for (int n = 0; n < count && !should_exit_; ++n) {
         if ((size_t)unit_index >= units_.size()) break;
         const CombatUnitPlacement& caster = units_[(size_t)unit_index];
-        const int cx0 = (int)(int8_t)caster.x, cy0 = (int)(int8_t)caster.y;
-        // 29F4D loc_2A02A: one step along the facing table (sub_49ABC). For large sprites
-        // even indices use table[n/2] and odd indices use table[n].
+        int px = (int)(int8_t)caster.x, py = (int)(int8_t)caster.y;
+        // 29F4D loc_2A02A: one step along the table (sub_49ABC).  Large sprites use table[n/2]
+        // for even n and table[n] for odd n; even n takes a second step in the same direction
+        // (2A04C-2A0A8) and checks both tiles.
         const int dir_index = large ? ((n & 1) ? n : (n >> 1)) : n;
         const int dir = dirs[dir_index < 3 ? dir_index : 2];
-        int px = cx0, py = cy0;
-        switch (dir & 3) {                                            // sub_49ABC
-            case 0: py += 1; break;
-            case 1: px -= 1; break;
-            case 2: py -= 1; break;
-            default: px += 1; break;
+        const bool two_step = large && (n & 1) == 0;
+        step_tile(px, py, dir);
+        if (battle_unit_index_at(px, py) >= 0) continue;               // sub_11DB2 != 0
+        if (grid_read(px, py) < 0) continue;                           // sub_13CBD < 0
+        if (two_step) {
+            step_tile(px, py, dir);
+            if (battle_unit_index_at(px, py) >= 0) continue;
+            if (grid_read(px, py) < 0) continue;
         }
-        // 11DB2 occupancy: skip this tile entirely (no relocation); the 13CBD guard is the same.
-        if (px < 2 || py < 4 || px >= (int)map_w_ - 2 || py >= (int)map_h_ - 4) continue;
-        if (battle_unit_index_at(px, py) >= 0) continue;
+        // 2A12C: only di 0 and di 2 spawn in the large path; every other index is dropped
+        // after its tests (di 1 by `cmp di,2`, di >= 4 by the same test).  di 2 then subtracts
+        // one from x (2A151 `dec eax`), so its unit lands at caster+1 east.
+        if (large) {
+            if (n & 1) continue;
+            if (n != 0 && n != 2) continue;
+            if (n == 2) --px;
+        }
         // ---- sub_299DA: copy the caster's 0x88 record and overwrite only the fields below ----
         CombatUnitPlacement nu = caster;
         nu.stored_77.reset();                                         // [77h]=0
+        // sub_299DA 35345-35366: the 9-byte fixed string at VA 0x776E4 ("AD A1 20 D1 C5 20
+        // AE 81 00" = "소 환 수") replaces the copied caster name.
+        nu.name = std::string("\xAD\xA1 \xD1\xC5 \xAE\x81", 8);
         nu.linked_class = -1;
         nu.x = px;                                                    // [0],[1]
         nu.y = py;
@@ -7633,15 +7693,12 @@ int CombatII::battle_spell_summon(int unit_index, int k, int row, int sprite, in
         units_.push_back(nu);
         battle_wc1_occupancy_preserve_or_close("summon");
         // sub_299DA: 1124A -> 10971/10988(+0Ch) -> sub_21944(recall.nsp), same table as
-        // 3C548/4426D.
-        if (battle_nsp_load("recall.nsp")) {                           // sub_1FEA4
-            battle_ssp_play("regen.ssp", 0x32);                        // 4F460(32h)
-            battle_ssp_play("summon.ssp", 0x33);                       // 4F460(33h)
+        // 3C548/4426D.  The NSP/SSP setup already ran once before the loop (29F4D).
+        if (summon_nsp) {
             const int spawn_index = (int)units_.size() - 1;
             battle_fx_21944(spawn_index, (int)(int8_t)units_.back().x,
                             (int)(int8_t)units_.back().y, 0);
-            battle_nsp_release();                                      // sub_1FFCD
-            if (should_exit_) return 0;
+            if (should_exit_) { battle_nsp_release(); return 0; }
         }
         ++spawned;
         if (battle_trace_)
@@ -7649,6 +7706,7 @@ int CombatII::battle_spell_summon(int unit_index, int k, int row, int sprite, in
                     units_[(size_t)unit_index].id, units_.back().id, (int)units_.back().combat_class, row,
                     sprite, px, py, units_.back().hp);
     }
+    if (summon_nsp) battle_nsp_release();                              // sub_1FFCD (once, after the loop)
     if (!should_exit_ && unit_index < (int)units_.size()) reset_unit_pose(units_[(size_t)unit_index]);
     if (battle_trace_)
         fprintf(stderr, "COMBAT: summon done unit=%d row=%d spawned=%d/%d\n",
