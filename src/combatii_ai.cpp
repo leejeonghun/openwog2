@@ -3465,7 +3465,7 @@ bool CombatII::battle_ai_class_a4_4426d(int unit_index) {
             const int new_raw = battle_hp_raw(tgt) - dmg;
             const int new_hp = new_raw <= 0 ? 0 : (new_raw + 99) / 100;
             const int delta = new_hp - tgt.hp;
-            tgt.hp_deficit = new_hp > 0 ? new_hp * 100 - new_raw : 0;
+            tgt.hp_deficit = new_hp > 0 ? new_hp * 100 - new_raw : -new_raw;
             if (battle_trace_)
                 fprintf(stderr, "COMBAT: A4 damage boss=%d target=%d army=%d dmg=%d hp->%d\n",
                         boss_id, tgt.id, army, dmg, new_hp);

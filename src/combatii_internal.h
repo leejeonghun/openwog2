@@ -331,8 +331,9 @@ inline bool battle_armies_hostile(int a, int b, bool inverted = false) {
     return hostile != inverted; // sub_1201D: movsx dx, byte_E518D; xor eax, edx
 }
 
-// Unit [+0x48] current HP (x100). hp_deficit (0..99) restores the original value from the port's
-// ceil display unit.
+// Unit [+0x48] current HP (x100). hp_deficit keeps the exact remainder from the port's ceil
+// display unit: 0..99 normally, negative when [+48h] > hp*100 (over-max raw), and greater
+// than 99 when damage pushed [+48h] below zero.
 inline int battle_hp_raw(const CombatUnitPlacement& u)     { return u.hp * 100 - u.hp_deficit; }
 inline int battle_max_hp_raw(const CombatUnitPlacement& u) { return u.max_hp * 100 - u.max_hp_deficit; }
 

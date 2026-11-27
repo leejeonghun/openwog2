@@ -91,7 +91,7 @@ struct CombatUnitPlacement {
     uint8_t hit_seq_2d = 0;      // BattleUnit +0x2D critical pattern column counter
     std::shared_ptr<CombatUnitPlacement> stored_77; // [+77h] preserved record (pre-transform copy from sub_3C548, restored by sub_1808A). SCE link records are not loaded (linked_class only)
     int linked_class = -1;       // class [+11h] of the linked record ([+77h]); sub_174CF maps 0x17 to weapon class 5
-    int hp_deficit = 0;          // original HP(x100) = hp*100 - deficit; negative when [+48h] > hp*100 (over-max raw)
+    int hp_deficit = 0;          // original HP(x100) = hp*100 - deficit; negative over-max, >99 when [+48h] < 0
     int max_hp_deficit = 0;      // same rule for max HP ([+4Ch])
     uint8_t combat_type_5a = 0;  // BattleUnit +0x5A, sub_184A4 lookup index
     uint8_t combat_type_5b = 0;  // BattleUnit +0x5B
@@ -2350,7 +2350,7 @@ private:
     void battle_ssp_play(const char* name, int id);   // sub_4F460 (load into slot id+1)
     void battle_spell_load_ssps(int r_code);          // all 4F460 loads of the handler
     const char* battle_spell_nsp(int r_code) const;   // NSP that handler's driver loads through 1FEA4
-    void battle_spell_pace_287af();            // sub_287AF (24-frame hit, pose reset, cadence restore)
+    void battle_spell_pace_287af(const std::vector<int>* pose_targets = nullptr); // sub_287AF (24-frame hit, pose reset, cadence restore)
     void battle_spell_2c8a4(int effect);        // sub_2C8A4 (VM spell >= 0x64 screen damage)
     void battle_magic_fx(int r_code, int unit_index, int tx, int ty); // SSP + NSP playback + 287AF
     bool battle_fx_projectile_2016a(int unit_index, int tx, int ty, int subframe); // sub_2016A (f_arrow)

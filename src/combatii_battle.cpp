@@ -12,6 +12,19 @@
 #include <cstdio>
 #include <cstring>
 
+// sub_113DD (dword_D6620 head): a record enters the death list only through sub_1DB1D's
+// loc_1DD65. Summons ([12h] >= 0Ah) leave at loc_1DBE3, and a unit with a [77h] link is
+// restored to its base form by sub_1808A (loc_1DCF7/loc_1DD35) instead of leaving a corpse.
+static bool battle_has_corpse_record(const std::vector<CombatUnitPlacement>& units) {
+    return std::any_of(units.begin(), units.end(), [](const CombatUnitPlacement& o) {
+        return !o.active && o.hp <= 0 &&
+               o.sprite_type >= 0 && o.sprite_type < 0x12C &&   // 1DB1D: large sprites leave no corpse
+               o.unit_kind_0d != 2 &&                            // undead never enter the corpse list
+               o.item_use_12 < 0x0A &&                           // summons (loc_1DBE3)
+               o.stored_77 == nullptr;                           // [77h] link (sub_1808A)
+    });
+}
+
 // The original leaves the target/confirm choice to each F13B0 handler:
 //   28982                   -> one 4A483 unit click (no 4A815)
 //   28B24 / 28C8A / 2B031  -> 4A483 centre click, then 4A815 confirm
@@ -1664,10 +1677,10 @@ void CombatII::battle_draw_weapon_trail(int unit_index, int f8, int s) {
 }
 
 // sub_19168: per-item [5Bh] gameplay effect of a critical hit (dword_F0B8A+2 == 1).
-//   The .ssp/camera presentation is replaced by logging; instant death, status and area
-//   damage behave as in the original.
+//   Each branch plays its .ssp, target FX and camera restore; instant death, status and
+//   area damage behave as in the original.
 //   0x19/0x46 assist-d: instant death for an enemy with [0Dh] == 2.
-//   0x1B/0x22/0x24/0x28 death: 1/3 chance of instant death for sprite < 0x12C && [43h] < 0x32.
+//   0x1B/0x22/0x28 death: 1/3 chance of instant death for sprite < 0x12C && [43h] < 0x32.
 //   0x1A/0x30 thunder, 0x24 fire, 0x1D atomic/darkzone, 0x2D/0x43 f-blast, 0x3B f-wave:
 //     sub_18FC6 -> sub_285E4(attacker, target, base, p1, p2) damage.
 //   0x31: poison every target ([1Eh] |= 0x20, [+25h] = 0x3C).
@@ -4828,6 +4841,15 @@ bool CombatII::battle_player_input() {
         battle_magic_select_ = true;
         battle_magic_aim_paint(ui, r);   // 4C605 -> 28540 reach (or 2A1C6's 28A97 area)
         if (aim == MagicAimMode::ConfirmOnly) {
+            // sub_2C36A checks sub_113DD before opening its 4A815 confirm (ASM 39022-3904C):
+            // with an empty corpse list the original returns -1 without a cursor, so Soul
+            // Recall must not show the confirm either.
+            if (r >= 0 && r / 3 == 45 && !battle_has_corpse_record(units_)) {
+                battle_magic_pending_r_ = -1;
+                battle_magic_aim_ = MagicAimMode::None;
+                back_to_ring();
+                return;
+            }
             battle_magic_confirm_ = true;
             battle_magic_confirm_tx_ = cx;
             battle_magic_confirm_ty_ = cy;
@@ -6820,7 +6842,7 @@ bool CombatII::battle_wait_heal(int unit_index) {
     if (sce_map_kind_ == 3 || weather_ == 3) heal /= 2; // sub_462A7 halving
     if (heal < 100) return false;                   // cmp ecx,64h; jl loc_46356 (no HP change)
     const int new_raw = cur + heal;
-    const int new_hp = (new_raw + 99) / 100;
+    const int new_hp = new_raw <= 0 ? 0 : (new_raw + 99) / 100;
     u.hp_deficit = new_hp * 100 - new_raw;
     u.hp = new_hp;
     if (battle_trace_)
@@ -7637,7 +7659,7 @@ int CombatII::battle_spell_summon(int unit_index, int k, int row, int sprite, in
 // sub_137E7(al = army): picks one record that moved to dword_D6620 (the corpse list) on
 // death. al != 0 takes the first corpse not hostile to that army; al == 0 picks any corpse
 // at random. The port keeps the unit records, so it looks for
-// [active == false && hp <= 0 && [0Dh] != 2 && sprite < 0x12C].
+// [active == false && hp <= 0 && [0Dh] != 2 && sprite < 0x12C && [12h] < 0Ah && [77h] == 0].
 int CombatII::battle_corpse_take(int unit_index, bool random_pick) {
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return -1;
     const int army = battle_effective_army(units_[(size_t)unit_index]);
@@ -7648,6 +7670,7 @@ int CombatII::battle_corpse_take(int unit_index, bool random_pick) {
         if (o.sprite_type < 0 || o.sprite_type >= 0x12C) continue;   // 1DB1D: large sprites leave no corpse
         if (o.unit_kind_0d == 2) continue;                          // undead never enter the corpse list
         if (o.item_use_12 >= 0x0A) continue;                        // 1DB1D loc_1DBE3: summons never enter D6620
+        if (o.stored_77) continue;                                   // loc_1DD65: [77h] units restore the base form, no corpse
         if (!random_pick &&
             battle_armies_hostile(battle_effective_army(o), army, battle_hostility_inverted_))
             continue;
@@ -7808,7 +7831,7 @@ void CombatII::battle_apply_spell_hit(int caster_index, const std::vector<int>& 
         const int new_raw = battle_hp_raw(tgt) - dmg;
         const int new_hp = new_raw <= 0 ? 0 : (new_raw + 99) / 100;
         const int delta = new_hp - tgt.hp;
-        const int deficit = new_hp > 0 ? new_hp * 100 - new_raw : 0;
+        const int deficit = new_hp > 0 ? new_hp * 100 - new_raw : -new_raw;
         // 28ED6/29514/2A1C6 call 28728 after their NSP driver, so defer the HP update too;
         // finish_pending applies it before 12124/287AF. Other deferred handlers already call
         // 28728 after their driver and apply the HP here.
@@ -7866,7 +7889,7 @@ void CombatII::battle_heal_462a7(int unit_index, int amount_raw) {
         applied += chunk;
         remaining -= chunk;
         const int new_raw = cur + applied;
-        const int new_hp = (new_raw + 99) / 100;
+        const int new_hp = new_raw <= 0 ? 0 : (new_raw + 99) / 100;
         u.hp_deficit = new_hp * 100 - new_raw;
         u.hp = new_hp;
         wait_game_tick();                              // sub_499E4
@@ -7878,7 +7901,7 @@ void CombatII::battle_heal_462a7(int unit_index, int amount_raw) {
         applied += remaining;
         remaining = 0;
         const int new_raw = cur + applied;
-        const int new_hp = (new_raw + 99) / 100;
+        const int new_hp = new_raw <= 0 ? 0 : (new_raw + 99) / 100;
         u.hp_deficit = new_hp * 100 - new_raw;
         u.hp = new_hp;
     }
@@ -7937,7 +7960,7 @@ void CombatII::battle_spell_heal_2accb(int caster_index, const std::vector<int>&
         } else {
             const int new_raw = cur + amount;
             const int new_hp = new_raw <= 0 ? 0 : (new_raw + 99) / 100;
-            t.hp_deficit = new_hp > 0 ? new_hp * 100 - new_raw : 0;
+            t.hp_deficit = new_hp > 0 ? new_hp * 100 - new_raw : -new_raw;
             t.hp = new_hp;
         }
         if (should_exit_) {
@@ -7946,13 +7969,11 @@ void CombatII::battle_spell_heal_2accb(int caster_index, const std::vector<int>&
         }
     }
     if (killflag) {                                      // sub_287AF + sub_1ED45
-        battle_spell_pace_287af();
+        battle_spell_pace_287af(&targets);               // 12124 over every F0648 member
         if (should_exit_) {
             battle_spell_hits_.clear();
             return;
         }
-        for (int ti : targets)
-            if (ti >= 0 && (size_t)ti < units_.size()) reset_unit_pose(units_[(size_t)ti]);
         battle_spell_1ed45_targets(caster_index, targets);
     }
 }
@@ -7975,7 +7996,7 @@ std::vector<int> CombatII::battle_spell_2a500_extras(int caster_index, const std
         const int dmg = battle_spell_damage(units_[(size_t)caster_index], o, base, p1, p2);
         const int new_raw = battle_hp_raw(o) - dmg;
         const int new_hp = new_raw <= 0 ? 0 : (new_raw + 99) / 100;
-        o.hp_deficit = new_hp > 0 ? new_hp * 100 - new_raw : 0;
+        o.hp_deficit = new_hp > 0 ? new_hp * 100 - new_raw : -new_raw;
         o.hp = new_hp;
         extra.push_back((int)i);
     }
@@ -9688,10 +9709,7 @@ int CombatII::battle_spell_2c28f(int unit_index, int k, int tx, int ty) {
 int CombatII::battle_spell_2c36a(int unit_index, int k) {
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return 4;
     // sub_113DD(dword_D6620, dword_D6624): return -1 immediately when the corpse list is empty.
-    const bool has_corpse = std::any_of(units_.begin(), units_.end(), [](const CombatUnitPlacement& o) {
-        return !o.active && o.hp <= 0 && o.sprite_type >= 0 && o.sprite_type < 0x12C &&
-               o.unit_kind_0d != 2 && o.item_use_12 < 0x0A;
-    });
+    const bool has_corpse = battle_has_corpse_record(units_);
     if (!has_corpse) {
         if (battle_trace_)
             fprintf(stderr, "COMBAT: soul recall unit=%d no corpse (113DD == 0 -> -1)\n",
@@ -10174,7 +10192,7 @@ const char* CombatII::battle_spell_nsp(int r_code) const {
 //   1033B(3,1); 24 times { 454B3 -> for every F0648 member 45F29(45ccb) -> 5E9E8 -> 499E4 };
 //   then 12124 on every member and 499DA(0x24). The numbers therefore animate at the same
 //   time for every target instead of one target at a time.
-void CombatII::battle_spell_pace_287af() {
+void CombatII::battle_spell_pace_287af(const std::vector<int>* pose_targets) {
     battle_prepare_spell_hits();                          // 45BFB + 45ED2 at the 28728 timing
     game_timer_set(3);                                    // sub_1033B(3, 1)
     for (int f = 1; f <= 0x18 && !should_exit_; ++f) {
@@ -10200,9 +10218,16 @@ void CombatII::battle_spell_pace_287af() {
         video_.present();                                 // sub_5E9E8
         wait_game_tick();                                 // sub_499E4
     }
-    for (const auto& p : battle_spell_hits_)
-        if (p.target >= 0 && (size_t)p.target < units_.size())
-            reset_unit_pose(units_[(size_t)p.target]);    // 12124 loop
+    if (pose_targets) {
+        for (int ti : *pose_targets) {                    // F0648 members of the caller
+            if (ti < 0 || (size_t)ti >= units_.size()) continue;
+            reset_unit_pose(units_[(size_t)ti]);          // 12124 loop
+        }
+    } else {
+        for (const auto& p : battle_spell_hits_)
+            if (p.target >= 0 && (size_t)p.target < units_.size())
+                reset_unit_pose(units_[(size_t)p.target]); // 12124 loop
+    }
     battle_spell_hits_.clear();
     game_timer_set(0x24);                                 // sub_499DA(0x24)
     wait_game_tick();                                     // 499DA falls through to 499E4
@@ -10542,7 +10567,7 @@ void CombatII::battle_spell_2c8a4(int effect) {
             const int old_raw = battle_hp_raw(t);
             const int new_raw = old_raw - dmg;
             t.hp = new_raw <= 0 ? 0 : (new_raw + 99) / 100;
-            t.hp_deficit = t.hp > 0 ? t.hp * 100 - new_raw : 0;
+            t.hp_deficit = t.hp > 0 ? t.hp * 100 - new_raw : -new_raw;
             if (battle_trace_)
                 fprintf(stderr, "COMBAT: 2C8A4 meteor offscreen unit=%d def=%d dmg=%d hp_raw %d->%d (%d,%d)\n",
                         t.id, def, dmg, old_raw, new_raw, tx, ty);
@@ -11312,7 +11337,7 @@ void CombatII::battle_weapon_301bb(int unit_index, int weapon_idx, int is_leader
     int digit_y[5]; for (int k = 0; k < 5; k++) digit_y[k] = sy0 + 10;
     const int new_raw = old_raw - dmg;
     const int new_hp = new_raw <= 0 ? 0 : (new_raw + 99) / 100;
-    u.hp_deficit = new_hp > 0 ? new_hp * 100 - new_raw : 0;
+    u.hp_deficit = new_hp > 0 ? new_hp * 100 - new_raw : -new_raw;
     u.hp = new_hp;
     setup_knockback_hit(u, u.facing & 3); // sub_45ED2 edx=[60h]>>24==[63h] facing
     if (battle_trace_) fprintf(stderr, "COMBAT: 301bb unit=%d idx=%d leader=%d fixed=%d dmg=%d hp_raw %d->%d (hp %d)\n",
@@ -12887,9 +12912,10 @@ void CombatII::battle_weapon_apply_status(int target_index, int bit, int duratio
 }
 
 // ---- batched damage presentation shared by sub_2CAF7/2CC3A/2EF4A/34C48 ----
-// sub_45BFB prepares one target's number and start position, subtracts the raw damage from
-// [+48h] and sets the 45ED2 knockback. The whole list is prepared before sub_287AF animates
-// it in parallel (45F29/45CCB), so every caller uses this same entry point.
+// sub_45BFB prepares one target's number, start position and walk-off reset. It does not
+// touch [+48h] and does not set 45ED2; battle_damage_fx_prepare adds the HP subtract and
+// knockback. The whole list is prepared before sub_287AF animates it in parallel
+// (45F29/45CCB), so every caller uses this same entry point.
 CombatII::BattleDamageFx CombatII::battle_attack_fx_prepare(int ti, int slot, int fin) {
     BattleDamageFx d{};
     if (ti < 0 || (size_t)ti >= units_.size()) return d;
@@ -12986,7 +13012,7 @@ void CombatII::battle_damage_fx_prepare(int caster_index, int ti, int slot, int 
                                 A.id, T.id, fin, old_raw, new_raw);
     BattleDamageFx d = battle_attack_fx_prepare(ti, slot, fin);
     T.hp = new_hp;
-    T.hp_deficit = new_hp > 0 ? new_hp * 100 - new_raw : 0; // exact [+48h] after the subtract
+    T.hp_deficit = new_hp > 0 ? new_hp * 100 - new_raw : -new_raw; // exact [+48h] after the subtract
     setup_knockback_hit(T, A.facing & 3);                  // sub_45ED2
     fx.push_back(d);
 }
@@ -13292,7 +13318,7 @@ int CombatII::battle_weapon_37fa4(int unit_index) {
         const int old_raw = battle_hp_raw(T);
         const int new_raw = old_raw - hit_damage;
         T.hp = new_raw <= 0 ? 0 : (new_raw + 99) / 100;
-        T.hp_deficit = T.hp > 0 ? T.hp * 100 - new_raw : 0;
+        T.hp_deficit = T.hp > 0 ? T.hp * 100 - new_raw : -new_raw;
         if (battle_trace_) fprintf(stderr, "COMBAT: 37fa4 unit=%d -> target=%d hit=%d dmg=%d hp_raw %d->%d\n",
                                     units_[(size_t)unit_index].id, T.id, hit_no, hit_damage, old_raw, new_raw);
         if (new_raw >= 0) return 1;                       // cmp [48h],0 / jge loc_383A2
@@ -13644,7 +13670,7 @@ int CombatII::battle_use_item(int unit_index, int dx, int tx, int ty) {
                 const int cost = max_raw / 20; // idiv 14h (5%)
                 const int new_raw = battle_hp_raw(u) - cost;
                 const int new_hp = new_raw <= 0 ? 0 : (new_raw + 99) / 100;
-                u.hp_deficit = new_hp > 0 ? new_hp * 100 - new_raw : 0;
+                u.hp_deficit = new_hp > 0 ? new_hp * 100 - new_raw : -new_raw;
                 u.hp = new_hp;                                   // [48h] -= max/20 (the 25-frame 46359 digit effect is skipped)
             }
             present_cutscene_frame();
