@@ -1783,8 +1783,10 @@ private:
     void apply_knockback_step(CombatUnitPlacement& t);               // sub_46108: add and decay
     bool apply_knockback_hit(CombatUnitPlacement& t, int tidx, int frame); // sub_45F29
     void reset_unit_pose(CombatUnitPlacement& u);                    // sub_12124
-    void play_attack_sequence(const VmEvent& ev);                    // sub_1E61D + sub_1EF5C
+    void play_attack_sequence(const VmEvent& ev,
+                              std::vector<VmAttackTarget>* out_targets = nullptr); // sub_1E61D + sub_1EF5C
     void battle_crit_19168(int attacker_index, const std::vector<int>& targets); // sub_19168 critical-item effect
+    void battle_crit_18fc6(int attacker_index, int base, int p1, int p2, size_t start_index); // sub_18FC6
     void battle_crit_collect_28596(int unit_index);                 // sub_28596 (extra F0648 gate)
     void battle_crit_collect_19061(int attacker_index, int radius);  // sub_19061 diamond collection
     void battle_crit_collect_190c3(int attacker_index);              // sub_190C3 front 3x10 collection
@@ -2587,6 +2589,10 @@ private:
         int digit_y[5];
         uint8_t color;
     };
+    std::vector<BattleDamageFx> battle_attack_fx_;
+    BattleDamageFx battle_attack_fx_prepare(int ti, int slot, int fin); // sub_45BFB entry (without HP/knockback)
+    void battle_damage_fx_step_and_draw(std::vector<BattleDamageFx>& fx, int frame,
+                                        bool damage_small_font);        // sub_45CCB step + draw
     void battle_damage_fx_prepare(int caster_index, int ti, int slot, int fin,
                                   std::vector<BattleDamageFx>& fx); // 45BFB + [48h] -= fin + 45ED2
     void battle_damage_fx_play(std::vector<BattleDamageFx>& fx,

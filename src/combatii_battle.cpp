@@ -1197,53 +1197,62 @@ bool CombatII::battle_resolve_attack(int attacker_index, int target_index, bool 
     if (should_exit_) return true;
     if (!units_[(size_t)attacker_index].active || !units_[(size_t)target_index].active) return true;
 
-    // sub_1DDF0: critical kind (sub_1D6B1) -> dodge/guard/hit roll -> damage (sub_1D770).
-    // All of it is decided before the animation, in the original order.
+    // sub_1DDF0: critical kind (sub_1D6B1) -> dodge/guard/hit roll -> damage (sub_1D770)
+    // and sub_45BFB preparation before sub_1E61D.
+    battle_target_list_.assign(1, target_index);
     const BattleAttackRoll roll = battle_attack_roll(attacker_index, target_index);
     if (out_roll) *out_roll = roll;
     const int result = roll.result;
     int damage = 0;                                              // x100 (negative = healing)
     if (result != 2) damage = battle_damage(attacker_index, target_index, roll.hit_kind, roll.area_mode, roll.def_bonus);
-    VmEvent attack; attack.type = VmEventType::Attack; attack.attacker_unit = attacker_index;
-    attack.attacker_mode = roll.hit_kind; // dword_F0B8A+2 (1D6B1, 1DEA7) -> 1E2EA s / wind-up
-    attack.attack_targets.push_back({target_index, 0, result});
-    play_attack_sequence(attack);
-    if (should_exit_) return true;
+    battle_attack_fx_.clear();
     if (result != 2 && units_[(size_t)target_index].active) {
         // The original does [+48h] -= damage(x100). Port hp is a rounded display value, so
         // hp_deficit keeps the exact x100 remainder.
         auto& tgt = units_[(size_t)target_index];
+        const int old_hp = tgt.hp;
         int new_raw = battle_hp_raw(tgt) - damage;
         if (new_raw > battle_max_hp_raw(tgt)) new_raw = battle_max_hp_raw(tgt);
         const int new_hp = new_raw <= 0 ? 0 : (new_raw + 99) / 100;
-        const int delta = new_hp - tgt.hp;
-        tgt.hp_deficit = new_hp > 0 ? new_hp * 100 - new_raw : 0;
+        tgt.hp_deficit = new_hp > 0 ? new_hp * 100 - new_raw : -new_raw;
+        tgt.hp = new_hp;
         battle_recalc_summon_attack(target_index);            // sub_17E17(target, damage)
         if (battle_trace_)
             fprintf(stderr, "COMBAT: attack unit=%d target=%d result=%d hit_kind=%d area=%d guard_bonus=%d damage_x100=%d hp %d -> %d\n",
                     units_[(size_t)attacker_index].id, tgt.id, result, roll.hit_kind, roll.area_mode, roll.def_bonus,
-                    damage, tgt.hp, new_hp);
-        if (delta != 0) {                                        // a delta of 0 reads as "death" in play_hp_change, so skip it
-            VmEvent hp; hp.type = VmEventType::Hp; hp.hp_unit = target_index;
-            hp.hp_delta = delta;
-            hp.hp_dir = units_[(size_t)attacker_index].facing;
-            hp.hp_killer = attacker_index;                       // if HP <= 0, sub_1DB1D(attacker, target)
-            play_hp_change(hp);
-        }
+                    damage, old_hp, new_hp);
+        battle_attack_fx_.push_back(battle_attack_fx_prepare(target_index, 0, damage)); // sub_45BFB
     } else if (battle_trace_) {
         fprintf(stderr, "COMBAT: attack unit=%d target=%d result=dodge\n",
                 units_[(size_t)attacker_index].id, units_[(size_t)target_index].id);
     }
+    VmEvent attack; attack.type = VmEventType::Attack; attack.attacker_unit = attacker_index;
+    attack.attacker_mode = roll.hit_kind; // dword_F0B8A+2 (1D6B1, 1DEA7) -> 1E2EA s / wind-up
+    attack.attack_targets.push_back({target_index, 0, result});
+    std::vector<VmAttackTarget> final_targets;
+    play_attack_sequence(attack, &final_targets);
     if (should_exit_) return true;
-    // sub_1ED45: a surviving target gets the hit event (mode 1). A dead target's death event
-    // was already handled by play_unit_death.
-    if (units_[(size_t)target_index].active && units_[(size_t)target_index].hp > 0)
-        run_unit_hp_trigger(target_index, attacker_index, 1);
+    // sub_1ED45: HP <= 0 -> sub_1DB1D (death), surviving targets -> sub_53797(mode 1).
+    for (size_t k = 0; k < final_targets.size(); ++k) {
+        const int ti = final_targets[k].unit_index;
+        if (ti < 0 || (size_t)ti >= units_.size() || !units_[(size_t)ti].active) continue;
+        if (units_[(size_t)ti].hp <= 0) {
+            play_unit_death(ti, attacker_index);
+            if (k < battle_target_list_.size()) battle_target_list_[k] = -1;
+        } else {
+            run_unit_hp_trigger(ti, attacker_index, 1);
+        }
+        if (should_exit_) return true;
+    }
     // sub_1E2B1, called by sub_40BFA (ASM 65625) right after sub_1ED45, clears the hit target's
     // sleep/paralysis ([1Eh]&2). battle_resolve_list does this on the player path; the generic
     // AI path has to do it here.
-    if (allow_ranged_ai && !should_exit_ && units_[(size_t)target_index].active)
-        battle_clear_ailment_flags(target_index, attacker_index);
+    if (allow_ranged_ai && !should_exit_) {
+        for (int ti : battle_target_list_) {
+            if (ti >= 0 && (size_t)ti < units_.size() && units_[(size_t)ti].active)
+                battle_clear_ailment_flags(ti, attacker_index);
+        }
+    }
     return true;
 }
 
@@ -1392,8 +1401,12 @@ void CombatII::play_unit_pose(const VmEvent& ev) {
 }
 
 // sub_1E61D (attacker) + sub_1EF5C: the scripted attack animation.
-void CombatII::play_attack_sequence(const VmEvent& ev) {
-    if (ev.attacker_unit < 0 || ev.attacker_unit >= (int)units_.size()) return;
+void CombatII::play_attack_sequence(const VmEvent& ev, std::vector<VmAttackTarget>* out_targets) {
+    if (ev.attacker_unit < 0 || ev.attacker_unit >= (int)units_.size()) {
+        battle_attack_fx_.clear();
+        if (out_targets) out_targets->clear();
+        return;
+    }
     load_effect_sprites();
     auto& A = units_[(size_t)ev.attacker_unit];
     // dword_F0B8A+2 holds hit_kind (0/1/2) for tactical attacks (sub_1DDF0, 20328: sub_1D6B1 -> +2)
@@ -1408,7 +1421,7 @@ void CombatII::play_attack_sequence(const VmEvent& ev) {
     const int afacing = A.facing & 3;
 
     // sub_51C74 loc_51D63: per-target word_F0430 result and knockback setup.
-    struct Tgt { CombatUnitPlacement* u; int result; int idx; };
+    struct Tgt { int idx; int result; };
     std::vector<Tgt> T;
     for (const auto& t : ev.attack_targets) {
         if (t.unit_index < 0 || t.unit_index >= (int)units_.size()) continue;
@@ -1416,7 +1429,7 @@ void CombatII::play_attack_sequence(const VmEvent& ev) {
         if (t.result == 1)      { setup_knockback_guard(u, afacing); setup_knockback_hit(u, afacing); } // sub_4609A then sub_45ED2 (loc_51DC5 fallthrough)
         else if (t.result == 2) { setup_knockback_dodge(u, afacing); }                                  // sub_461C6
         else                    { setup_knockback_hit(u, afacing); }                                    // sub_45ED2
-        T.push_back({&u, t.result, t.unit_index});
+        T.push_back({t.unit_index, t.result});
     }
             fprintf(stderr, "COMBAT: play attack: unit %d (type %d, wclass %d, facing %d%s) -> %zu target(s)\n",
                 A.id, A.sprite_type, wclass, afacing, has_crit_anim ? ", crit" : "", T.size());
@@ -1482,8 +1495,9 @@ void CombatII::play_attack_sequence(const VmEvent& ev) {
         const int f8 = p - 1;               // var_8 (ecx starts at -1)
         if (p == 1) {                       // guard/dodge reaction
             for (auto& t : T) {
-                if (t.result == 2) { t.u->walk_off_x = t.u->knock_dx; t.u->walk_off_y = t.u->knock_dy; t.u->anim_frame = 2; } // sub_4627E
-                else if (t.result == 1) { sfx(0x0A); apply_knockback_step(*t.u); }                                           // sub_46108
+                auto& tu = units_[(size_t)t.idx];
+                if (t.result == 2) { tu.walk_off_x = tu.knock_dx; tu.walk_off_y = tu.knock_dy; tu.anim_frame = 2; } // sub_4627E
+                else if (t.result == 1) { sfx(0x0A); apply_knockback_step(tu); }                                     // sub_46108
             }
         } else if (p == 2) {                // moment of impact
             if (snd) sfx(snd);
@@ -1498,7 +1512,7 @@ void CombatII::play_attack_sequence(const VmEvent& ev) {
             if (phases == 0) A.anim_frame = 0;   // loc_1E8E5: reset the pose before every effect call
             if (wclass == 5 || wclass == 0x0F || wclass == 0x11 || wclass == 0x12) {
                 if (!T.empty()) {
-                    play_weapon_class5_projectile(A, *T.front().u, T.front().result != 2);
+                    play_weapon_class5_projectile(A, units_[(size_t)T.front().idx], T.front().result != 2);
                 }
             } else if (A.combat_class == 0xA1) {                               // loc_1E90D -> 47712
                 battle_fx_47712(ev.attacker_unit);
@@ -1521,12 +1535,22 @@ void CombatII::play_attack_sequence(const VmEvent& ev) {
                 std::vector<int> crit_targets;
                 for (const auto& t : T) crit_targets.push_back(t.idx);
                 battle_crit_19168(ev.attacker_unit, crit_targets);
-                if (should_exit_) return;
+                if (should_exit_) {
+                    battle_attack_fx_.clear();
+                    if (out_targets) out_targets->clear();
+                    return;
+                }
+                for (size_t i = crit_targets.size(); i < battle_target_list_.size(); ++i) {
+                    const int ti = battle_target_list_[i];
+                    if (ti >= 0 && (size_t)ti < units_.size())
+                        T.push_back({ti, -1});
+                }
             }
             game_timer_set(0x10);
             for (size_t i = 0; i < T.size(); i++) {
-                if (T[i].result == 1) apply_knockback_step(*T[i].u);              // sub_46108
-                else if (T[i].result == -1) apply_knockback_hit(*T[i].u, (int)i, 0); // sub_45F29(bx=0)
+                auto& tu = units_[(size_t)T[i].idx];
+                if (T[i].result == 1) apply_knockback_step(tu);              // sub_46108
+                else if (T[i].result == -1) apply_knockback_hit(tu, (int)i, 0); // sub_45F29(bx=0)
             }
         }
         // loc_1EA0C: redraw, advance the attacker pose and run the target effects.
@@ -1575,18 +1599,19 @@ void CombatII::play_attack_sequence(const VmEvent& ev) {
     // sub_1E565(0): the high word of var_20 is always 0, so there is no palette flash.
     if (A.code_b >= 0x0F && A.code_b <= 0x16) A.anim_frame = 5;
 
-    // ---- Closing 25 frames (loc_1EB3B, period 3): target shake, no damage numbers here ----
+    // ---- Closing 25 frames (loc_1EB3B, period 3): target shake + 45CCB damage numbers ----
+    if (!small_font_tried_) load_small_font();
+    const bool damage_small_font = small_font_loaded_;
     game_timer_set(3);
     for (int f = 1; f < 0x19 && !should_exit_ && !skip_cutscene_; f++) {
+        // loc_1EB3B (ASM 21471-21509): 454B3 -> per target 1E460 (result==1) / 45F29 (result==-1) -> 45CCB -> 5E9E8.
+        render_battle_frame();
         for (size_t i = 0; i < T.size(); i++) {
             if (T[i].result == 2) continue;
-            if (T[i].result == 1) apply_knockback_step(*T[i].u);              // sub_46108
-            else apply_knockback_hit(*T[i].u, (int)i, f);                    // sub_45F29
-        }
-        // loc_1EB3B: after sub_454B3, sub_1E460 for every result==1 target (21482), then sub_5E9E8.
-        render_battle_frame();
-        for (size_t i = 0; i < T.size(); i++)
             if (T[i].result == 1) battle_draw_shield_icon(T[i].idx);
+            else if (T[i].result == -1) apply_knockback_hit(units_[(size_t)T[i].idx], (int)i, f); // sub_45F29
+        }
+        battle_damage_fx_step_and_draw(battle_attack_fx_, f, damage_small_font); // sub_45CCB
         render_overlay();
         video_.present();
         dump_frame_if_requested();
@@ -1595,7 +1620,18 @@ void CombatII::play_attack_sequence(const VmEvent& ev) {
     A.attacking = false;                    // [6Bh] = 0
     A.anim_frame = 0;                       // [64h] = 0
     // sub_1EF5C: sub_12124 for every target.
-    for (auto& t : T) reset_unit_pose(*t.u);
+    for (const auto& t : T) reset_unit_pose(units_[(size_t)t.idx]);
+    if (out_targets) {
+        out_targets->clear();
+        out_targets->reserve(T.size());
+        for (const auto& t : T) {
+            VmAttackTarget vt;
+            vt.unit_index = t.idx;
+            vt.result = t.result;
+            out_targets->push_back(vt);
+        }
+    }
+    battle_attack_fx_.clear();
     present_cutscene_frame();
 }
 
@@ -1698,79 +1734,162 @@ void CombatII::battle_crit_collect_190c3(int attacker_index) {
     }
 }
 
+// sub_18FC6(attacker, base, p1, p2, start_index = arg_0): applies sub_285E4 spell damage
+// to every F0648 target, and queues sub_45BFB / sub_45ED2 / word_F0430[i]=-1 only for
+// newly added area targets at index >= arg_0 (ASM 13275-13325).
+void CombatII::battle_crit_18fc6(int attacker_index, int base, int p1, int p2, size_t start_index) {
+    if (attacker_index < 0 || (size_t)attacker_index >= units_.size()) return;
+    const auto& caster = units_[(size_t)attacker_index];
+    for (size_t i = 0; i < battle_target_list_.size(); ++i) {
+        const int ti = battle_target_list_[i];
+        if (ti < 0 || (size_t)ti >= units_.size()) continue;
+        auto& tgt = units_[(size_t)ti];
+        if (!tgt.active) continue;
+        const int dmg = battle_spell_damage(caster, tgt, base, p1, p2);
+        const int new_raw = battle_hp_raw(tgt) - dmg;
+        const int new_hp = new_raw <= 0 ? 0 : (new_raw + 99) / 100;
+        tgt.hp_deficit = new_hp > 0 ? new_hp * 100 - new_raw : -new_raw;
+        tgt.hp = new_hp;
+        if (battle_trace_)
+            fprintf(stderr, "COMBAT: 18FC6 slot=%zu/%zu unit=%d target=%d base=%d dmg_x100=%d hp -> %d\n",
+                    i, start_index, caster.id, tgt.id, base, dmg, new_hp);
+        if (i < start_index) continue;
+        battle_attack_fx_.push_back(battle_attack_fx_prepare(ti, (int)i, dmg)); // sub_45BFB
+        setup_knockback_hit(tgt, tgt.facing & 3);                               // sub_45ED2
+    }
+}
+
 void CombatII::battle_crit_19168(int attacker_index, const std::vector<int>& targets) {
     if (attacker_index < 0 || (size_t)attacker_index >= units_.size()) return;
     const uint8_t item = units_[(size_t)attacker_index].combat_type_5b;
-    // The damage branches of sub_19168 first extend F0648 through the area collectors
-    // (sub_19061/190C3), then damage the whole list with sub_18FC6. The port keeps that list
-    // in battle_target_list_.
+    const size_t initial_count = targets.size();          // var_8 = dword_F0B9C+2 on entry
+    const int saved_cam_cx = (int)cam_tile_x_ + 6;        // di = BA83C low + 6
+    const int saved_cam_cy = (int)cam_tile_y_ + 6;        // var_4 = BA83C high + 6
     battle_target_list_ = targets;
-    switch (item) {
-        case 0x24: battle_crit_collect_19061(attacker_index, 5); break;   // fire / m-wind / hell
-        case 0x1A: battle_crit_collect_19061(attacker_index, 5); break;   // thunder
-        case 0x30: battle_crit_collect_19061(attacker_index, 3); break;   // thunder1
-        case 0x1D: battle_crit_collect_19061(attacker_index, 3); break;   // atomic / darkzone
-        case 0x3B: battle_crit_collect_190c3(attacker_index); break;      // f-wave
-        default: break;
-    }
     if (battle_trace_)
         fprintf(stderr, "COMBAT: sub_19168 unit=%d item=%02X targets=%zu\n",
                 units_[(size_t)attacker_index].id, (unsigned)item, targets.size());
-    auto alive = [&](int i) {
-        return i >= 0 && (size_t)i < units_.size() && units_[(size_t)i].active && units_[(size_t)i].hp > 0;
-    };
     switch (item) {
-        case 0x19: case 0x46: { // assist-d: instant death for an enemy with [0Dh] == 2
+        case 0x19: case 0x46: { // loc_19224: assist-d.ssp + 59675 + 12124 + [+48h]=-1 (death deferred to 1ED45)
+            battle_ssp_play("assist-d.ssp", 0x32);
             for (int t : targets) {
-                if (!alive(t) || !alive(attacker_index)) break;
+                if (t < 0 || (size_t)t >= units_.size()) continue;
                 const auto& tgt = units_[(size_t)t];
+                if (!tgt.active) continue;
                 if (!battle_armies_hostile(battle_effective_army(units_[(size_t)attacker_index]),
                                            battle_effective_army(tgt), battle_hostility_inverted_))
                     continue;
                 if (tgt.unit_kind_0d != 2) continue;
-                play_unit_death(t, attacker_index);
+                battle_fx_59675(t);
                 if (should_exit_) return;
+                if ((size_t)t < units_.size()) {
+                    reset_unit_pose(units_[(size_t)t]);              // sub_12124
+                    units_[(size_t)t].hp = 0;                        // [eax+48h] = -1
+                    units_[(size_t)t].hp_deficit = 1;
+                }
             }
             break;
         }
-        case 0x1B: case 0x22: case 0x28: { // death
+        case 0x1B: case 0x22: case 0x28: { // loc_192F4: death1/2.ssp + 1/3 26C9A + [+48h]=-1
+            battle_ssp_play("death1.ssp", 0x32);
+            battle_ssp_play("death2.ssp", 0x33);
             for (int t : targets) {
-                if (!alive(t) || !alive(attacker_index)) break;
-                if (combat_rand(3) != 0) continue;             // sub_499BD(3): 1/3 chance
+                if (combat_rand(3) != 0) continue;                   // sub_499BD(3): 1/3 chance
+                if (t < 0 || (size_t)t >= units_.size()) continue;
                 const auto& tgt = units_[(size_t)t];
-                if (tgt.sprite_type >= 0x12C || tgt.combat_value_43 >= 0x32) continue;
-                play_unit_death(t, attacker_index);
+                if ((int16_t)tgt.sprite_type >= 0x12C || tgt.combat_value_43 >= 0x32) continue;
+                battle_fx_26c9a(t, (int)(int8_t)tgt.x, (int)(int8_t)tgt.y, 0);
                 if (should_exit_) return;
+                if ((size_t)t < units_.size()) {
+                    units_[(size_t)t].hp = 0;                        // [eax+48h] = -1
+                    units_[(size_t)t].hp_deficit = 1;
+                }
             }
             break;
         }
-        case 0x24: { // fire / m-wind / hell
-            battle_apply_spell_hit(attacker_index, battle_target_list_, 0x61A8, 0x32, 0);
+        case 0x24: { // loc_193D4: fire/m-wind/hell + 19061(5) + 56896 + 1124A + 18FC6
+            battle_ssp_play("fire.ssp", 0x32);
+            battle_ssp_play("m-wind.ssp", 0x33);
+            battle_ssp_play("hell.ssp", 0x34);
+            battle_crit_collect_19061(attacker_index, 5);
+            {
+                const auto& A = units_[(size_t)attacker_index];
+                battle_fx_56896(attacker_index, (int)(int8_t)A.x, (int)(int8_t)A.y, 0);
+            }
+            if (should_exit_) return;
+            camera_center_on(saved_cam_cx, saved_cam_cy);
+            battle_crit_18fc6(attacker_index, 0x61A8, 0x32, 0, initial_count);
             break;
         }
-        case 0x1A: { // thunder (5)
-            battle_apply_spell_hit(attacker_index, battle_target_list_, 0x6590, 0x32, 2);
+        case 0x1A: { // loc_19297: thunder1 + 19061(5) + 241F7(1) + 1124A + 18FC6
+            battle_ssp_play("thunder1.ssp", 0x32);
+            battle_crit_collect_19061(attacker_index, 5);
+            {
+                const auto& A = units_[(size_t)attacker_index];
+                battle_fx_241f7(attacker_index, (int)(int8_t)A.x, (int)(int8_t)A.y, 1);
+            }
+            if (should_exit_) return;
+            camera_center_on(saved_cam_cx, saved_cam_cy);
+            battle_crit_18fc6(attacker_index, 0x6590, 0x32, 2, initial_count);
             break;
         }
-        case 0x30: { // thunder1 (3)
-            battle_apply_spell_hit(attacker_index, battle_target_list_, 0x5DC0, 0x32, 2);
+        case 0x30: { // loc_194A7: thunder1 + 19061(3) + 241F7(0) + 1124A + 18FC6
+            battle_ssp_play("thunder1.ssp", 0x32);
+            battle_crit_collect_19061(attacker_index, 3);
+            {
+                const auto& A = units_[(size_t)attacker_index];
+                battle_fx_241f7(attacker_index, (int)(int8_t)A.x, (int)(int8_t)A.y, 0);
+            }
+            if (should_exit_) return;
+            camera_center_on(saved_cam_cx, saved_cam_cy);
+            battle_crit_18fc6(attacker_index, 0x5DC0, 0x32, 2, initial_count);
             break;
         }
-        case 0x1D: { // atomic / darkzone
-            battle_apply_spell_hit(attacker_index, battle_target_list_, 0x7530, 0x46, 3);
+        case 0x1D: { // loc_19368: atomic/darkzone + 19061(3) + 276B9 + 1124A + 18FC6
+            battle_ssp_play("atomic.ssp", 0x32);
+            battle_ssp_play("darkzone.ssp", 0x33);
+            battle_crit_collect_19061(attacker_index, 3);
+            {
+                const auto& A = units_[(size_t)attacker_index];
+                battle_fx_276b9(attacker_index, (int)(int8_t)A.x, (int)(int8_t)A.y, 0);
+            }
+            if (should_exit_) return;
+            camera_center_on(saved_cam_cx, saved_cam_cy);
+            battle_crit_18fc6(attacker_index, 0x7530, 0x46, 3, initial_count);
             break;
         }
-        case 0x2D: case 0x43: { // f-blast (no collection: existing list only)
-            battle_apply_spell_hit(attacker_index, battle_target_list_, 0x1770, 0x14, 0);
-            break;
-        }
-        case 0x3B: { // f-wave
-            battle_apply_spell_hit(attacker_index, battle_target_list_, 0x3A98, 0x1E, 0);
-            break;
-        }
-        case 0x31: { // poison all targets
+        case 0x2D: case 0x43: { // loc_1944C: f-blast + per-target 203CC + 1124A + 18FC6
+            battle_ssp_play("f-blast.ssp", 0x32);
             for (int t : targets) {
-                if (!alive(t)) continue;
+                if (t < 0 || (size_t)t >= units_.size()) continue;
+                const auto& tgt = units_[(size_t)t];
+                battle_fx_blast_203cc(t, (int)(int8_t)tgt.x, (int)(int8_t)tgt.y);
+                if (should_exit_) return;
+            }
+            camera_center_on(saved_cam_cx, saved_cam_cy);
+            battle_crit_18fc6(attacker_index, 0x1770, 0x14, 0, initial_count);
+            break;
+        }
+        case 0x3B: { // loc_1954E: f-wave + 190C3 + 215FE(0) + 1124A + 18FC6
+            battle_ssp_play("f-wave.ssp", 0x32);
+            battle_crit_collect_190c3(attacker_index);
+            {
+                const auto& A = units_[(size_t)attacker_index];
+                battle_fx_215fe(attacker_index, (int)(int8_t)A.x, (int)(int8_t)A.y, 0);
+            }
+            if (should_exit_) return;
+            camera_center_on(saved_cam_cx, saved_cam_cy);
+            battle_crit_18fc6(attacker_index, 0x3A98, 0x1E, 0, initial_count);
+            break;
+        }
+        case 0x31: { // loc_19501: assist-d.ssp + per-target 26B1F + poison all targets
+            battle_ssp_play("assist-d.ssp", 0x32);
+            for (int t : targets) {
+                if (t < 0 || (size_t)t >= units_.size()) continue;
+                const int tx = (int)(int8_t)units_[(size_t)t].x;
+                const int ty = (int)(int8_t)units_[(size_t)t].y;
+                battle_fx_26b1f(attacker_index, tx, ty, 0);
+                if (should_exit_) return;
                 auto& tgt = units_[(size_t)t];
                 tgt.combat_flags_1e = (uint8_t)(tgt.combat_flags_1e | 0x20);
                 tgt.ail_25 = 0x3C;
@@ -1783,6 +1902,7 @@ void CombatII::battle_crit_19168(int attacker_index, const std::vector<int>& tar
         default:
             break;
     }
+    camera_center_on(saved_cam_cx, saved_cam_cy);              // loc_19597: sub_1124A
 }
 
 // sub_45BFB/45CCB: queue the floating damage digits. The dmg argument is the raw 285E4
@@ -7527,6 +7647,7 @@ int CombatII::battle_corpse_take(int unit_index, bool random_pick) {
         if (o.active || o.hp > 0) continue;
         if (o.sprite_type < 0 || o.sprite_type >= 0x12C) continue;   // 1DB1D: large sprites leave no corpse
         if (o.unit_kind_0d == 2) continue;                          // undead never enter the corpse list
+        if (o.item_use_12 >= 0x0A) continue;                        // 1DB1D loc_1DBE3: summons never enter D6620
         if (!random_pick &&
             battle_armies_hostile(battle_effective_army(o), army, battle_hostility_inverted_))
             continue;
@@ -7772,13 +7893,17 @@ void CombatII::battle_heal_462a7(int unit_index, int amount_raw) {
 }
 
 // sub_2ACCB(caster, edx = base, bx = p1): handles the F0648 list. [0Dh]==2 takes damage
-// (285E4*2); everything else is healed by the 184A4(0x37) bonus percentage, clamped to max
-// HP, through 462A7 when inside the 12x12 viewport and added directly when outside.
+// (285E4*2), queues 45BFB/45ED2 without 287AF, and sets killflag=1; everything else is
+// healed by the 184A4(0x37) bonus percentage, clamped to max HP, through 462A7 when inside
+// the 12x12 viewport and added directly when outside. When killflag==1, runs 287AF + 1ED45
+// over the entire list (ASM 36987-37118).
 void CombatII::battle_spell_heal_2accb(int caster_index, const std::vector<int>& targets, int base, int p1) {
     if (caster_index < 0 || (size_t)caster_index >= units_.size()) return;
+    battle_spell_hits_.clear();
     game_timer_set(0x1E);                                // mov eax,1Eh; call sub_1033B
     bool killflag = false;
-    for (int ti : targets) {
+    for (size_t slot = 0; slot < targets.size(); ++slot) {
+        const int ti = targets[slot];
         if (ti < 0 || (size_t)ti >= units_.size()) continue;
         auto& t = units_[(size_t)ti];
         const auto& caster = units_[(size_t)caster_index];
@@ -7786,15 +7911,15 @@ void CombatII::battle_spell_heal_2accb(int caster_index, const std::vector<int>&
             const int dmg = battle_spell_damage(caster, t, base, p1, -1) * 2;
             const int new_raw = battle_hp_raw(t) - dmg;
             const int new_hp = new_raw <= 0 ? 0 : (new_raw + 99) / 100;
-            const int delta = new_hp - t.hp;
-            t.hp_deficit = new_hp > 0 ? new_hp * 100 - new_raw : 0;
-            t.hp = new_hp;
-            if (delta != 0) {
-                VmEvent hp; hp.type = VmEventType::Hp; hp.hp_unit = ti;
-                hp.hp_delta = delta; hp.hp_dir = caster.facing; hp.hp_killer = caster_index;
-                play_hp_change(hp);
-            }
+            t.hp_deficit = new_hp > 0 ? new_hp * 100 - new_raw : -new_raw;
+            t.hp = new_hp;                               // subtract [+48h] once
+            battle_queue_spell_hit(ti, dmg);             // sub_45BFB + sub_45ED2 at 287AF time
+            if (!battle_spell_hits_.empty())
+                battle_spell_hits_.back().tidx = (int)slot;
             killflag = true;
+            if (battle_trace_)
+                fprintf(stderr, "COMBAT: 2ACCB undead unit=%d target=%d dmg_x100=%d hp -> %d\n",
+                        caster.id, t.id, dmg, t.hp);
             continue;
         }
         if (t.code_b > 4) continue;                      // cmp byte [esi+5Ch],4; ja
@@ -7815,15 +7940,20 @@ void CombatII::battle_spell_heal_2accb(int caster_index, const std::vector<int>&
             t.hp_deficit = new_hp > 0 ? new_hp * 100 - new_raw : 0;
             t.hp = new_hp;
         }
-        if (should_exit_) return;
+        if (should_exit_) {
+            battle_spell_hits_.clear();
+            return;
+        }
     }
     if (killflag) {                                      // sub_287AF + sub_1ED45
-        for (int ti : targets) {
-            if (ti < 0 || (size_t)ti >= units_.size()) continue;
-            if (units_[(size_t)ti].active && units_[(size_t)ti].hp > 0 && units_[(size_t)ti].unit_kind_0d == 2)
-                run_unit_hp_trigger(ti, caster_index, 1);
-            if (should_exit_) return;
+        battle_spell_pace_287af();
+        if (should_exit_) {
+            battle_spell_hits_.clear();
+            return;
         }
+        for (int ti : targets)
+            if (ti >= 0 && (size_t)ti < units_.size()) reset_unit_pose(units_[(size_t)ti]);
+        battle_spell_1ed45_targets(caster_index, targets);
     }
 }
 
@@ -9552,19 +9682,31 @@ int CombatII::battle_spell_2c28f(int unit_index, int k, int tx, int ty) {
     return 0;
 }
 
-// sub_2C36A + sub_2B5C4 (row 6 d3 Soul Recall): raises one corpse per front/side tile
-//   (29C5A direction table) as [0Dh]=2 undead. [12h] = caster id + 10, id = 0xFF,
-//   full HP, MP 0, gauge 0.
+// sub_2C36A + sub_2B5C4 (row 6 d3 Soul Recall): checks sub_113DD corpse list first,
+//   builds sub_29C5A E8F46 grid (14300(0Ch)+14032+143F3), removes old summons, then raises
+//   one corpse per valid front/side tile with regen/summon.ssp + 272AD + 11E04 + 4F4CD(33h).
 int CombatII::battle_spell_2c36a(int unit_index, int k) {
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return 4;
-    const int count = k + 1;                                     // 29C5A count = edx+1
+    // sub_113DD(dword_D6620, dword_D6624): return -1 immediately when the corpse list is empty.
+    const bool has_corpse = std::any_of(units_.begin(), units_.end(), [](const CombatUnitPlacement& o) {
+        return !o.active && o.hp <= 0 && o.sprite_type >= 0 && o.sprite_type < 0x12C &&
+               o.unit_kind_0d != 2 && o.item_use_12 < 0x0A;
+    });
+    if (!has_corpse) {
+        if (battle_trace_)
+            fprintf(stderr, "COMBAT: soul recall unit=%d no corpse (113DD == 0 -> -1)\n",
+                    units_[(size_t)unit_index].id);
+        return 4;
+    }
+    const int count = std::min(std::max(k + 1, 1), 3);           // 29C5A count = edx+1
     const int facing = (int)units_[(size_t)unit_index].facing & 3;
     int dirs[3] = {facing, (facing + 1) & 3, (facing + 3) & 3};  // 29C5A var_C[0..2]
+    // sub_29C5A: sub_14300(0x0C) -> sub_14032 -> sub_143F3 diffusion (budget 12).
+    const std::vector<int> grid = battle_ai_build_diffusion(unit_index, 0x0C);
     battle_spell_announce(unit_index, battle_spell_name_);
     if (should_exit_) return 0;
     battle_remove_old_summons(unit_index);                       // sub_29EE4
-    std::vector<int> grid;
-    battle_ai_169d7_reset(unit_index, grid);                     // sub_169D7
+    if (should_exit_ || (size_t)unit_index >= units_.size()) return 0;
     const int ux = (int)(int8_t)units_[(size_t)unit_index].x;
     const int uy = (int)(int8_t)units_[(size_t)unit_index].y;
     int raised = 0;
@@ -9586,30 +9728,43 @@ int CombatII::battle_spell_2c36a(int unit_index, int k) {
         z.x = (int8_t)nx; z.y = (int8_t)ny;
         z.unit_kind_0d = 2;                                      // [0Dh]=2
         z.id = 0xFF;                                             // [0Fh]=0xFF
-        z.item_use_12 = (uint8_t)((unsigned)c.id + 10u);         // [12h]=[0Fh]+10
+        z.item_use_12 = (uint8_t)((unsigned)c.id + 10u);         // [12h]=[0Fh]+0Ah
         z.army = c.army; z.memory_army = c.memory_army;          // [0Eh]
+        z.battle_list_membership_modeled = c.battle_list_membership_modeled;
         z.facing = c.facing;                                     // [63h]
         z.anim_frame = 3;                                        // [64h]=3
         z.combat_flags_14 = 0;                                   // [14h]=0
+        z.flying = false;
         z.combat_mp_50 = 0;                                      // [50h]=0
         z.battle_gauge = 0;                                      // [56h]=0
         z.combat_acc57 = 0;                                      // [57h]=0
         z.ai_field_81 = 0;                                       // [81h]=0
         z.ai_mode = (int8_t)0xFF;                                // [82h]=0xFF
+        z.ai_field_7f = 0;                                       // [7Fh]=0
+        z.ai_field_80 = 0xFF;                                    // [80h]=0xFF
         z.combat_flags_1e = 0;
-        z.auto_battle = (battle_effective_army(c) == 1) ? 2 : 0;  // [83h]=2
+        if (battle_effective_army(c) == 1) z.auto_battle = 2;    // [0Eh]==1 -> [83h]=2
         z.hp = z.max_hp; z.hp_deficit = z.max_hp_deficit;        // [48h]=[4Ch]
         z.stored_77.reset();
         z.linked_class = -1;
-        reset_unit_pose(z);
-        battle_wc1_occupancy_preserve_or_close("soul recall");
+        z.walk_off_x = z.walk_off_y = 0;
+        z.knock_dx = z.knock_dy = 0;
+        z.list_seq = battle_next_list_seq();                     // sub_1134F
+        z.slot_hint = battle_image_slot(z.sprite_type);          // [60h] = sub_1198D([61h])
+        z.occupancy_hp_known = true;
+        battle_ssp_play("regen.ssp", 0x32);                      // 4F460("regen.ssp", 32h)
+        battle_ssp_play("summon.ssp", 0x33);                     // 4F460("summon.ssp", 33h)
+        battle_fx_272ad(unit_index, nx, ny, 0);                  // sub_272AD
+        if (should_exit_) return 0;
+        battle_wc1_occupancy_preserve_or_close("soul recall");   // sub_11E04
+        sfx(0x33);                                               // sub_4F4CD(33h) summon.ssp
         ++raised;
         if (battle_trace_)
             fprintf(stderr, "COMBAT: soul recall unit=%d corpse=%d at=(%d,%d) (sub_2B5C4)\n",
-                    c.id, ci, nx, ny);
+                    units_[(size_t)unit_index].id, ci, nx, ny);
     }
     if (!should_exit_ && (size_t)unit_index < units_.size())
-        reset_unit_pose(units_[(size_t)unit_index]);
+        reset_unit_pose(units_[(size_t)unit_index]);             // sub_12124(caster)
     if (battle_trace_)
         fprintf(stderr, "COMBAT: soul recall done unit=%d raised=%d/%d\n",
                 units_[(size_t)unit_index].id, raised, count);
@@ -9940,7 +10095,8 @@ void CombatII::battle_spell_load_ssps(int r_code) {
             load("f-field.ssp", 0x32); load("ddoing.ssp", 0x33); load("bolt3.ssp", 0x34);
             break;
         case 3:  load("f-wave.ssp", 0x32); break;   // 2B79C
-        case 4:  case 11: case 18: case 45: load("regen.ssp", 0x32); break;
+        case 4:  case 11: case 18: load("regen.ssp", 0x32); break;
+        case 45: load("regen.ssp", 0x32); load("summon.ssp", 0x33); break;
         case 5:  // 2B7DC
             load("fire.ssp", 0x32); load("m-wind.ssp", 0x33); load("hell.ssp", 0x34);
             break;
@@ -10914,13 +11070,13 @@ int CombatII::battle_cast_magic(int unit_index, int r_code, int tx, int ty) {
         return rc;
     }
     if (should_exit_ || (size_t)unit_index >= units_.size()) return 0;
-    // The 2A75A family (off_2A746) and the 29722 wave handler (q1 3/10/17) load their SSP,
-    // run the NSP driver and 287AF inside the handler; every other handler leaves the
-    // presentation to battle_magic_fx here.
+    // The 2A75A family (off_2A746), the 29722 wave handler (q1 3/10/17), and Soul Recall
+    // (q1 45: per-corpse 2B5C4 -> 272AD) load their SSP and run the NSP driver inside the
+    // handler; every other handler leaves the presentation to battle_magic_fx here.
     const int q1_fx = r_code / 3;
     const bool fx_inside_handler =
         (q1_fx == 3 || q1_fx == 6 || q1_fx == 10 || q1_fx == 13 || q1_fx == 17 ||
-         q1_fx == 20 || q1_fx == 25 || q1_fx == 27);
+         q1_fx == 20 || q1_fx == 25 || q1_fx == 27 || q1_fx == 45);
     if (!fx_inside_handler) {
         battle_magic_fx(r_code, unit_index, fx_tx, fx_ty);
         if (should_exit_ || (size_t)unit_index >= units_.size()) return 0;
@@ -12734,20 +12890,10 @@ void CombatII::battle_weapon_apply_status(int target_index, int bit, int duratio
 // sub_45BFB prepares one target's number and start position, subtracts the raw damage from
 // [+48h] and sets the 45ED2 knockback. The whole list is prepared before sub_287AF animates
 // it in parallel (45F29/45CCB), so every caller uses this same entry point.
-void CombatII::battle_damage_fx_prepare(int caster_index, int ti, int slot, int fin,
-                                        std::vector<BattleDamageFx>& fx) {
-    if (caster_index < 0 || (size_t)caster_index >= units_.size()) return;
-    if (ti < 0 || (size_t)ti >= units_.size()) return;
-    auto& A = units_[(size_t)caster_index];
-    auto& T = units_[(size_t)ti];
-    if (!T.active || T.hp <= 0) return;
-    const int old_raw = battle_hp_raw(T);
-    int new_raw = old_raw - fin;
-    if (new_raw > battle_max_hp_raw(T)) new_raw = battle_max_hp_raw(T);
-    const int new_hp = new_raw <= 0 ? 0 : (new_raw + 99) / 100;
-    if (battle_trace_) fprintf(stderr, "COMBAT: damage fx unit=%d -> target=%d final=%d hp_raw %d->%d\n",
-                                A.id, T.id, fin, old_raw, new_raw);
+CombatII::BattleDamageFx CombatII::battle_attack_fx_prepare(int ti, int slot, int fin) {
     BattleDamageFx d{};
+    if (ti < 0 || (size_t)ti >= units_.size()) return d;
+    auto& T = units_[(size_t)ti];
     d.unit = ti;
     d.slot = slot;
     d.sx0 = (T.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X;
@@ -12764,6 +12910,81 @@ void CombatII::battle_damage_fx_prepare(int caster_index, int ti, int slot, int 
     static constexpr uint8_t kDmgColor[8] = {0x04, 0x10, 0x31, 0x51, 0x20, 0x01, 0x00, 0x00};
     d.color = kDmgColor[std::min(std::max(battle_effective_army(T), 0), 7)];
     T.walk_off_x = T.walk_off_y = 0;                       // sub_45BFB prologue
+    return d;
+}
+
+void CombatII::battle_damage_fx_step_and_draw(std::vector<BattleDamageFx>& fx, int f,
+                                              bool damage_small_font) {
+    for (BattleDamageFx& d : fx) {
+        // sub_45CCB (loc_45D15..loc_45D66): only cell 0 (f<5), cell 3 (f>=14h) or a
+        // pair of adjacent cells moves; the 24-frame wave travels through the digits.
+        if (d.ndig <= 0) {
+            // loc_45E21: "miss" alternates between y[1] and y[0] - (14h-frame)/2.
+            if (f & 1) d.digit_y[0] = d.digit_y[1];
+            else d.digit_y[0] -= (0x14 - f) / 2;
+        } else if (f < 5) {
+            d.digit_y[0] -= 2;                             // sub word_F9708[ebx],2
+        } else if (f >= 0x14) {
+            d.digit_y[3] += 2;                             // add unk_F970E[ebx],2
+        } else {
+            const int k = (f - 5) / 5;                     // 0,1,2
+            d.digit_y[k] += 2;                             // add dx,2
+            d.digit_y[k + 1] -= 2;                         // sub cx,2
+        }
+    }
+    uint8_t* bb = video_.get_backbuffer();
+    for (const BattleDamageFx& d : fx) {
+        // loc_45D6E/loc_45E4D: one cull for the whole number (x-10h, y[0]-5).
+        if (d.sx0 - 16 < 0 || d.sx0 - 16 >= 0x120) continue;
+        const int y0 = d.digit_y[0];
+        if (y0 - 5 < 0 || y0 - 5 >= 0xB2) continue;
+        if (d.ndig <= 0) {
+            // loc_45E78: an empty buffer shows "miss" with spacing 0 and the shadow at y.
+            if (damage_small_font) {
+                draw_small_text(d.sx0 + 1, y0, "miss", 0, 0);
+                draw_small_text(d.sx0, y0, "miss", d.color, 0);
+            } else if (bb && font_.is_loaded()) {
+                font_.set_text_mode(4, 0x0000, 0xFF);
+                font_.draw_string(bb, SCREEN_W, SCREEN_H, d.sx0 + 1, y0, "miss");
+                font_.set_text_mode(4, (uint16_t)(d.color << 8), 0xFF);
+                font_.draw_string(bb, SCREEN_W, SCREEN_H, d.sx0, y0, "miss");
+            }
+            continue;
+        }
+        // loc_45DA2: four 6-px cells at sx0 + 6*i; the digits are right-aligned into
+        // cells 0..3 (width index 4-ndig in sub_45BFB).
+        const int first = 4 - d.ndig;
+        char one[2] = {0, 0};
+        for (int k = 0; k < d.ndig; k++) {
+            one[0] = d.digits[k];
+            const int x = d.sx0 + 6 * (first + k), y = d.digit_y[first + k];
+            if (damage_small_font) {
+                draw_small_text(x + 1, y + 1, one, 0, 1);
+                draw_small_text(x, y, one, d.color, 1);
+            } else if (bb && font_.is_loaded()) {
+                font_.set_text_mode(4, 0x0000, 0xFF);
+                font_.draw_string(bb, SCREEN_W, SCREEN_H, x + 1, y + 1, one);
+                font_.set_text_mode(4, (uint16_t)(d.color << 8), 0xFF);
+                font_.draw_string(bb, SCREEN_W, SCREEN_H, x, y, one);
+            }
+        }
+    }
+}
+
+void CombatII::battle_damage_fx_prepare(int caster_index, int ti, int slot, int fin,
+                                        std::vector<BattleDamageFx>& fx) {
+    if (caster_index < 0 || (size_t)caster_index >= units_.size()) return;
+    if (ti < 0 || (size_t)ti >= units_.size()) return;
+    auto& A = units_[(size_t)caster_index];
+    auto& T = units_[(size_t)ti];
+    if (!T.active || T.hp <= 0) return;
+    const int old_raw = battle_hp_raw(T);
+    int new_raw = old_raw - fin;
+    if (new_raw > battle_max_hp_raw(T)) new_raw = battle_max_hp_raw(T);
+    const int new_hp = new_raw <= 0 ? 0 : (new_raw + 99) / 100;
+    if (battle_trace_) fprintf(stderr, "COMBAT: damage fx unit=%d -> target=%d final=%d hp_raw %d->%d\n",
+                                A.id, T.id, fin, old_raw, new_raw);
+    BattleDamageFx d = battle_attack_fx_prepare(ti, slot, fin);
     T.hp = new_hp;
     T.hp_deficit = new_hp > 0 ? new_hp * 100 - new_raw : 0; // exact [+48h] after the subtract
     setup_knockback_hit(T, A.facing & 3);                  // sub_45ED2
@@ -12781,61 +13002,9 @@ void CombatII::battle_damage_fx_play(std::vector<BattleDamageFx>& fx,
         render_battle_frame();                                 // sub_454B3 before 45F29
         for (BattleDamageFx& d : fx) {
             if (d.unit < 0 || (size_t)d.unit >= units_.size()) continue;
-            auto& U = units_[(size_t)d.unit];
-            apply_knockback_hit(U, d.slot, f);                 // sub_45F29(U, slot, frame)
-            // sub_45CCB (loc_45D15..loc_45D66): only cell 0 (f<5), cell 3 (f>=14h) or a
-            // pair of adjacent cells moves; the 24-frame wave travels through the digits.
-            if (d.ndig <= 0) {
-                // loc_45E21: "miss" alternates between y[1] and y[0] - (14h-frame)/2.
-                if (f & 1) d.digit_y[0] = d.digit_y[1];
-                else d.digit_y[0] -= (0x14 - f) / 2;
-            } else if (f < 5) {
-                d.digit_y[0] -= 2;                             // sub word_F9708[ebx],2
-            } else if (f >= 0x14) {
-                d.digit_y[3] += 2;                             // add unk_F970E[ebx],2
-            } else {
-                const int k = (f - 5) / 5;                     // 0,1,2
-                d.digit_y[k] += 2;                             // add dx,2
-                d.digit_y[k + 1] -= 2;                         // sub cx,2
-            }
+            apply_knockback_hit(units_[(size_t)d.unit], d.slot, f); // sub_45F29(U, slot, frame)
         }
-        uint8_t* bb = video_.get_backbuffer();
-        for (const BattleDamageFx& d : fx) {
-            // loc_45D6E/loc_45E4D: one cull for the whole number (x-10h, y[0]-5).
-            if (d.sx0 - 16 < 0 || d.sx0 - 16 >= 0x120) continue;
-            const int y0 = d.digit_y[0];
-            if (y0 - 5 < 0 || y0 - 5 >= 0xB2) continue;
-            if (d.ndig <= 0) {
-                // loc_45E78: an empty buffer shows "miss" with spacing 0 and the shadow at y.
-                if (damage_small_font) {
-                    draw_small_text(d.sx0 + 1, y0, "miss", 0, 0);
-                    draw_small_text(d.sx0, y0, "miss", d.color, 0);
-                } else if (bb && font_.is_loaded()) {
-                    font_.set_text_mode(4, 0x0000, 0xFF);
-                    font_.draw_string(bb, SCREEN_W, SCREEN_H, d.sx0 + 1, y0, "miss");
-                    font_.set_text_mode(4, (uint16_t)(d.color << 8), 0xFF);
-                    font_.draw_string(bb, SCREEN_W, SCREEN_H, d.sx0, y0, "miss");
-                }
-                continue;
-            }
-            // loc_45DA2: four 6-px cells at sx0 + 6*i; the digits are right-aligned into
-            // cells 0..3 (width index 4-ndig in sub_45BFB).
-            const int first = 4 - d.ndig;
-            char one[2] = {0, 0};
-            for (int k = 0; k < d.ndig; k++) {
-                one[0] = d.digits[k];
-                const int x = d.sx0 + 6 * (first + k), y = d.digit_y[first + k];
-                if (damage_small_font) {
-                    draw_small_text(x + 1, y + 1, one, 0, 1);
-                    draw_small_text(x, y, one, d.color, 1);
-                } else if (bb && font_.is_loaded()) {
-                    font_.set_text_mode(4, 0x0000, 0xFF);
-                    font_.draw_string(bb, SCREEN_W, SCREEN_H, x + 1, y + 1, one);
-                    font_.set_text_mode(4, (uint16_t)(d.color << 8), 0xFF);
-                    font_.draw_string(bb, SCREEN_W, SCREEN_H, x, y, one);
-                }
-            }
-        }
+        battle_damage_fx_step_and_draw(fx, f, damage_small_font);   // sub_45CCB
         render_overlay();
         video_.present();
         wait_game_tick();                                      // sub_499E4

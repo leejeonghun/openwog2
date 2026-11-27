@@ -476,6 +476,31 @@ int CombatII::battle_resolve_list(int attacker_index, bool declare,
         damage.push_back(dmg);
     }
 
+    // sub_1DDF0: subtract damage and prepare sub_45BFB digits before sub_1E61D.
+    battle_attack_fx_.clear();
+    for (size_t k = 0; k < rolls.size(); ++k) {
+        const int t = rolls[k].first;
+        const BattleAttackRoll& roll = rolls[k].second;
+        if (roll.result != 2 && units_[(size_t)t].active) {
+            auto& tgt = units_[(size_t)t];
+            const int old_hp = tgt.hp;
+            int new_raw = battle_hp_raw(tgt) - damage[k];
+            if (new_raw > battle_max_hp_raw(tgt)) new_raw = battle_max_hp_raw(tgt);
+            const int new_hp = new_raw <= 0 ? 0 : (new_raw + 99) / 100;
+            tgt.hp_deficit = new_hp > 0 ? new_hp * 100 - new_raw : -new_raw;
+            tgt.hp = new_hp;
+            battle_recalc_summon_attack(t);                   // sub_17E17(target, damage)
+            if (battle_trace_)
+                fprintf(stderr, "COMBAT: attack unit=%d target=%d result=%d hit_kind=%d area=%d guard_bonus=%d damage_x100=%d hp %d -> %d\n",
+                        units_[(size_t)attacker_index].id, tgt.id, roll.result, roll.hit_kind, roll.area_mode,
+                        roll.def_bonus, damage[k], old_hp, new_hp);
+            battle_attack_fx_.push_back(battle_attack_fx_prepare(t, (int)k, damage[k])); // sub_45BFB
+        } else if (battle_trace_) {
+            fprintf(stderr, "COMBAT: attack unit=%d target=%d result=dodge\n",
+                    units_[(size_t)attacker_index].id, units_[(size_t)t].id);
+        }
+    }
+
     // sub_1E61D: attack presentation for all targets; the result lands in word_F0430 per target.
     // dword_F0B8A+2 = sub_1D6B1 hit_kind (0/1/2, 1DEA7) is passed to 1E2EA and the wind-up motion.
     VmEvent attack;
@@ -483,56 +508,25 @@ int CombatII::battle_resolve_list(int attacker_index, bool declare,
     attack.attacker_unit = attacker_index;
     attack.attacker_mode = hit_kind;
     for (const auto& r : rolls) attack.attack_targets.push_back({r.first, 0, r.second.result});
-    play_attack_sequence(attack);
+    std::vector<VmAttackTarget> final_targets;
+    play_attack_sequence(attack, &final_targets);
     if (should_exit_) return 1;
 
-    // Apply damage and deaths (sub_1ED45 -> sub_1DB1D). The original [+48h] is x100, kept exactly
-    // as hp_deficit.
-    for (size_t k = 0; k < rolls.size(); ++k) {
-        const int t = rolls[k].first;
-        const BattleAttackRoll& roll = rolls[k].second;
-        if (roll.result != 2 && units_[(size_t)t].active) {
-            auto& tgt = units_[(size_t)t];
-            int new_raw = battle_hp_raw(tgt) - damage[k];
-            if (new_raw > battle_max_hp_raw(tgt)) new_raw = battle_max_hp_raw(tgt);
-            const int new_hp = new_raw <= 0 ? 0 : (new_raw + 99) / 100;
-            const int delta = new_hp - tgt.hp;
-            tgt.hp_deficit = new_hp > 0 ? new_hp * 100 - new_raw : 0;
-            battle_recalc_summon_attack(t);                   // sub_17E17(target, damage)
-            if (battle_trace_)
-                fprintf(stderr, "COMBAT: attack unit=%d target=%d result=%d hit_kind=%d area=%d guard_bonus=%d damage_x100=%d hp %d -> %d\n",
-                        units_[(size_t)attacker_index].id, tgt.id, roll.result, roll.hit_kind, roll.area_mode,
-                        roll.def_bonus, damage[k], tgt.hp, new_hp);
-            if (delta != 0) {                             // a delta of 0 is read as death by play_hp_change
-                VmEvent hp;
-                hp.type = VmEventType::Hp;
-                hp.hp_unit = t;
-                hp.hp_delta = delta;
-                hp.hp_dir = units_[(size_t)attacker_index].facing;
-                hp.hp_killer = attacker_index;
-                hp.hp_defer_death = true;
-                play_hp_change(hp);
-            }
-        } else if (battle_trace_) {
-            fprintf(stderr, "COMBAT: attack unit=%d target=%d result=dodge\n",
-                    units_[(size_t)attacker_index].id, units_[(size_t)t].id);
-        }
-        if (should_exit_) return 1;
-    }
     // sub_1EBFE: physical-hit status effect on each target (runs before sub_1ED45).
     if (apply_1ebfe) {
-        for (const auto& r : rolls) {
-            battle_apply_1ebfe(attacker_index, r.first, r.second.hit_kind, r.second.result);
+        for (const VmAttackTarget& ft : final_targets) {
+            battle_apply_1ebfe(attacker_index, ft.unit_index, hit_kind, ft.result);
             if (should_exit_) return 1;
         }
     }
     // sub_1ED45: HP <= 0 -> sub_1DB1D (death), surviving targets -> sub_53797(mode 1).
-    for (const auto& r : rolls) {
-        const int t = r.first;
+    for (size_t k = 0; k < final_targets.size(); ++k) {
+        const int t = final_targets[k].unit_index;
         if (t < 0 || (size_t)t >= units_.size() || !units_[(size_t)t].active) continue;
         if (units_[(size_t)t].hp <= 0) {
             play_unit_death(t, attacker_index);
-        } else if (alive(attacker_index)) {
+            if (k < battle_target_list_.size()) battle_target_list_[k] = -1;
+        } else {
             run_unit_hp_trigger(t, attacker_index, 1);
         }
         if (should_exit_) return 1;

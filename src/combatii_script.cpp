@@ -4014,8 +4014,12 @@ void CombatII::play_vm_events(const std::vector<VmEvent>& events) {
                 break;
             }
             // loc_51DFE/loc_51E0F: sub_1E61D (attacker) [+ sub_1EF5C]; loc_51E34: pose.
-            if (ev.type == VmEventType::Attack) play_attack_sequence(combat);
-            else play_unit_pose(combat);
+            if (ev.type == VmEventType::Attack) {
+                battle_attack_fx_.clear();
+                play_attack_sequence(combat);
+            } else {
+                play_unit_pose(combat);
+            }
             if (should_exit_) return;
             break;
         }
