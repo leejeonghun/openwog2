@@ -2552,8 +2552,9 @@ private:
     int battle_weapon_2caca(int attacker_index, int damage); // sub_2CACA (ITEM.DAT 0x39 percentage adjustment)
     // sub_2CC3A (V-normal attack, 5/7/0x0C). sfx_id is the hit sound the dispatcher passes in cx
     //   (sub_2F47F/2F68C = 1, sub_2FED7 = 2); the original reads it as [esp+66h]>>16 and hands it
-    //   to 4F4CD.
-    int battle_weapon_2cc3a(int unit_index, int variant, int sfx_id = 1);
+    //   to 4F4CD. add is the same caller's ebx (2F47F=1000, 2F68C=0, 2FED7=2000) which the
+    //   routine adds to si*base/10 before 2CACA.
+    int battle_weapon_2cc3a(int unit_index, int variant, int sfx_id = 1, int add = 0);
     int battle_weapon_2ca40(int unit_index); // sub_2CA40 (V-weapon branch 1..3, updates [+36]/[+37])
     int battle_weapon_f1474(int unit_index, int idx, int dx); // sub_2F47F.. (all 25 F1474 vectors ported)
     int battle_weapon_302e6(int unit_index, int edi); // sub_302E6 (V-lead branch over 13 bodies; plays the SSP and returns)

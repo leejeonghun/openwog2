@@ -11258,17 +11258,18 @@ int CombatII::battle_weapon_2caca(int attacker_index, int damage) {
 }
 
 // sub_2CC3A: runs a V normal attack (2F47F/2F68C call it with edx=5/7/0x0C, ecx=1 and
-//   ebx = fixed damage, a dead store). Returns -1 when the 1D124 gate fails. The tail
-//   si is 0x14 (20) for variant 5, 0x19 (25) for 7 and 0x1E (30) for 0x0C.
+//   ebx = the fixed damage add: 1000 for 2F47F, 0 for 2F68C, 2000 for 2FED7). Returns -1
+//   when the 1D124 gate fails. The tail si is 0x14 (20) for variant 5, 0x19 (25) for 7 and
+//   0x1E (30) for 0x0C.
 //   Targets are the whole F0648 list (= battle_target_list_) filled by 1D124; per target it
-//   computes base = 1D770(attacker, target, ebx=0, ecx=0), scaled = si*base/10 and
-//   final = 2CACA, then applies 45BFB / HP loss / 45ED2, finishes with the 287AF/1ED45/12124
-//   equivalents and returns 1.
+//   computes base = 1D770(attacker, target, ebx=0, ecx=0), scaled = si*base/10,
+//   final = 2CACA(scaled + add), then applies 45BFB / HP loss / 45ED2, finishes with the
+//   287AF/1ED45/12124 equivalents and returns 1.
 //   Deviation: presentation (454B3/5F517/5F3FD/5EECF/5EE51/5E9E8/44D6E family, the large
 //   0x90-frame sequence) is replaced by log output; gameplay (targets, damage, death,
 //   triggers) is equivalent. Extra F0648 collection (28B24 and so on) is approximated by
 //   1D124.
-int CombatII::battle_weapon_2cc3a(int unit_index, int variant, int sfx_id) {
+int CombatII::battle_weapon_2cc3a(int unit_index, int variant, int sfx_id, int add) {
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return -1;
     int si = -1;
     if (variant == 5) si = 0x14;
@@ -11309,9 +11310,11 @@ int CombatII::battle_weapon_2cc3a(int unit_index, int variant, int sfx_id) {
         if (!T.active || T.hp <= 0) continue;
         const int base = battle_damage(unit_index, ti, 0, 0, 0); // sub_1D770(ebx=0, ecx=0)
         const int scaled = si * base / 10;
-        const int fin = battle_weapon_2caca(unit_index, scaled);
-        if (battle_trace_) fprintf(stderr, "COMBAT: 2cc3a unit=%d -> target=%d base=%d scaled=%d final=%d\n",
-                                    A.id, T.id, base, scaled, fin);
+        // `mov edx,[esp+76h]; sar edx,10h; add edx,eax` folds the 4th argument (bx, stored
+        // at var_18 = the high word of [esp+76h]) into the damage before 2CACA (ASM 0x2D3F8).
+        const int fin = battle_weapon_2caca(unit_index, scaled + add);
+        if (battle_trace_) fprintf(stderr, "COMBAT: 2cc3a unit=%d -> target=%d base=%d scaled=%d add=%d final=%d\n",
+                                    A.id, T.id, base, scaled, add, fin);
         battle_damage_fx_prepare(unit_index, ti, (int)slot, fin, fx); // 45BFB + [48h] -= fin + 45ED2
     }
     battle_damage_fx_play(fx, targets);                              // sub_287AF
@@ -11469,8 +11472,9 @@ int CombatII::battle_weapon_f1474(int unit_index, int idx, int dx) {
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return -1;
     auto& u = units_[(size_t)unit_index];
     if (idx == 0 || idx == 8 || idx == 19) { // idx19=2FED7: same dx 1/2/3 -> 5/7/0xC.
-        //   ebx=3000 is a dead store; ecx survives as the 4th argument (cx) of 2CC3A and
-        //   becomes the switch hit-sound id (1 vs 2).
+        //   ebx is the fixed add handed to 2CC3A (2F47F: dword_74492>>16 = 1000,
+        //   2F68C: dword_744A0>>16 = 0, 2FED7: dword_744B8>>16 = 2000); ecx is the 4th
+        //   argument (cx) of 2CC3A and becomes the switch hit-sound id (1 vs 2).
         int variant = -1;
         if (dx == 1) variant = 5;
         else if (dx == 2) variant = 7;
@@ -11481,9 +11485,11 @@ int CombatII::battle_weapon_f1474(int unit_index, int idx, int dx) {
             return -1;
         }
         const int sfx_id = (idx == 19) ? 2 : 1;   // sub_2FED7 does `mov ecx,2`, the rest `mov ecx,1`
-        const int r = battle_weapon_2cc3a(unit_index, variant, sfx_id);
-        if (battle_trace_) fprintf(stderr, "COMBAT: f1474[%d]=%s unit=%d dx=%d -> 2CC3A edx=%d -> %d\n",
-                                    idx, idx == 0 ? "2F47F" : "2F68C", u.id, dx, variant, r);
+        const int add = (idx == 0) ? 1000 : (idx == 19 ? 2000 : 0);   // dword_74492/744B8>>16
+        const int r = battle_weapon_2cc3a(unit_index, variant, sfx_id, add);
+        if (battle_trace_) fprintf(stderr, "COMBAT: f1474[%d]=%s unit=%d dx=%d -> 2CC3A edx=%d add=%d -> %d\n",
+                                    idx, idx == 0 ? "2F47F" : (idx == 19 ? "2FED7" : "2F68C"),
+                                    u.id, dx, variant, add, r);
         return r;
     }
     if (idx == 2) { // sub_2F56C
@@ -11785,17 +11791,23 @@ int CombatII::battle_weapon_f1474(int unit_index, int idx, int dx) {
         sfx(0x32);                                                // sub_4F4CD(32h)
         for (int f = 11; f >= 0 && !should_exit_; --f) {
             game_timer_set((0x0F - f) >> 1);                      // sub_1033B((0Fh-f)>>1)
-            battle_fx_world();                                    // sub_454B3
-            for (int s = 0; s < f; ++s) {
+            // 454B3 falls through 454D5 (dim -> 44DCC -> 13546 -> HUD), so the trail
+            // silhouettes and the body pose go on top of the dim/HUD, not under them.
+            battle_fx_454b3();                                    // sub_454B3 + sub_454D5
+            // The draw loop reads x[si-1]/y[si-1] (`[esp+2si+16h]`/`[esp+2si-2]`) while
+            // the colour index is si/3, so f=11 stamps x[0..9] only; x[10]/x[11] stay
+            // unused (ASM 0x2E60A-0x2E642). si=0 reads a word outside both arrays (y) and
+            // the last y word (x), which the port cannot reproduce and skips.
+            for (int s = 1; s < f; ++s) {
                 if (!poses[4]) break;
-                blit_nc2_frame_solid(trail_x[s] + poses[4]->x_off,
-                                     trail_y[s] + poses[4]->y_off,
+                const int i = s - 1;
+                blit_nc2_frame_solid(trail_x[i] + poses[4]->x_off,
+                                     trail_y[i] + poses[4]->y_off,
                                      *poses[4], kHonTrailColor[s / 3]); // sub_5F517
             }
             const NC2Frame* mainf = (f == 11) ? poses[4] : poses[1]; // var_38[4] then var_38[1]
             if (mainf)
                 blit_nc2_frame(ex + mainf->x_off, ey + mainf->y_off, *mainf); // sub_5F3FD
-            battle_fx_overlay();                                  // sub_454D5
             if (f == 11) {
                 // sub_2D48A(14h): full-palette 3Fh flash, restored 14h ticks later.
                 uint8_t flash[0x100 * 3];

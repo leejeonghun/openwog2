@@ -925,7 +925,7 @@ void CombatII::fx_37fa4_hit_block(int unit_index, int irus_frame, int pose, int 
 //     (4) 3 frames: 305A2(caster, dir), 5E9E8, 30824(0,0Ch), 499E4, pose +1
 //     (5) 4 frames: 454B3, 305A2(0,0), 5E9E8, 30824(0,0Ch), 499E4
 //     (6) [+64h]++, 45559 (present), 1033B(9), 454B3, 30544
-//     (7) 9 frames: 454B3, 5EE51(NSP (i%3)+0Ch at +A0/+64), 305A2(0,0), 44DCC,
+//     (7) 9 frames: 454B3, 5EE51(NSP (i%3) at +A0/+64), 305A2(0,0), 44DCC,
 //         5E9E8, 499E4
 //   Port scope: (1)..(7). The coordinate interpolation and unit move after (8)
 //   (11EE4/11E04) and the black-screen 5E9D0 + 30784 loop after 0Ah overlap the gameplay
@@ -1019,14 +1019,17 @@ void CombatII::battle_fx_37fa4_dash_and_lightning(int unit_index, bool load_nsp)
         return;
     }
     game_timer_set(9);                                                 // 1033B(9)
-    fx_trail_reset();                                                  // 30544
+    // loc_38326 has no second sub_30544: the single reset is the one at loc_381EF inside
+    // fx_37fa4_rush, so the 13 afterimages filled there are redrawn with start advancing.
 
-    // loc_38326: 9 frames of lightning.
+    // loc_38326: 9 frames of lightning. `idiv ebx` leaves cx%3 in edx and
+    // `imul eax, edx, 0Ch` scales it by the F0DAA entry size, so the index is i%3
+    // (0..2), not (i%3)+0Ch (ASM 53893-53922).
     const int nframes = (int)magic_frames_.size();
     for (int i = 0; i < 9 && !should_exit_; ++i) {
         battle_fx_world();                                             // 454B3
         battle_fx_overlay();                                           // 454D5 (dim,44DCC,HUD)
-        const int f = (i % 3) + 0x0C;                                   // (cx%3) + 0Ch
+        const int f = i % 3;                                            // edx of idiv 3
         if (f < nframes) {                                              // 5EE51 (+A0h/+64h)
             const MagicFxFrame& a = magic_frames_[(size_t)f];
             fx_blit_nsp_5ee51(f, 0xA0 + a.xo, 0x64 + a.yo);            // sub_5EE51

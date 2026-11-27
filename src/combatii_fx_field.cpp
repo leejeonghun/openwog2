@@ -243,8 +243,11 @@ int CombatII::battle_fx_field_engine(int unit_index, int tx, int ty, int count,
             }
             if (q.life > -40) carry_frame = frame;
             if (q.life == 15 && combat_rand(death_rand) == 0) sfx(0x34);
-            if (frame >= 0 && frame < nframes)
-                battle_fx_blit(frame, q.ax + 0x0C, q.ay);  // 1FFFE, y > -30 is dropped by the blit
+            // Each routine gates sub_1FFFE on the particle y (var_12C/var_CC) with
+            // `cmp y, -1Eh; jle skip`, i.e. y > -30, before the frame's xo/yo are added
+            // (loc_20864-loc_208A0, loc_20C5C-loc_20C9E, loc_2102C-loc_2106E).
+            if (q.ay > -0x1E && frame >= 0 && frame < nframes)
+                battle_fx_blit(frame, q.ax + 0x0C, q.ay);  // 1FFFE
             const int old = q.life;
             --q.life;
             const bool respawn = respawn_on_new_zero ? (q.life == 0) : (old == 0);
