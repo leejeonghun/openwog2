@@ -2693,8 +2693,10 @@ bool CombatII::battle_quick_save_4f4ef() {
     // V6 appends byte_BA84D (weather_), byte_FF0B7 (battle_bgm_id_), byte_FF0B8 (battle_sfx_id_).
     // V7 widens scenario_flags_ from 256 bytes to 65536 bytes (R3-048).
     // V8 stores the [+77h] linked (pre-transform) record inside the unit loop and the three
-    // word_FD8BC bytes after the media block (sub_4F4EF 85688-85712, 85871-85877).
-    ok = ok && qsv_write_u32(f, 8);
+    // word_FD8BC bytes after the media block (sub_4F4EF 85688-85712, 85871-85877). V9 stores
+    // each unit's scheduler group: sub_4F85C restores the original's six army lists in order and
+    // uses that list index for its recolor branch (cmp bx,4), while the port's unit vector is flat.
+    ok = ok && qsv_write_u32(f, 9);
     const std::string& scen = current_scenario_name_;
     ok = ok && qsv_write_u32(f, (uint32_t)scen.size());
     if (ok && !scen.empty()) ok = fwrite(scen.data(), 1, scen.size(), f) == scen.size();
@@ -2733,6 +2735,7 @@ bool CombatII::battle_quick_save_4f4ef() {
         }
         ok = ok && qsv_write_u32(f, u.list_seq);
         ok = ok && qsv_write_u32(f, u.active ? 1u : 0u);
+        ok = ok && qsv_write_u32(f, (uint32_t)u.group);          // V9: per-group loop index
     }
     auto write_list = [&](const std::vector<int>& v) {
         ok = ok && qsv_write_u32(f, (uint32_t)v.size());
@@ -2891,7 +2894,7 @@ bool CombatII::battle_quick_load_4fd25() {
     uint32_t scen_len = 0, uw = 0;
     int32_t i32 = 0;
     ok = ok && qsv_read_u32(f, h.version) &&
-         (h.version >= 2 && h.version <= 8) &&
+         (h.version >= 2 && h.version <= 9) &&
          qsv_read_u32(f, scen_len) && scen_len < 256;
     if (ok && scen_len) {
         h.scen.resize(scen_len);
@@ -2944,7 +2947,7 @@ bool CombatII::battle_quick_load_4fd25() {
         char m2[8] = {};
         auto skip_u32 = [&](uint32_t& v) { return qsv_read_u32(f, v); };
         if (fread(m2, 1, 8, f) != 8 || memcmp(m2, "G2QSV2", 6) != 0 ||
-            !skip_u32(uw) || (uw < 2 || uw > 8) ||
+            !skip_u32(uw) || (uw < 2 || uw > 9) ||
             !skip_u32(uw) || uw >= 256) {
             fclose(f); return fail("quick load header corrupt (" + path + ")");
         }
@@ -2959,16 +2962,18 @@ bool CombatII::battle_quick_load_4fd25() {
     loaded.reserve(unit_count);
     if (ok) {
         for (uint32_t i = 0; i < unit_count; ++i) {
-            uint8_t rec[0x88]; uint32_t seq = 0, active = 1, has_link = 0;
+            uint8_t rec[0x88]; uint32_t seq = 0, active = 1, has_link = 0, group = 2;
             uint8_t link_rec[0x88] = {};
             if (fread(rec, 1, sizeof(rec), f) != sizeof(rec)) { ok = false; break; }
             // V8: sub_4F4EF wrote the [+77h] linked record directly after the unit record.
             if (h.version >= 8 && (!qsv_read_u32(f, has_link) || has_link > 1)) { ok = false; break; }
             if (has_link && fread(link_rec, 1, sizeof(link_rec), f) != sizeof(link_rec)) { ok = false; break; }
             if (!qsv_read_u32(f, seq) || (h.version >= 3 && !qsv_read_u32(f, active))) { ok = false; break; }
+            if (h.version >= 9 && !qsv_read_u32(f, group)) { ok = false; break; }
             CombatUnitPlacement u = battle_unpack_unit_record(rec);
             u.list_seq = seq;
             u.active = active != 0;
+            u.group = (int)group;    // V9: restore the scheduler group (v8 and older: 2, unpack default)
             // sub_4F85C: when the loaded record has [+12h] != 0 (summon/revive) and its group
             // is below 4, the type tag is set to FFh, a fresh slot is assigned and the same
             // LUT page 2 recolor runs. Every other record takes the type's normal slot

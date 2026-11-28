@@ -182,10 +182,11 @@ int CombatII::battle_image_slot(int type_code) {
             return slot;
         }
     }
-    // Slot Full: sub_114EF reports "Slot Full" and returns 0x64 (after an out-of-range
-    // refcount write at index 100); the port returns 0 as a safe fallback. Unreachable until
-    // 100 distinct character types have been loaded.
-    return 0;
+    // Slot Full (ASM loc_1154B): sub_55EBC + the "Character Enter Too Many!!!" / "Slot Full"
+    // messages, then the out-of-range refcount write unk_E4FC8[100] = 1 and ax = 0x64. Returning
+    // 0x64 keeps slot 0 (which may be recoloured) from being handed to the failed type.
+    // Unreachable until 100 distinct character types have been loaded.
+    return 0x64;
 }
 
 // sub_114EF with unk_E502D[type] == FFh: claim the first slot whose refcount is 0 without

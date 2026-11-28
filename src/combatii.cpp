@@ -94,13 +94,13 @@ void CombatII::camera_center_on(int tx, int ty) {
     int maxy = (int)map_h_ - 12; if (maxy < 0) maxy = 0;
     if (cx > maxx) cx = maxx;                 // sub eax,0Ch; jle -> clamp to map-12
     if (cy > maxy) cy = maxy;
-    if (cx == cam_tile_x_ && cy == cam_tile_y_) return;
     // loc_112B7 (ASM 1795-1813): after either scroll path sub_1124A always runs
     //   sub_4A321 -> sub_49FE1(tx,ty) -> sub_454B3 -> sub_4A106 -> sub_5E9E8.
+    // There is no same-tile early return: when (cx,cy) already equals the camera, sub_11003
+    // computes si/di == 0 and returns without drawing, but loc_112B7 still draws this frame.
     // sub_49FE1 selects the unit standing on the *requested* tile (not the clamped camera tile)
     // and sub_4A106 draws its selection box and HP over a fresh world frame. The port has no
-    // persistent dword_FB1BC, so it draws the box directly. (The cases where the camera is
-    // already on the target still skip the frame entirely; that is R2-007.)
+    // persistent dword_FB1BC, so it draws the box directly.
     auto draw_target_frame = [&](int sel_tx, int sel_ty) {
         render_battle_frame();                                     // sub_454B3
         const int su = battle_unit_index_at(sel_tx, sel_ty);       // sub_49FE1 -> sub_11DB2
