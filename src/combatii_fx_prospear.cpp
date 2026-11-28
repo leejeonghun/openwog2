@@ -110,7 +110,7 @@ int CombatII::battle_fx_21944(int unit_index, int tx, int ty, int k) {
     // the table (unk_F0DAA), so the port reuses the current magic_frames_.
     if (magic_frames_.empty()) return 0;
     // The raised frames use the D66A8 sprite stream directly (sub_5F4AF).
-    const NC2Frame* body = nc2_frame_for(u.sprite_type, (int)u.facing & 3, 0);
+    const NC2Frame* body = nc2_frame_for_slot(u.sprite_type, (int)u.facing & 3, 0, u.slot_hint);
     // sub_21944+1B..+2B: sub_44D6E(1, [60h]); the matching sub_44D6E(0) is at the tail.
     struct DimGuard {
         bool& dim;

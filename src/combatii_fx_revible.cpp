@@ -232,7 +232,7 @@ int CombatII::battle_fx_59a70(int caster_index, int revived_index) {
 
     // ---- (7) 36 frames (the unit returns) ----
     sfx(0x33);                                                     // sub_4F4CD(33h)
-    const NC2Frame* unit_frame = nc2_frame_for(A.sprite_type, dir, 0);   // D66A8 (facing, pose 0)
+    const NC2Frame* unit_frame = nc2_frame_for_slot(A.sprite_type, dir, 0, A.slot_hint); // D66A8 (facing, pose 0)
     for (int f = 0; f < 0x24 && !should_exit_; ++f) {
         battle_fx_shade_rect(0, 0, 0x140, 0xC8);                   // 5EDDE(0,0,140h,C8h)
         const int fi = 0x10 + (f & 1);

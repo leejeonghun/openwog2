@@ -1089,6 +1089,23 @@ private:
     std::unordered_map<int, int> battle_image_slots_;
     uint8_t battle_image_slot_ref_[100] = {};
     int battle_image_slot(int type_code);
+    // sub_114EF with unk_E502D[type] == FFh: claim a fresh slot without touching the type map
+    // (sub_2B5C4 restores the type's tag afterwards, so other units keep the old slot).
+    int battle_image_slot_force_new();
+    // sub_6102C(4) row 2 / sub_610B6(2, 0Eh): palette-14 recolor page. Built from the
+    // weather-adjusted snapshot after sub_4ED18 and rebuilt when that snapshot is retaken
+    // (once per scenario load), as sub_55B59 does at each battle start.
+    uint8_t battle_lut2_[256] = {};
+    bool battle_lut2_ready_ = false;
+    bool battle_slot_recolored_[100] = {};
+    void battle_build_lut2();
+    // sub_6104A(2) + sub_100F2: recolor the 44 frames of a slot. The port remaps pixels when
+    // the slot's frame is requested, so only the page and the slot mark are kept here.
+    void battle_slot_recolor(int slot);
+    // nc2_frame_for + the slot's LUT page 2 remap (sub_100F2). Returns the plain frame for
+    // every slot that was not recolored.
+    const NC2Frame* nc2_frame_for_slot(int type_code, int dir, int pose, int slot) const;
+    mutable std::unordered_map<uint64_t, NC2Frame> battle_recolored_frames_;
     std::string characte_path(const char* filename) const;
     // Loads the NC2 file for a type code on demand and returns the (facing, pose) frame.
     const NC2Frame* nc2_frame_for(int type_code, int dir, int pose) const;
@@ -2620,7 +2637,9 @@ private:
     int battle_weapon_collect_rect(int unit_index, int x, int y, int count, int range,
                                    int* last_x = nullptr, int* last_y = nullptr); // 1A452/1A552 + 1A1F8
     int battle_weapon_collect_rect_actor(int unit_index, int x, int y, int count, int range); // 1A452/1A552 + 1A25F
-    int battle_weapon_collect_dia_at(int unit_index, int x, int y, int r); // 1AC08/1AC59 + 1A1F8
+    int battle_weapon_collect_dia_at(int unit_index, int x, int y, int r,
+                                     bool actor_rule = false); // 1AC08/1AC59 + 1A1F8/1A25F
+    void battle_teleport_prepare(int unit_index);                     // sub_3BFAC prologue (169D7 + 13D02)
     void battle_weapon_front_tile(int unit_index, int& fx, int& fy); // 1A1DE + 1A146
     void battle_knockback_2e896(int target_index, int dir);          // sub_2E896
     bool battle_weapon_2ed9a_pick(int unit_index, int radius, int& out_x, int& out_y); // sub_2ED9A

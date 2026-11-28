@@ -2929,6 +2929,17 @@ bool CombatII::battle_quick_load_4fd25() {
             CombatUnitPlacement u = battle_unpack_unit_record(rec);
             u.list_seq = seq;
             u.active = active != 0;
+            // sub_4F85C: when the loaded record has [+12h] != 0 (summon/revive) and its group
+            // is below 4, the type tag is set to FFh, a fresh slot is assigned and the same
+            // LUT page 2 recolor runs. Every other record takes the type's normal slot
+            // (`[60h] = sub_1198D([61h])`).
+            if (u.item_use_12 != 0 && u.group < 4) {
+                const int qsv_slot = battle_image_slot_force_new();
+                u.slot_hint = qsv_slot;
+                battle_slot_recolor(qsv_slot);
+            } else {
+                u.slot_hint = battle_image_slot(u.sprite_type);
+            }
             loaded.push_back(u);
         }
     }
@@ -3724,7 +3735,9 @@ void CombatII::play_unit_death_anim(int unit_index) {
         return;
     }
     // ---- sub_463FB ----
-    const NC2Frame* f0 = nc2_frame_for(U.sprite_type, 0, 0);
+    // sub_10194 decodes dword_D66B1[slot*572], the unit slot's facing-0/pose-0 sprite, so a
+    // recoloured slot feeds LUT page 2 colours into unk_F8A88 as well.
+    const NC2Frame* f0 = nc2_frame_for_slot(U.sprite_type, 0, 0, U.slot_hint);
     // sub_10194(unk_F8A88, dword_D66B1[slot*572] = the facing-0/pose-0 sprite) decodes the RLE,
     // counts the PIXELS and stores each decoded pixel value in order in unk_F8A88. When the total
     // would pass 0x100 it rewinds that run and stops (hence the 255 cap). The returned di is the
@@ -5160,15 +5173,22 @@ bool CombatII::battle_player_input() {
                     return false;
                 }
                 case SubRingKind::Item: {
-                    battle_item_pending_dx_ = opt;
                     if (battle_trace_)
                         fprintf(stderr, "COMBAT: item dx=%d (4CDBD)\n", opt);
-                    // Warp (dx 0) and mount/dismount (dx 5) open the sub_4A483 destination cursor.
-                    if (opt == 0 || opt == 5) {
+                    // Warp (dx 0), mount/dismount (dx 5) and teleport (dx 9) open the
+                    // sub_4A483 destination cursor. sub_3BFAC paints the E8F46 diamond before
+                    // entering that loop, so the teleport marks happen here as well. The
+                    // pending dx is stored after the close animation: 44D67(1) only comes on
+                    // once the marking is done, so the collapsing ring must not shade the
+                    // previous battle_e8_grid_.
+                    if (opt == 0 || opt == 5 || opt == 9) {
                         ring_sub_close();
+                        battle_item_pending_dx_ = opt;
+                        if (opt == 9) battle_teleport_prepare(ui);
                         return false;
                     }
                     // Immediate items run right away, as on the number-key path.
+                    battle_item_pending_dx_ = opt;
                     ring_sub_close();
                     battle_item_select_ = false;
                     battle_item_pending_dx_ = -1;
@@ -5768,8 +5788,10 @@ bool CombatII::battle_player_input() {
         if (battle_item_select_ && (size_t)k < battle_item_options_.size()) {
             const int dx = battle_item_options_[(size_t)k];
             battle_item_pending_dx_ = dx;
-            if (dx == 0 || dx == 5) {
-                // Warp (3C7D1) and mount/dismount (3B7CE/3B614) open the target click cursor.
+            if (dx == 0 || dx == 5 || dx == 9) {
+                // Warp (3C7D1), mount/dismount (3B7CE/3B614) and teleport (3BFAC) open the
+                // target click cursor.
+                if (dx == 9) battle_teleport_prepare(ui);
                 return false;
             }
             battle_item_select_ = false;
@@ -6706,7 +6728,10 @@ void CombatII::battle_panel_ai_4b4ca(int unit_index) {
     int16_t residue = 0;
 
     auto unit_portrait_and_name = [&](const CombatUnitPlacement& t) {
-        if (const NC2Frame* fr = nc2_frame_for(t.sprite_type, 0, 0)) blit_nc2_frame(0x18, y, *fr);   // sub_5F3FD
+        // sub_5F3FD draws D66A8[slot*572 + 9] (facing 0, pose 0) of the unit's image slot, so a
+        // recoloured slot (soul recall) shows the recoloured portrait here as well.
+        if (const NC2Frame* fr = nc2_frame_for_slot(t.sprite_type, 0, 0, t.slot_hint))
+            blit_nc2_frame(0x18, y, *fr);                                                         // sub_5F3FD
         draw_text_wrapped(0x38, y + 4, t.name);                                                       // sub_5E048(0x38, y+4, "%s")
         residue = 0;                                          // sub_5F3FD leaves bx at 0
     };
@@ -9853,7 +9878,13 @@ int CombatII::battle_spell_2c36a(int unit_index, int k) {
         z.walk_off_x = z.walk_off_y = 0;
         z.knock_dx = z.knock_dy = 0;
         z.list_seq = battle_next_list_seq();                     // sub_1134F
-        z.slot_hint = battle_image_slot(z.sprite_type);          // [60h] = sub_1198D([61h])
+        // sub_2B5C4: unk_E502D[type] = FFh, then sub_1198D allocates a fresh slot and
+        // [60h] = slot; sub_6104A(2) + sub_100F2 recolor its 44 frames with LUT page 2.
+        // sub_2B5C4 restores the type's tag afterwards, so other units of this type keep
+        // the original slot and colors.
+        const int soul_slot = battle_image_slot_force_new();
+        z.slot_hint = soul_slot;                                 // [60h]
+        battle_slot_recolor(soul_slot);
         z.occupancy_hp_known = true;
         battle_ssp_play("regen.ssp", 0x32);                      // 4F460("regen.ssp", 32h)
         battle_ssp_play("summon.ssp", 0x33);                     // 4F460("summon.ssp", 33h)
@@ -11781,7 +11812,7 @@ int CombatII::battle_weapon_f1474(int unit_index, int idx, int dx) {
         // then stamps pose 9 silhouettes plus the pose 9/pose 6 main frame at the target.
         const NC2Frame* poses[5] = {};
         for (int i = 0; i < 5; ++i)
-            poses[i] = nc2_frame_for(u.sprite_type, u.facing & 3, 5 + i);
+            poses[i] = nc2_frame_for_slot(u.sprite_type, u.facing & 3, 5 + i, u.slot_hint);
         const int ax = ((int)u.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X + 0x0C;
         const int ay = ((int)u.y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y - 2;
         int ex = ax, ey = ay;
@@ -12479,8 +12510,10 @@ int CombatII::battle_weapon_collect_rect_actor(int unit_index, int x, int y, int
     return (int)battle_target_list_.size();
 }
 
-// sub_1AC08/1AC59 + sub_1A1F8 diamond collection around (x,y,r). Rebuilds F0648.
-int CombatII::battle_weapon_collect_dia_at(int unit_index, int x, int y, int r) {
+// sub_1AC08/1AC59 + sub_1A1F8 (or sub_1A25F when actor_rule) diamond collection around
+// (x,y,r). Rebuilds F0648. sub_3B9E1 is the one caller that collects through sub_1A25F (ASM
+// 58309-58330), so its [+14h]&1 filter has to be selectable here.
+int CombatII::battle_weapon_collect_dia_at(int unit_index, int x, int y, int r, bool actor_rule) {
     battle_target_list_.clear();
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return 0;
     const g2range::Env env = battle_range_env_make();
@@ -12488,10 +12521,34 @@ int CombatII::battle_weapon_collect_dia_at(int unit_index, int x, int y, int r) 
     const g2range::Unit au = battle_range_unit(unit_index);
     rg.dia_init(x, y, r);                                         // sub_1AC08
     int px = 0, py = 0;
-    for (int guard = 0; guard < 0x10000 && rg.dia_next(px, py); ++guard) // sub_1AC59
-        rg.add_by_army(px, py, au.army);                          // sub_1A1F8
+    for (int guard = 0; guard < 0x10000 && rg.dia_next(px, py); ++guard) { // sub_1AC59
+        if (actor_rule) rg.add_by_actor(px, py, au);              // sub_1A25F
+        else            rg.add_by_army(px, py, au.army);          // sub_1A1F8
+    }
     battle_target_list_ = rg.list;
     return (int)battle_target_list_.size();
+}
+
+// sub_3BFAC prologue: sub_169D7 rebuilds E8F46, then sub_1AC08/sub_1AC59 walk the radius
+// 5/7 diamond and sub_13D02 writes 1 into every cell that is still empty (-1). The marking
+// is what makes sub_165C2's `13CBD >= 0` test accept the clicked destination; a footprint
+// cell outside the diamond stays -1 and still fails there (the original limitation).
+void CombatII::battle_teleport_prepare(int unit_index) {
+    battle_e8_grid_.clear();
+    if (unit_index < 0 || (size_t)unit_index >= units_.size()) return;
+    battle_ai_169d7_reset(unit_index, battle_e8_grid_);                // sub_169D7
+    if (battle_e8_grid_.size() != (size_t)map_w_ * (size_t)map_h_) return;
+    const CombatUnitPlacement& u = units_[(size_t)unit_index];
+    // sub_3BFAC reads unk_731B4[class*15] (class_stat_guard_kind): 1 -> 5, else 7.
+    const int radius = ((int)class_stat_guard_kind(u.combat_class) == 1) ? 5 : 7;
+    const g2range::Env env = battle_range_env_make();
+    g2range::Range rg(env);
+    rg.dia_init((int)(int8_t)u.x, (int)(int8_t)u.y, radius);           // sub_1AC08
+    int px = 0, py = 0;
+    for (int guard = 0; guard < 0x10000 && rg.dia_next(px, py); ++guard) { // sub_1AC59
+        if (battle_ai_wc5_diff_read(battle_e8_grid_, px, py) != -1) continue; // sub_13CBD
+        battle_ai_wc5_diff_write(battle_e8_grid_, px, py, 1);          // sub_13D02(..., 1)
+    }
 }
 
 // sub_1A1DE+1A146: the attacker's front tile.
@@ -13882,18 +13939,16 @@ int CombatII::battle_use_item(int unit_index, int dx, int tx, int ty) {
             battle_consume_tp(unit_index, 0x28);                       // sub_45B4E(0x28)
             return -2;
         }
-        case 9: { // sub_3BFAC: teleport - click-move to an E8F46 == -1 tile inside the diamond of
-                   //   radius 5 (class guard kind 1) or 7. Costs 40, returns -2.
+        case 9: { // sub_3BFAC: teleport - click-move to an E8F46-marked tile inside the diamond
+                   //   of radius 5 (class guard kind 1) or 7. Costs 40, returns -2.
             if (tx < 0 || ty < 0 || tx >= (int)map_w_ || ty >= (int)map_h_) return 3;
-            // sub_3BFAC reads byte unk_731B4[class*15] (the class AI stat record's first byte,
-            // class_stat_guard_kind), not the wc1 weapon_class table: 1 -> radius 5, else 7.
-            const int radius = ((int)class_stat_guard_kind(u.combat_class) == 1) ? 5 : 7;
-            const int ux = (int)(int8_t)u.x, uy = (int)(int8_t)u.y;
-            if (std::abs(tx - ux) + std::abs(ty - uy) > radius) return 3;
-            std::vector<int> grid;
-            battle_ai_169d7_reset(unit_index, grid);                    // sub_169D7 (-1 = walkable, empty)
-            if (grid.empty() || battle_ai_wc5_diff_read(grid, tx, ty) != -1) return 3;
-            if (!battle_ai_165c2_ok(tx, ty, unit_index, grid, (int)u.facing & 3)) return 3; // sub_165C2 re-check
+            // sub_169D7 + the empty-cell marking (sub_13D02) of the diamond. Clicking outside
+            // the diamond leaves the cell at -1/-2, so sub_13CBD rejects it and the cursor
+            // keeps waiting (sub_3BFAC loc_3C03C).
+            battle_teleport_prepare(unit_index);
+            if (battle_e8_grid_.size() != (size_t)map_w_ * (size_t)map_h_) return 3;
+            if (battle_ai_wc5_diff_read(battle_e8_grid_, tx, ty) < 0) return 3; // sub_13CBD
+            if (!battle_ai_165c2_ok(tx, ty, unit_index, battle_e8_grid_, (int)u.facing & 3)) return 3; // sub_165C2
             if (!battle_warp_unit(unit_index, tx, ty)) return 3;         // sub_3BF00
             if (should_exit_) return 0;
             battle_consume_tp(unit_index, 0x28);                         // 4CB8B: sub_45B4E(0x28)

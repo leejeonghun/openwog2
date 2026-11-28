@@ -739,10 +739,10 @@ bool CombatII::battle_ai_40295_body(int unit_index, int wc) {
                 const int ux = (int)(int8_t)units_[(size_t)unit_index].x;
                 const int uy = (int)(int8_t)units_[(size_t)unit_index].y;
                 camera_center_on(ux, uy);
-                if (dest_x != ux || dest_y != uy) {
-                    if (!battle_warp_unit(unit_index, dest_x, dest_y)) return finish(kExitTurnEnd);
-                    if (!alive()) return true;
-                }
+                // No same-cell test in sub_40295 loc_4076A: a destination equal to the
+                // current tile still runs sub_3BF00 ("Warp!", 12 frames) and 3C993(0x28).
+                if (!battle_warp_unit(unit_index, dest_x, dest_y)) return finish(kExitTurnEnd);
+                if (!alive()) return true;
                 battle_ai_3c993(unit_index, 0x28);
                 if ((uint16_t)af < 4) units_[(size_t)unit_index].facing = (int8_t)af;
             } else {

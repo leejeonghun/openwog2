@@ -101,13 +101,15 @@ void CombatII::battle_draw_unit_now(int unit_index) {
         const size_t ti = (size_t)u.y * map_w_ + (size_t)u.x;
         if (ti < tile_attr_.size()) tile_attr = tile_attr_[ti];
     }
-    if (const NC2Frame* fr = nc2_frame_for(u.sprite_type, u.facing & 3, (int)u.anim_frame)) {
+    if (const NC2Frame* fr = nc2_frame_for_slot(u.sprite_type, u.facing & 3, (int)u.anim_frame,
+                                               u.slot_hint)) {
         // loc_13165: the preserved record's rider image slot (sub_11B77) on top of the live
         // unit, at the live facing/pose.
         auto draw_stored_form = [&](int depth) {
             if (!u.stored_77 || u.code_b > 6) return;
-            const NC2Frame* wf = nc2_frame_for(battle_rider_image_type(u), u.facing & 3,
-                                               (int)u.anim_frame);
+            const NC2Frame* wf = nc2_frame_for_slot(battle_rider_image_type(u), u.facing & 3,
+                                                   (int)u.anim_frame,
+                                                   u.stored_77 ? u.stored_77->slot_hint : -1);
             if (wf) blit_nc2_frame(sx + wf->x_off, sy + wf->y_off + depth, *wf);
         };
         // Sunken terrain (loc_13016/loc_1302F): drop the sprite by the tile depth and clip its
@@ -196,7 +198,8 @@ void CombatII::fx_trail_step(int unit_index, int pose) {
     auto& u = units_[(size_t)unit_index];
     if (pose >= 0) u.anim_frame = (uint8_t)(pose & 0xFF);
     battle_draw_unit_now(unit_index);
-    const NC2Frame* fr = nc2_frame_for(u.sprite_type, u.facing & 3, (int)u.anim_frame);
+    const NC2Frame* fr = nc2_frame_for_slot(u.sprite_type, u.facing & 3, (int)u.anim_frame,
+                                           u.slot_hint);
     if (!fr) return;
     const int sx = (u.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + UNIT_ANCHOR_X;  // 10971+0Ch
     const int sy = (u.y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + UNIT_ANCHOR_Y;  // 10988-2
@@ -215,7 +218,8 @@ void CombatII::fx_trail_step(int unit_index, int pose) {
 void CombatII::fx_trail_add_at(int unit_index, int x, int y) {
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return;
     const auto& u = units_[(size_t)unit_index];
-    const NC2Frame* fr = nc2_frame_for(u.sprite_type, u.facing & 3, (int)u.anim_frame);
+    const NC2Frame* fr = nc2_frame_for_slot(u.sprite_type, u.facing & 3, (int)u.anim_frame,
+                                           u.slot_hint);
     if (!fr) return;
     FxTrailSlot& slot = fx_trail_[(size_t)fx_trail_end_];
     slot.x = x + fr->x_off;
@@ -370,7 +374,8 @@ int CombatII::battle_fx_2cc3a_anim(int unit_index, int variant, int sfx_id) {
     // picks them by position (ramp[5 - trail + si]), it does not cycle the frame counter.
     static constexpr uint8_t kSwingTrailColor[5] = {0x3D, 0x3C, 0x3A, 0x39, 0x38};
     const NC2Frame* swing[5] = {nullptr, nullptr, nullptr, nullptr, nullptr};
-    for (int i = 0; i < 5; ++i) swing[i] = nc2_frame_for(A.sprite_type, A.facing & 3, 5 + i);
+    for (int i = 0; i < 5; ++i)
+        swing[i] = nc2_frame_for_slot(A.sprite_type, A.facing & 3, 5 + i, A.slot_hint);
     // var_24 (ASM 39841-39853): dword unk_BA8AD[slot*5*8] >> 24 != 0FFh, which addresses
     // byte_BA8B0[slot*0x28] = head_table_[0]. sub_11575 initializes byte_BA8B0[slot*0x28] to 0FFh
     // and overwrites the 40-byte head table at +0x81..+0xA8 only for class 0 (.NC2) when buf[0x80]
@@ -414,7 +419,8 @@ int CombatII::battle_fx_2cc3a_anim(int unit_index, int variant, int sfx_id) {
                                  kSwingTrailColor[5 - trail + si]); // sub_5F517
         }
         // Current pose, one frame (sub_5F3FD).
-        if (const NC2Frame* cf = nc2_frame_for(A.sprite_type, A.facing & 3, 5 + frames % 5))
+        if (const NC2Frame* cf = nc2_frame_for_slot(A.sprite_type, A.facing & 3, 5 + frames % 5,
+                                                    A.slot_hint))
             blit_nc2_frame(sx + cf->x_off, sy + cf->y_off, *cf);
         // Switch on frame % 5 (off_2CC16: case 0 = loc_2D183, 1 = loc_2CFCD,
         //   2 = loc_2D092, 3 = loc_2D1B8, 4 = loc_2D0C4).
@@ -499,7 +505,8 @@ int CombatII::battle_fx_2cc3a_anim(int unit_index, int variant, int sfx_id) {
             blit_nc2_frame_solid(sx + swing[trail_pose]->x_off, sy + swing[trail_pose]->y_off,
                                  *swing[trail_pose], kSwingTrailColor[5 - trail + si]);
         }
-        if (const NC2Frame* cf = nc2_frame_for(A.sprite_type, A.facing & 3, 5 + frames % 5))
+        if (const NC2Frame* cf = nc2_frame_for_slot(A.sprite_type, A.facing & 3, 5 + frames % 5,
+                                                    A.slot_hint))
             blit_nc2_frame(sx + cf->x_off, sy + cf->y_off, *cf);
         --trail;
         battle_fx_commit();                                      // sub_5E9E8
@@ -1304,7 +1311,7 @@ void CombatII::battle_fx_32589_anim(int unit_index, int target_index) {
     const auto& T = units_[(size_t)target_index];
     const int tx = (T.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X + 0x0C;
     const int ty = (T.y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y - 2;
-    const NC2Frame* tfr = nc2_frame_for(T.sprite_type, T.facing & 3, 0);  // D66A8 pose 0
+    const NC2Frame* tfr = nc2_frame_for_slot(T.sprite_type, T.facing & 3, 0, T.slot_hint); // D66A8 pose 0
     const int impact = dir_base + 9;                                     // var_C + 9
     sfx(0x33);                                                           // 4F4CD(33h)
     for (int i = 0; i < 0x24 && !should_exit_; ++i) {
@@ -1397,8 +1404,8 @@ bool CombatII::battle_fx_32bcb_anim(int unit_index) {
     const int var54 = (A.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X + 0x0C; // 10971+0Ch
     const int si_y = (A.y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y - 2;    // 10988-2
     game_timer_set(0x0C);                                                  // 1033B(0Ch)
-    const NC2Frame* fr8 = nc2_frame_for(A.sprite_type, 0, 8);              // D66A8 pose 8
-    const NC2Frame* fr9 = nc2_frame_for(A.sprite_type, 0, 9);              // D66A8 pose 9
+    const NC2Frame* fr8 = nc2_frame_for_slot(A.sprite_type, 0, 8, A.slot_hint); // D66A8 pose 8
+    const NC2Frame* fr9 = nc2_frame_for_slot(A.sprite_type, 0, 9, A.slot_hint); // D66A8 pose 9
 
     // ---- 33C31/33E06: 60 ice particles ----
     // 32E35 creates all 60 at once (sub-step = 499BD(6)+2, angle = 499BD(168h)); the (3)
@@ -1678,7 +1685,7 @@ bool CombatII::battle_fx_32bcb_anim(int unit_index) {
     for (int var28 = 0; var28 <= 8 && !should_exit_; ++var28) {
         if (var28 < 5) {
             for (int varC = 7; varC <= 9 && !should_exit_; ++varC) {
-                const NC2Frame* fv = nc2_frame_for(A.sprite_type, 0, varC);
+                const NC2Frame* fv = nc2_frame_for_slot(A.sprite_type, 0, varC, A.slot_hint);
                 for (int r = 0; r < 3 && !should_exit_; ++r) {
                     battle_fx_world();
                     battle_fx_overlay();
@@ -1712,7 +1719,7 @@ bool CombatII::battle_fx_32bcb_anim(int unit_index) {
     }
     // (7) var_8 7..9, three frames each
     for (int var8 = 7; var8 <= 9 && !should_exit_; ++var8) {
-        const NC2Frame* fv = nc2_frame_for(A.sprite_type, 0, var8);
+        const NC2Frame* fv = nc2_frame_for_slot(A.sprite_type, 0, var8, A.slot_hint);
         for (int r = 0; r < 3 && !should_exit_; ++r) {
             battle_fx_world();
             battle_fx_overlay();

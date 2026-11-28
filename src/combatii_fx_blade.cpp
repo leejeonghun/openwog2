@@ -41,8 +41,8 @@ struct FxPoint { int x = 0; int y = 0; };
 void CombatII::battle_fx_silhouette_13669(int unit_index, int color) {
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return;
     const CombatUnitPlacement& u = units_[(size_t)unit_index];
-    auto draw = [&](int sprite_type) {
-        const NC2Frame* fr = nc2_frame_for(sprite_type, u.facing & 3, u.anim_frame);
+    auto draw = [&](int sprite_type, int slot) {
+        const NC2Frame* fr = nc2_frame_for_slot(sprite_type, u.facing & 3, u.anim_frame, slot);
         if (!fr || fr->pixels.empty()) return;
         DrawEntry e{};
         e.x = (u.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + UNIT_ANCHOR_X + u.walk_off_x;
@@ -52,8 +52,9 @@ void CombatII::battle_fx_silhouette_13669(int unit_index, int color) {
         e.nc2 = fr;
         blit_draw_entry(e);                           // adds fr->x_off/y_off
     };
-    draw(u.sprite_type);
-    if (u.stored_77 && u.code_b <= 6) draw(battle_rider_image_type(u));
+    draw(u.sprite_type, u.slot_hint);
+    if (u.stored_77 && u.code_b <= 6)
+        draw(battle_rider_image_type(u), u.stored_77->slot_hint);
 }
 
 // sub_204E8(eax=ty, edx=tx, ebx=N, ecx=flag, [esp+4]=repeat count): "magic<N>.nsp" enchant.

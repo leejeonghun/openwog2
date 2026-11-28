@@ -485,8 +485,8 @@ int CombatII::battle_deploy_list(const std::vector<size_t>& party, std::vector<i
         fill_rect(x - 0xB, y - 0xB, 0x17, 0x17, 0);
         const int fi = (r.battle_gauge == 0x80) ? 3 : (0xFF - (int)r.battle_gauge);
         const NC2Frame* fr = nullptr;
-        if (fi == 3) fr = nc2_frame_for(r.sprite_type, 1, 0);          // record 11 = facing 1, pose 0 ("placed" icon)
-        else if (fi >= 0 && fi <= 2) fr = nc2_frame_for(r.sprite_type, 0, 2 + fi);   // records 2,3,4
+        if (fi == 3) fr = nc2_frame_for_slot(r.sprite_type, 1, 0, r.slot_hint); // record 11 = facing 1, pose 0 ("placed" icon)
+        else if (fi >= 0 && fi <= 2) fr = nc2_frame_for_slot(r.sprite_type, 0, 2 + fi, r.slot_hint); // records 2,3,4
         if (fr) blit_nc2_frame(x + fr->x_off, y + fr->y_off, *fr);
         if (r.battle_gauge == 0x80) render_dialog_dimming(x - 0xB, y - 0xB, 0x17, 0x17);   // again with mode 1
     };
