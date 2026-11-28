@@ -10280,8 +10280,32 @@ void CombatII::battle_ssp_play(const char* name, int id) {
     Audio::stop_sfx_channels();                      // 5CD0D(2..7)
     battle_ssp_slot_path_[(size_t)slot] =
         game_path((std::string("MAGICSPR/") + name).c_str());
+    // sub_5CA62 reads the file into dword_1124B0[slot] immediately (after the 0x40 header), so
+    // the later 4F4CD play has no load latency. Decode the chunk here for the same effect.
+    Audio::preload_cached(battle_ssp_slot_path_[(size_t)slot]);
     if (battle_trace_) fprintf(stderr, "COMBAT: ssp load '%s' id %d -> slot %d (4F460)\n",
                                name, id, slot);
+}
+
+// sub_55B59 (ASM 94625-94673 and 94688-94721): after sub_4F3BD it loads the 34 basic battle
+// samples through sub_4F460, ids 1..0x22, with a sub_44C75 progress mark after id 0x12. The
+// original loops the two blocks unconditionally; the caller splits them at the marks.
+void CombatII::battle_sfx_preload_55b59(int first_id, int last_id) {
+    static const char* const kSamples[] = {
+        nullptr,
+        "sword.vsp",    "fist.vsp",     "bow.vsp",       "whip.vsp",     "cannon.vsp",
+        "bow2.vsp",     "battler.vsp",  "gun.vsp",       "shout.vsp",    "shield.vsp",
+        "dry-step.vsp", "sno-step.vsp", "gra-step.vsp",  "wat-step.vsp", "walkmany.vsp",
+        "horse-w.vsp",  "fly-mech.vsp", "fly-dra.vsp",   "wong.vsp",     "ha-m.vsp",
+        "ha-f.vsp",     "damage-m.vsp", "damage-f.vsp",  "dmg-mech.vsp", "dead-m.vsp",
+        "dead-f.vsp",   "bury.vsp",     "dead-c.vsp",    "turn.vsp",     "item.vsp",
+        "command.vsp",  "skeleton.vsp", "l_mon-a.vsp",   "dragon.vsp",
+    };
+    if (first_id < 1) first_id = 1;
+    if (last_id > 0x22) last_id = 0x22;
+    for (int id = first_id; id <= last_id; ++id) {
+        if (kSamples[id]) battle_ssp_play(kSamples[id], id);
+    }
 }
 
 // All SSPs a handler loads through 4F460, with the slot id of each call site (the id is not
@@ -14501,6 +14525,9 @@ void CombatII::render_battle_clock() {
     int yyyy = (int)tod_day_ / 0xDC + 0x4B7;
     int dd = (int)tod_day_ % 0xDC + 1;
     char date[32], hm[32];
+    // sub_45844's format string is "%04d %02d": the data definition (COMBATII.ASM 156973)
+    // and the EXE bytes both hold 0x20 (the code listing's comment shows a raw tab byte from
+    // the comment text, not the format data).
     snprintf(date, sizeof(date), "%04d %02d", yyyy, dd);
     snprintf(hm, sizeof(hm), "%02d:%02d", ecx, edi);
     if (!small_font_tried_) load_small_font();

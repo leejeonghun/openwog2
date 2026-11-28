@@ -2419,6 +2419,7 @@ private:
     bool battle_nsp_load(const char* name);    // sub_1FEA4 (MAGICSPR\<name>)
     void battle_nsp_release();                 // sub_1FFCD (release the table)
     void battle_ssp_play(const char* name, int id);   // sub_4F460 (load into slot id+1)
+    void battle_sfx_preload_55b59(int first_id, int last_id); // sub_55B59's 34 VSP loads (id 1..0x22)
     void battle_spell_load_ssps(int r_code);          // all 4F460 loads of the handler
     const char* battle_spell_nsp(int r_code) const;   // NSP that handler's driver loads through 1FEA4
     void battle_spell_pace_287af(const std::vector<int>* pose_targets = nullptr); // sub_287AF (24-frame hit, pose reset, cadence restore)

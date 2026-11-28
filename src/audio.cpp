@@ -129,9 +129,12 @@ static Mix_Chunk* load_chunk_from_file(const std::string& filepath) {
             chunk = load_raw_pcm_as_chunk(pcm_data, pcm_len, 22050, 1);
         }
     } else {
-        fprintf(stderr, "AUDIO: Loading '%s' as Raw 8-Bit PCM (22050Hz Mono, %ld bytes)\n",
-                filepath.c_str(), file_size);
-        chunk = load_raw_pcm_as_chunk(buffer.data(), (size_t)file_size, 22050, 1);
+        // sub_5CA62: MAGICSPR samples carry a 0x40-byte header. The original does
+        // `filelength - 0x40`, seeks to 0x40 and reads the rest as 8-bit PCM.
+        const size_t skip = (file_size > 0x40) ? 0x40 : 0;
+        fprintf(stderr, "AUDIO: Loading '%s' as Raw 8-Bit PCM (22050Hz Mono, %ld bytes, skip %zu)\n",
+                filepath.c_str(), file_size, skip);
+        chunk = load_raw_pcm_as_chunk(buffer.data() + skip, (size_t)file_size - skip, 22050, 1);
     }
 
     if (!chunk) fprintf(stderr, "AUDIO: warning: Failed to process sound '%s'\n", filepath.c_str());
@@ -162,6 +165,13 @@ static Mix_Chunk* cached_chunk(const std::string& filepath) {
     if (!chunk) return nullptr;
     g_chunk_cache[filepath] = chunk;
     return chunk;
+}
+
+bool Audio::preload_cached(const std::string& filepath) {
+    if (!initialized_) {
+        if (!init()) return false;
+    }
+    return cached_chunk(filepath) != nullptr;
 }
 
 bool Audio::play_cached(const std::string& filepath, int volume) {

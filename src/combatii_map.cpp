@@ -1979,11 +1979,14 @@ bool CombatII::load_scenario(const std::string& sce_filename) {
     battle_load_time_of_day();
     // Ensure sprites available for cutscene overlay (sub_55B59's VSP stage).
     load_battle_sprites();
+    // sub_55B59: sub_4F460 loads the 34 basic battle samples (MAGICSPR/*.VSP, ids 1..0x22).
+    // The original splits the block with two sub_44C75 marks: ids 1..0x12, then 0x13..0x22.
+    battle_sfx_preload_55b59(1, 0x12);
+    if (show_start_banner) battle_g2msg_progress_tick();           // sub_44C75
+    battle_sfx_preload_55b59(0x13, 0x22);
     if (show_start_banner) {
-        // sub_55B59: two sub_44C75 marks, after the first 18 VSPs and after the remaining 16.
         // The original reloads them in a fresh process; the port draws the marks per scenario
         // load even when the sprite bank is already cached in this process.
-        battle_g2msg_progress_tick();                              // sub_44C75
         battle_g2msg_progress_tick();                              // sub_44C75
     }
     return true;

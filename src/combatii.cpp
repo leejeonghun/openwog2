@@ -539,9 +539,19 @@ bool CombatII::wait_key_or_ticks(int ticks) {
     while (true) {
         input_.update();
         if (input_.quit_requested()) { should_exit_ = true; return true; }
-        if (input_.is_key_pressed(SDLK_ESCAPE)) { skip_cutscene_ = true; return true; }
-        if (input_.was_left_clicked() || input_.is_key_pressed(SDLK_SPACE)
-            || input_.is_key_pressed(SDLK_RETURN)) {
+        // loc_49A04/loc_49A27: any key in the BIOS buffer ends the wait (getch_ consumes it;
+        // an extended key is consumed with its second byte). Modifier-only input never enters
+        // the buffer, which any_getch_key_pressed() reproduces. Esc keeps the port-only cutscene
+        // skip, but it is still consumed exactly like the original's getch_.
+        if (input_.any_getch_key_pressed()) {
+            const bool esc = input_.is_key_pressed(SDLK_ESCAPE);
+            input_.consume_event();
+            if (esc) { skip_cutscene_ = true; return true; }
+            return false;
+        }
+        // sub_5D22E mouse event 2: the click is popped from the queue before returning.
+        if (input_.was_left_clicked()) {
+            input_.consume_event();
             return false;
         }
         if (game_timer_poll()) return false;
@@ -664,7 +674,10 @@ bool CombatII::show_scenario_condition() {
     battle_dim_row0_ = true; // sub_44D6E(1)
     render_battle_frame();
     battle_dim_row0_ = false; // main_ clears sub_44D6E(0) after the display; the dim is in the frame
-    // Header at EXE 0x77D63, "[ scenario condition ] \n" (Johab; 5E048 treats 0x0A as a newline).
+    // Header at EXE 0x77D63, "[ scenario condition ] \n" (Johab; 5E048 treats 0x0A as a
+    // newline). The data definition (COMBATII.ASM 156987) and the EXE bytes both hold 0x20
+    // around the brackets; the code listing's comment carries raw tab bytes in the comment
+    // text, not in the string data.
     static const std::string kHeader(
         "\x5b\x20\xaf\xa1\x90\x61\x9f\xa1\xb5\xa1\x20\xb9\xa1\x88\xe5\x20\x5d\x20\x0a",
         19);
