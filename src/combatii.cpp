@@ -1366,6 +1366,11 @@ int CombatII::run(const std::string& scenario_param){
                         cam_tile_x_, cam_fine_x_, cam_tile_y_, cam_fine_y_);
             }
             bool manual_scroll = handle_scroll_input(timer_now_us());
+            // loc_5589F draws through sub_454B3, which has no sub_5046B call (71729-71737); the
+            // step here is the port's stand-in for scrolls the original consumes in its blocking
+            // loops. sub_51211's zero-activation frame (loc_51437) also runs sub_4559F, so one
+            // loop iteration can step twice while a scroll is pending; each step is followed by a
+            // present, so only the arrival time differs (see doc/combatii_review_5_fix.md).
             if (!manual_scroll) camera_update_frame();
             render_battle_viewer();
             pal_cycle_step();                                      // sub_600D4

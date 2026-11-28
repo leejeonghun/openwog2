@@ -3607,7 +3607,9 @@ void CombatII::battle_spawn_queue_step() {
     }
     if (merged.walk_units.empty()) {
         // sub_51211 loc_5141E: zero activated records skips sub_16D3E but still runs
-        // sub_4559F + sub_5E9E8.
+        // sub_4559F + sub_5E9E8. loc_5589F's own frame has no sub_5046B, but the port's viewer
+        // step earlier in the same loop iteration may already have advanced the camera; both
+        // calls are presented, so this only reaches the same target earlier.
         camera_update_frame();
         present_cutscene_frame();
         return;
