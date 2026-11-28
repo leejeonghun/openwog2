@@ -210,6 +210,11 @@ struct CombatUnitPlacement {
     int max_hp = 100;    // [unit+0x4C]
     bool occupancy_hp_known = false; // true only when the source record had an explicit positive [+0x48] HP value
     bool active = true;  // removed first by 0x04 (retreat) / 0x0A
+    // sub_5069C (loc_506A9) stores a record whose destination failed sub_16699 only in the
+    // 32-slot unk_1006BC queue. sub_50D9F skipped loc_510AB/loc_51108 for it, so it is not
+    // linked into dword_CC968 until sub_51211 activates it (ASM 88145-88198), and sub_501BA
+    // cannot select it in the meantime.
+    bool spawn_queued = false;
     bool deploy_roster = false; // deployment phase (sub_55518): party record 4EA22 put in CC990, or its deploy copy
     int8_t ai_mode = -1; // [unit+0x82] AI state/control byte (VM_AI, SCE loader)
     // ---- Fields read directly from the SCE unit record ----
@@ -315,10 +320,10 @@ struct VmWalkUnit {
     // decides the walk/drop frame counts. The 8-bit negate/sign-extend matters when
     // count1 >= 0x80, where the value is not count2 + count1 + 1.
     int count2 = 0;
-    // sub_50D9F var_24 for a K==1 record: non-zero means the drop tile is relocated by
-    // sub_50D3A on the shared sub_169D7 grid. The relocation runs at playback time
-    // (battle_spawn_drop_relocate), because the grid must see the live occupancy.
-    bool drop_relocate = false;
+    // sub_50D9F var_24 write for this record (loc_50E71..loc_50EDD): -1 = the record did not
+    // write the slot (raw army != 0), 0/1 = sub_500ED failed/succeeded for a raw-army-0
+    // record. The value is applied at playback, in record order, to spawn_var24_carry_.
+    int var24_write = -1;
 };
 struct VmEvent {
     VmEventType type = VmEventType::Message;
@@ -381,6 +386,9 @@ struct VmEvent {
     //   dword_F0B9C+2 = walk repeat count (sub_508E6 adds 8 in mode 1).
     int spawn_mode = 0;
     int spawn_steps = 0;
+    // True when this event came out of sub_5069C's queue and is activated by sub_51211. Only
+    // that path adds the second [+0Eh] increment at loc_51380.
+    bool spawn_from_queue = false;
     std::vector<int> spawn_units; // all units activated by this 0x03 event (walk_units holds only the effect targets)
     // Attack / UnitPose (0x07 sub_51C74)
     int attacker_unit = -1;               // parse-time hint; playback resolves attacker_ref_sel/id
@@ -579,7 +587,7 @@ private:
     // walk/drop.
     void battle_spawn_activate(const VmEvent& ev);
     // sub_50D9F loc_51108..loc_5117A (K==1 only): sub_169D7 rebuilds E8F46 from the first
-    // record's unit, then every record with drop_relocate set is relocated with sub_50D3A and
+    // record's unit, then every record whose var_24 gate is non-zero is relocated with sub_50D3A and
     // marked with sub_13D02(x, y, -2). Runs at playback, right before the drop animation.
     void battle_spawn_drop_relocate(const VmEvent& ev);
     // S17 (sub_50D9F/sub_5069C/sub_51211): a 0x03 reinforcement checks each record's destination
@@ -600,6 +608,14 @@ private:
     // [+0]==0).
     struct PendingSpawn { VmEvent ev; bool used = false; };
     std::vector<PendingSpawn> battle_spawn_queue_;
+    // sub_50D9F var_24 is an uninitialised stack slot at [esp+24h-24h], the bottom of its 0x24
+    // byte local area. sub_52E55 issues every 0x03 command from the same call site with the same
+    // frame, so a raw-army-0 record's write carries over to later records and later 0x03
+    // commands. The first entry is ambient stack content; the observed 1-5 run enters non-zero,
+    // so the model starts at 1 and reproduces every deterministic write (sub_500ED found -> 1,
+    // not found -> 0) from there. The writes are applied while the Spawn event plays (execution
+    // order), not while the parser scans.
+    int spawn_var24_carry_ = 1;
     void battle_spawn_enqueue(const VmEvent& single);    // sub_5069C
 
     // ---- Camera scrolling (sub_50339 sets up, sub_5046B advances every frame) ----

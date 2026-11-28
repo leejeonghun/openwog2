@@ -48,6 +48,9 @@ int CombatII::battle_ai_cc960_member(int selector, int id, int owner, bool inclu
     uint64_t best_key = ~0ull;
     for (size_t i = 0; i < units_.size(); ++i) {
         const CombatUnitPlacement& c = units_[i];
+        // A sub_5069C queue record lives only in dword_F0648 until sub_51211 activates it; the
+        // original never linked it into dword_CC968, so sub_501BA cannot find it there.
+        if (c.spawn_queued) continue;
         if ((!c.active && !include_inactive) || c.id != id ||
             (owner >= 0 && (int)c.owner_87 != owner)) continue;
         if (selector != 6 && battle_effective_army(c) != selector) continue;

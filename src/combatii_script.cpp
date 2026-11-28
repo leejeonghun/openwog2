@@ -222,7 +222,7 @@ int CombatII::find_unit_index_ctx(uint8_t sel, uint8_t idx, int forced_context) 
         }
         if (!candidate) {
             for (const auto& u : units_) {
-                if (u.active && u.id == (int)idx) { candidate = &u; break; }
+                if (u.active && !u.spawn_queued && u.id == (int)idx) { candidate = &u; break; }
             }
         }
         if (!candidate) return -1;
@@ -332,7 +332,10 @@ CombatII::DialogueSpeakerInfo CombatII::battle_dialogue_speaker_507be(uint8_t se
     CombatUnitPlacement* rec = battle_roster_find_500ed((int)idx);
     int live = -1;
     for (size_t i = 0; i < units_.size(); ++i) {
-        if (units_[i].id == (int)idx) { live = (int)i; break; }
+        // sub_500ED only walks dword_CC990. A sub_5069C queue record is absent from it unless
+        // sub_50D9F's raw-army-0 path inserted it there, so a queued live record is not a
+        // substitute for a missing roster entry.
+        if (!units_[i].spawn_queued && units_[i].id == (int)idx) { live = (int)i; break; }
     }
     if (!rec && live >= 0) rec = &units_[(size_t)live];
     if (!rec || rec->owner_87 == 0) return out;
@@ -1339,10 +1342,9 @@ CombatII::VmResult CombatII::run_vm(uint32_t offset) {
             // sub_50D3A drop relocation. The listing never initialises the slot at entry; the
             // raw-army-0 path writes it every time (sub_500ED's roster pointer, or 0 when the
             // lookup fails and sub_4E81F runs), while a non-zero raw army leaves the previous
-            // value in place. Observed original runs (the 1-5 reinforcements land on the tile
-            // north of the payload) enter with a non-zero slot, so the port starts there and
-            // then reproduces the deterministic writes.
-            int spawn_var24 = 1;
+            // value in place. sub_52E55 issues every 0x03 command from the same call site with
+            // the same frame, so the slot address is identical each time and the value also
+            // carries over between 0x03 commands (spawn_var24_carry_).
             // The K==1 drop path's shared E8F46 image (loc_51108..loc_5117A) is rebuilt at
             // playback in battle_spawn_drop_relocate, so the grid sees the live occupancy.
             while (!done) {
@@ -1457,8 +1459,9 @@ CombatII::VmResult CombatII::run_vm(uint32_t offset) {
                 // CC990 roster takes the sub_4E81F branch with var_24 == 0, so loc_51145's
                 // `cmp [var_24],0; jz loc_5117A` skips the sub_50D3A relocation for it. Records
                 // with a non-zero raw army never write the slot, so the value carries over to
-                // the rest of the command (including later non-zero-raw records).
-                if (raw_zero) spawn_var24 = roster_found ? 1 : 0;
+                // the rest of the command (including later non-zero-raw records). The write is
+                // kept on the walk record and applied at playback, in record order.
+                const int var24_write = raw_zero ? (roster_found ? 1 : 0) : -1;
                 // A single unlinked record whose raw army is nonzero and effective 1..4 (the
                 // assassins in 1-5, for example) follows the same byte-INC path as a static
                 // outer 1..3, so it is treated as a member of the 1x1 uniqueness gate. Raw
@@ -1500,7 +1503,7 @@ CombatII::VmResult CombatII::run_vm(uint32_t offset) {
                 // sub_50D3A moves each record whose var_24 != 0, and sub_13D02 marks the tile.
                 // The port defers that to playback (battle_spawn_drop_relocate) so the grid
                 // reflects the occupancy left by the commands played before it; the per-record
-                // var_24 gate travels in VmWalkUnit::drop_relocate.
+                // var_24 write travels in VmWalkUnit::var24_write.
                 const size_t path_bytes = (K == 0 && count2 >= 1)
                     ? (size_t)(count2 - 1) * 2u : 0u;
                 if (path_bytes > script_size - p) { abort_range(); break; }
@@ -1545,6 +1548,7 @@ CombatII::VmResult CombatII::run_vm(uint32_t offset) {
                         wu.path.push_back({ script_buffer_[q], script_buffer_[q + 1] });
                     }
                     wu.spawn_delay = (int)count1;
+                    wu.var24_write = var24_write;
                     sev.walk_units.push_back(std::move(wu));
                     // word_EDD74 = (count2-1) - (int8)E5A50 + 2: the 8-bit `neg al` of count1 is
                     // sign-extended, so the formula is only count2+count1+1 for count1 <= 0x7F.
@@ -1562,7 +1566,7 @@ CombatII::VmResult CombatII::run_vm(uint32_t offset) {
                     wu.drop = 1;
                     wu.spawn_delay = (int)count1;
                     wu.count2 = (int)count2;
-                    wu.drop_relocate = spawn_var24 != 0;   // var_24: sub_50D3A relocation gate
+                    wu.var24_write = var24_write;   // sub_50D9F var_24, applied at playback
                     // word_EDD74 = (count2-1) - (int8)E5A50 + 2 (same 8-bit E5A50 as mode 0).
                     const int var14 = battle_spawn_var14((int)count2, (int)count1);
                     if (sev.walk_frames < var14) sev.walk_frames = var14;
@@ -3350,9 +3354,12 @@ void CombatII::battle_spawn_drop_relocate(const VmEvent& ev) {
     std::vector<int> drop_e8;
     battle_ai_169d7_reset(ev.walk_units.front().unit_index, drop_e8);   // sub_169D7
     for (const VmWalkUnit& w : ev.walk_units) {
+        // loc_50E71 writes var_24 before loc_51145 reads it for this record, so a raw-army-0
+        // record updates the shared slot in record order (and for later 0x03 commands too).
+        if (w.var24_write >= 0) spawn_var24_carry_ = w.var24_write;
         if (w.unit_index < 0 || (size_t)w.unit_index >= units_.size()) continue;
         CombatUnitPlacement& u = units_[(size_t)w.unit_index];
-        if (w.drop_relocate) {                                          // cmp [var_24], 0
+        if (spawn_var24_carry_ != 0) {                                   // cmp [var_24], 0
             int dx = u.x, dy = u.y;
             if (battle_move_50d3a(dx, dy, drop_e8)) {                   // sub_50D3A
                 u.x = dx;                                               // [unit]
@@ -3374,8 +3381,18 @@ void CombatII::battle_spawn_activate(const VmEvent& ev) {
         // the original command order.
         for (int ui : ev.spawn_units)
             if (ui >= 0 && (size_t)ui < units_.size()) {
-                units_[(size_t)ui].active = true;
-                units_[(size_t)ui].list_seq = battle_next_list_seq(); // sub_1134F tail insert
+                CombatUnitPlacement& u = units_[(size_t)ui];
+                // sub_51211 loc_51380..loc_513ED: `mov eax,[edx+0Bh]; sar eax,18h` reads the
+                // dword at +0Bh, whose top byte is [+0Eh], and `shl eax,3` has no `sub eax,8`,
+                // so the record is linked into CC968[army*8] = the (army+1) list. Then
+                // `inc byte ptr [eax+0Eh]` makes [+0Eh] = army+1, matching that list. A record
+                // that passed sub_16699 directly was already incremented by sub_50D9F, so only
+                // the sub_5069C queue adds this second increment.
+                if (ev.spawn_from_queue)
+                    u.memory_army = (int)(uint8_t)(battle_effective_army(u) + 1);
+                u.spawn_queued = false;
+                u.active = true;
+                u.list_seq = battle_next_list_seq(); // sub_1134F tail insert
             }
         // The gate is evaluated after the reinforcement NC2 loads (loading happens while drawing
         // the
@@ -3481,10 +3498,17 @@ bool CombatII::battle_16699(int x, int y, int facing, int unit_index) {
 // sub_5069C: store into the first free slot (original [+0]==0). When all 32 slots are full the
 // record is dropped.
 void CombatII::battle_spawn_enqueue(const VmEvent& single) {
+    // sub_5069C leaves the record only in dword_F0648. sub_50D9F jumped straight to loc_51199
+    // for it, so loc_510AB/loc_51108 never linked it into dword_CC968; it stays out of every
+    // army list until sub_51211 activates it. When all 32 slots are full the original drops the
+    // record, which leaves it out of the lists as well.
+    for (int ui : single.spawn_units)
+        if (ui >= 0 && (size_t)ui < units_.size()) units_[(size_t)ui].spawn_queued = true;
     if (battle_spawn_queue_.size() < 32) battle_spawn_queue_.resize(32);
     for (PendingSpawn& ps : battle_spawn_queue_) {
         if (ps.used) continue;
         ps.ev = single;
+        ps.ev.spawn_from_queue = true;   // sub_51211 adds the second [+0Eh] increment
         ps.used = true;
         return;
     }
@@ -3890,6 +3914,12 @@ void CombatII::play_vm_events(const std::vector<VmEvent>& events) {
                 battle_spawn_activate(ev);
                 break;
             }
+            // sub_50D9F writes var_24 for every raw-army-0 record while the 0x03 command
+            // executes, before the destination test and any queueing, so apply those writes
+            // here in record order for the whole event (K==1 does it in
+            // battle_spawn_drop_relocate, where the gate is also read per record).
+            for (const VmWalkUnit& w : ev.walk_units)
+                if (w.var24_write >= 0) spawn_var24_carry_ = w.var24_write;
             std::vector<int> ok;
             for (int ui : ev.spawn_units) {
                 int x = 0, y = 0, f = 0;
