@@ -313,6 +313,10 @@ struct VmWalkUnit {
     // Count2 as read from the spawn payload (the number of tile rows). K==1 uses it in
     // sub_508E6's var_14 = count2 + count1 + 1, which decides the drop's total frame count.
     int count2 = 0;
+    // sub_50D9F var_24 for a K==1 record: non-zero means the drop tile is relocated by
+    // sub_50D3A on the shared sub_169D7 grid. The relocation runs at playback time
+    // (battle_spawn_drop_relocate), because the grid must see the live occupancy.
+    bool drop_relocate = false;
 };
 struct VmEvent {
     VmEventType type = VmEventType::Message;
@@ -570,6 +574,10 @@ private:
     // sub_51211 activation: add the spawn event's pending units to the list and play their
     // walk/drop.
     void battle_spawn_activate(const VmEvent& ev);
+    // sub_50D9F loc_51108..loc_5117A (K==1 only): sub_169D7 rebuilds E8F46 from the first
+    // record's unit, then every record with drop_relocate set is relocated with sub_50D3A and
+    // marked with sub_13D02(x, y, -2). Runs at playback, right before the drop animation.
+    void battle_spawn_drop_relocate(const VmEvent& ev);
     // S17 (sub_50D9F/sub_5069C/sub_51211): a 0x03 reinforcement checks each record's destination
     // with sub_16699 (footprint, occupancy, terrain). Records that pass appear in the same command;
     // a blocked record (mode 0 only) goes into the first free slot of sub_5069C's 11-byte queue
