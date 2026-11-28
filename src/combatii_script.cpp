@@ -84,6 +84,17 @@ bool text_has_visible_content(const std::string& t) {
 }
 } // namespace
 
+// sub_50D9F loc_50F47: unk_E5A50[record] is `mov al,count1; neg al` stored as a byte, and
+// var_14 = (count2-1) - (movsx ax, byte unk_E5A50) + 2. The negation is 8-bit and the read
+// sign-extends the byte, so count1 0x80..0xFF produces a *positive* E5A50 and a frame count that
+// is not count2+count1+1 (which only holds for count1 <= 0x7F).
+// sub_50D9F then keeps var_14 as a 16-bit value and updates word_EDD74 with `cmp bx, word_EDD74;
+// jle`; byte inputs keep the result in 16-bit range, so the signed value is enough.
+int battle_spawn_var14(int count2, int count1) {
+    const int e5a50 = (int)(int8_t)(uint8_t)(0u - (uint8_t)count1);   // `neg al`
+    return (count2 - 1) - e5a50 + 2;
+}
+
 // Log helper: convert Johab to UTF-8 and cut on a character boundary. A plain
 // `%.60s` would split a multi-byte sequence and print a broken glyph.
 std::string log_text(const std::string& raw, size_t max_bytes) {
@@ -1325,11 +1336,12 @@ CombatII::VmResult CombatII::run_vm(uint32_t offset) {
             sev.offset = op_pos;
             uint32_t load_off = 0;
             // sub_50D9F var_24 (ASM 87698-87715, 87974): only a non-zero value reaches the
-            // sub_50D3A drop relocation. The listing never initialises the slot: the
-            // raw-army-0 path always stores a CC990 roster pointer or the sub_112FD copy
-            // pointer, while a non-zero raw army leaves the slot as it was. Observed original
-            // runs (the 1-5 reinforcements land on the tile north of the payload) keep it
-            // non-zero, so the port models that value instead of an arbitrary zero.
+            // sub_50D3A drop relocation. The listing never initialises the slot at entry; the
+            // raw-army-0 path writes it every time (sub_500ED's roster pointer, or 0 when the
+            // lookup fails and sub_4E81F runs), while a non-zero raw army leaves the previous
+            // value in place. Observed original runs (the 1-5 reinforcements land on the tile
+            // north of the payload) enter with a non-zero slot, so the port starts there and
+            // then reproduces the deterministic writes.
             int spawn_var24 = 1;
             // The K==1 drop path's shared E8F46 image (loc_51108..loc_5117A) is rebuilt at
             // playback in battle_spawn_drop_relocate, so the grid sees the live occupancy.
@@ -1440,10 +1452,13 @@ CombatII::VmResult CombatII::run_vm(uint32_t offset) {
                         fprintf(stderr, "COMBAT: spawn id=%d -> CC990 insert (%zu records)\n",
                                 nu.id, battle_roster_cc990_.size());
                 }
-                // loc_50E71..loc_50F25: var_24 holds the sub_500ED roster pointer or the
-                // newly copied record, so the raw-army-0 path always leaves it non-zero.
-                // Records with a non-zero raw army never write it (the value carries over).
-                if (raw_zero) spawn_var24 = 1;
+                // loc_50E71..loc_50EDD: `call sub_500ED; mov [var_24],eax; test eax,eax`
+                // writes the slot even when the lookup fails. A raw-army-0 record without a
+                // CC990 roster takes the sub_4E81F branch with var_24 == 0, so loc_51145's
+                // `cmp [var_24],0; jz loc_5117A` skips the sub_50D3A relocation for it. Records
+                // with a non-zero raw army never write the slot, so the value carries over to
+                // the rest of the command (including later non-zero-raw records).
+                if (raw_zero) spawn_var24 = roster_found ? 1 : 0;
                 // A single unlinked record whose raw army is nonzero and effective 1..4 (the
                 // assassins in 1-5, for example) follows the same byte-INC path as a static
                 // outer 1..3, so it is treated as a member of the 1x1 uniqueness gate. Raw
@@ -1493,24 +1508,26 @@ CombatII::VmResult CombatII::run_vm(uint32_t offset) {
                 if (p >= script_size) { abort_range(); break; }
                 uint8_t term = script_buffer_[p]; p += 1;
                 int spawn_idx = -1;
-                // sub_50D9F has no in-bounds test on the payload coordinates: a K==1 record is
-                // registered unconditionally and its drop tile is relocated by sub_50D3A, which
-                // can bring a boundary-outside payload into the map. K==0 records are staged
-                // only when the payload is in bounds (sub_16699/queue handling).
-                if (K == 1 || (nu.x < (int)map_w_ && nu.y < (int)map_h_)) {
-                    units_.push_back(nu);
-                    spawn_idx = (int)units_.size() - 1;
-                    sev.spawn_units.push_back(spawn_idx);
-                    ++spawned;
-                    if (script_trace_)
-                        fprintf(stderr, "COMBAT: vm spawn unit id=%d army=%d pos=(%d,%d) type=%d(%s) class=%u weapon_class=%d\n",
-                                nu.id, nu.army, nu.x, nu.y, nu.sprite_type,
-                                char_file_name_for_type(nu.sprite_type),
-                                (unsigned)nu.combat_class, weapon_class(nu));
-                }
+                // sub_50D9F has no in-bounds test on the payload coordinates. The K==0 test at
+                // loc_5105D runs sub_16699 on the *destination* (the last path pair, or the
+                // payload tile when count2 <= 1): a record whose destination is blocked or out
+                // of bounds is queued by sub_5069C (loc_51199) and re-tested every tick, while
+                // an out-of-bounds start tile with an in-bounds destination is registered and
+                // walked like any other. K==1 records are registered unconditionally and their
+                // drop tile is relocated by sub_50D3A. Stage every record here; the destination
+                // test and the queue run at playback.
+                units_.push_back(nu);
+                spawn_idx = (int)units_.size() - 1;
+                sev.spawn_units.push_back(spawn_idx);
+                ++spawned;
+                if (script_trace_)
+                    fprintf(stderr, "COMBAT: vm spawn unit id=%d army=%d pos=(%d,%d) type=%d(%s) class=%u weapon_class=%d\n",
+                            nu.id, nu.army, nu.x, nu.y, nu.sprite_type,
+                            char_file_name_for_type(nu.sprite_type),
+                            (unsigned)nu.combat_class, weapon_class(nu));
                 if (spawn_idx >= 0 && K == 0) {
-                    // sub_50D9F K==0: var_14 = (count2-1) - (-count1) + 2 = count2 + count1 + 1,
-                    // and word_EDD74 takes the largest var_14 over the records. The loc_51035
+                    // sub_50D9F K==0: var_14 = (count2-1) - (int8)E5A50 + 2 (E5A50 = `neg al`
+                    // of count1), and word_EDD74 takes the largest var_14 over the records. The loc_51035
                     // branch (count2-1 <= 0) still walks: it writes 0FFh as the first path entry
                     // and starts from the unit's own tile, so the record just stays put.
                     VmWalkUnit wu;
@@ -1529,8 +1546,10 @@ CombatII::VmResult CombatII::run_vm(uint32_t offset) {
                     }
                     wu.spawn_delay = (int)count1;
                     sev.walk_units.push_back(std::move(wu));
-                    if (sev.walk_frames < (int)count2 + (int)count1 + 1)
-                        sev.walk_frames = (int)count2 + (int)count1 + 1;
+                    // word_EDD74 = (count2-1) - (int8)E5A50 + 2: the 8-bit `neg al` of count1 is
+                    // sign-extended, so the formula is only count2+count1+1 for count1 <= 0x7F.
+                    const int var14 = battle_spawn_var14((int)count2, (int)count1);
+                    if (sev.walk_frames < var14) sev.walk_frames = var14;
                 }
                 if (spawn_idx >= 0 && K == 1) {
                     // Mode 1: appear on the placement tile with no tile path (loc_51035
@@ -1544,9 +1563,9 @@ CombatII::VmResult CombatII::run_vm(uint32_t offset) {
                     wu.spawn_delay = (int)count1;
                     wu.count2 = (int)count2;
                     wu.drop_relocate = spawn_var24 != 0;   // var_24: sub_50D3A relocation gate
-                    // word_EDD74 = (count2-1) - unk_E5A50 + 2 with unk_E5A50 = -count1.
-                    if (sev.walk_frames < (int)count2 + (int)count1 + 1)
-                        sev.walk_frames = (int)count2 + (int)count1 + 1;
+                    // word_EDD74 = (count2-1) - (int8)E5A50 + 2 (same 8-bit E5A50 as mode 0).
+                    const int var14 = battle_spawn_var14((int)count2, (int)count1);
+                    if (sev.walk_frames < var14) sev.walk_frames = var14;
                     sev.walk_units.push_back(std::move(wu));
                 }
                 if (term == 3) { cur = p; continue; }   // loc_50DD4
@@ -2678,11 +2697,10 @@ void CombatII::play_spawn_fall(const VmEvent& ev) {
 
     // unk_E5A50 starts at -count1 and increments every even frame; 0..7 renders the drop
     // (sub_50216), negative values draw nothing, and 8 is the landing (sub_11F74 dust; the pose is
-    // kept and [64h] is not cleared). sub_508E6 sets EDD74 = max(var_14)+8 with
-    // var_14 = (count2-1) - (-count1) + 2 = count2 + count1 + 1, then runs 2*EDD74+1 frames.
-    int max_var14 = 1;
-    for (const auto& w : ev.walk_units)
-        max_var14 = std::max(max_var14, w.count2 + w.spawn_delay + 1);
+    // kept and [64h] is not cleared). sub_508E6 starts from word_EDD74 = max(var_14) that
+    // sub_50D9F left behind, adds 8 and runs 2*EDD74+1 frames; the event carries that same max
+    // (var_14 = (count2-1) - (int8)E5A50 + 2 is computed in the parser).
+    const int max_var14 = ev.walk_frames;   // word_EDD74, 0 when every var_14 was <= 0
     for (auto& w : ev.walk_units) {
         CombatUnitPlacement* u = unit_at(w.unit_index);
         if (!u) continue;
@@ -3297,11 +3315,26 @@ void CombatII::animate_unit_walk(const VmEvent& ev) {
     for (auto& w : ev.walk_units) {
         CombatUnitPlacement* u = unit_at(w.unit_index);
         if (!u) continue;
+        u->walk_off_x = u->walk_off_y = 0;
+        if (ev.walk_group != 0) {
+            // sub_50BAF wrote [63h] = load at loc_50BCC and always ends on the two-point
+            // destination when the frame loop ran (var_4 = 2*(EDD74+8) >= 0 there).
+            if (!w.path.empty()) {
+                u->x = w.path.back().first;
+                u->y = w.path.back().second;
+            }
+            u->facing = (int8_t)w.load;
+            continue;
+        }
+        // loc_16F57 is inside the per-unit block that runs only when var_4C == 1, i.e. after the
+        // unit's E5A50 delay expired and its target index reached 0xFF. sub_16D3E skips the whole
+        // outer loop when word_EDD74 <= 0, so a unit that never arrived keeps its tile, facing
+        // and pose: there is no end-of-walk write in that case.
+        if (!u->walk_arrived) continue;
         if (!w.path.empty()) {
             u->x = w.path.back().first;
             u->y = w.path.back().second;
         }
-        u->walk_off_x = u->walk_off_y = 0;
         u->facing = (int8_t)w.load;  // loc_16F57
     }
     present_cutscene_frame();
@@ -3408,11 +3441,12 @@ VmEvent CombatII::battle_spawn_subevent(const VmEvent& ev, const std::vector<int
         if (std::find(units.begin(), units.end(), w.unit_index) == units.end()) continue;
         out.walk_units.push_back(w);
         if (ev.spawn_mode == 0)
-            // sub_50D9F's var_14 = (count2-1) - (-count1) + 2 = count2 + count1 + 1. K==0 paths
-            // carry the spawn tile first, so path.size() is count2 only when count2 >= 1; the
-            // count2 == 0 record keeps one tile and its frame count is count1 + 1.
+            // sub_50D9F's var_14 = (count2-1) - (int8)E5A50 + 2 with E5A50 = `neg al` of count1.
+            // K==0 paths carry the spawn tile first, so path.size() is count2 only when
+            // count2 >= 1; the count2 == 0 record keeps one tile and its frame count is
+            // (count2-1) - E5A50 + 2. word_EDD74 starts at 0 and keeps the largest value.
             out.walk_frames = std::max(out.walk_frames,
-                                       w.count2 + w.spawn_delay + 1);   // word_EDD74
+                                       battle_spawn_var14(w.count2, w.spawn_delay));   // word_EDD74
     }
     if (ev.spawn_mode != 0) out.walk_frames = ev.walk_frames;
     return out;
@@ -3461,9 +3495,9 @@ void CombatII::battle_spawn_queue_step() {
     if (battle_spawn_queue_.empty()) return;
     std::vector<size_t> pass;
     // sub_51211 starts word_EDD74 at 0 and, for every slot that passes sub_16699, compares
-    // var_8 = (count2-1) - E5A50 + 2 (= count2 + count1 + 1) against it. A larger value
-    // updates word_EDD74 and immediately recentres the camera on the queue's x/y through
-    // sub_111BE (88125-88135); the first passing slot therefore always moves the camera.
+    // var_8 = (count2-1) - E5A50 + 2 (8-bit) against it. A larger value updates word_EDD74 and
+    // immediately recentres the camera on the queue's x/y through sub_111BE (88125-88135); the
+    // first passing slot therefore always moves the camera.
     int edd74 = 0;
     for (size_t s = 0; s < battle_spawn_queue_.size() && s < 32; ++s) {
         PendingSpawn& ps = battle_spawn_queue_[s];
@@ -3474,10 +3508,11 @@ void CombatII::battle_spawn_queue_step() {
         if (!battle_16699(x, y, f, ui)) continue;
         pass.push_back(s);
         // sub_51211 computes var_8 as a byte (`dec dl; sub al, [E5A50]; add al, 2`) and compares
-        // it with `movsx` against word_EDD74, so a count2 + count1 + 1 above 127 wraps negative.
+        // it with `movsx ax,[var_8]; cmp ax,word_EDD74`, so the 8-bit result is sign-extended
+        // again: values above 127 are negative and do not update word_EDD74.
         int var8 = 0;
         for (const VmWalkUnit& w : ps.ev.walk_units)
-            var8 = std::max(var8, (int)(int8_t)(uint8_t)(w.count2 + w.spawn_delay + 1));
+            var8 = std::max(var8, (int)(int8_t)(uint8_t)battle_spawn_var14(w.count2, w.spawn_delay));
         if (ps.ev.walk_units.empty()) var8 = (int)(int8_t)(uint8_t)ps.ev.walk_frames;
         if (var8 > edd74) {
             edd74 = var8;

@@ -310,8 +310,10 @@ struct VmWalkUnit {
     // sub_16D3E (K==0 walk) and sub_508E6 (K==1 drop) both wait out that negative counter.
     // 0 = start immediately.
     int spawn_delay = 0;
-    // Count2 as read from the spawn payload (the number of tile rows). K==1 uses it in
-    // sub_508E6's var_14 = count2 + count1 + 1, which decides the drop's total frame count.
+    // Count2 as read from the spawn payload (the number of tile rows). With count1 it gives
+    // sub_50D9F's var_14 = (count2-1) - (int8)(-count1) + 2, which updates word_EDD74 and
+    // decides the walk/drop frame counts. The 8-bit negate/sign-extend matters when
+    // count1 >= 0x80, where the value is not count2 + count1 + 1.
     int count2 = 0;
     // sub_50D9F var_24 for a K==1 record: non-zero means the drop tile is relocated by
     // sub_50D3A on the shared sub_169D7 grid. The relocation runs at playback time
@@ -342,6 +344,8 @@ struct VmEvent {
     //   walk_group = var_C (group byte of the first record). 0 branches to sub_16D3E (path
     //   walking), non-zero to sub_50BAF (two-point interpolation) at loc_51950.
     //   walk_frames = word_EDD74 = max(path length+1 per record) for group 0, else 2.
+    //   Spawn events (sub_50D9F) store its word_EDD74 here instead: max over the records of
+    //   (count2-1) - (int8)(-count1) + 2, starting from 0.
     int walk_group = 0;
     int walk_frames = 0;
     bool walk_sets_start_tile = false; // VM 0x05 group-0 start coordinates are applied at playback, not parse time.
