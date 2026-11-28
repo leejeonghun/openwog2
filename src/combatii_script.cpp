@@ -1535,6 +1535,7 @@ CombatII::VmResult CombatII::run_vm(uint32_t offset) {
                     // and starts from the unit's own tile, so the record just stays put.
                     VmWalkUnit wu;
                     wu.unit_index = spawn_idx;
+                    wu.count1_off = (uint32_t)(cur + 1);   // sub_5069C slot [0]: count1 stream offset
                     wu.load = script_buffer_[load_off];
                     wu.count2 = (int)count2;
                     // sub_16D3E reads unk_E5210[0] as its first target, so the first tile move
@@ -1562,6 +1563,7 @@ CombatII::VmResult CombatII::run_vm(uint32_t offset) {
                     // and the unit lands at 8.
                     VmWalkUnit wu;
                     wu.unit_index = spawn_idx;
+                    wu.count1_off = (uint32_t)(cur + 1);   // sub_5069C slot [0]: count1 stream offset
                     wu.load = script_buffer_[load_off];
                     wu.drop = 1;
                     wu.spawn_delay = (int)count1;
@@ -3390,6 +3392,9 @@ void CombatII::battle_spawn_activate(const VmEvent& ev) {
                 // the sub_5069C queue adds this second increment.
                 if (ev.spawn_from_queue)
                     u.memory_army = (int)(uint8_t)(battle_effective_army(u) + 1);
+                // loc_510AB/loc_51380: [60h] = sub_1198D([5Fh]) after the record has been put
+                // into the army list, so a raw-army-0 record's roster copy is already applied.
+                u.slot_hint = battle_image_slot(u.sprite_type);
                 u.spawn_queued = false;
                 u.active = true;
                 u.list_seq = battle_next_list_seq(); // sub_1134F tail insert
@@ -3496,28 +3501,45 @@ bool CombatII::battle_16699(int x, int y, int facing, int unit_index) {
 }
 
 // sub_5069C: store into the first free slot (original [+0]==0). When all 32 slots are full the
-// record is dropped.
-void CombatII::battle_spawn_enqueue(const VmEvent& single) {
+// record is dropped, but byte_110694 is incremented either way (loc_506E6 is after the loop).
+void CombatII::battle_spawn_enqueue(const VmEvent& single, int unit_index) {
     // sub_5069C leaves the record only in dword_F0648. sub_50D9F jumped straight to loc_51199
     // for it, so loc_510AB/loc_51108 never linked it into dword_CC968; it stays out of every
     // army list until sub_51211 activates it. When all 32 slots are full the original drops the
     // record, which leaves it out of the lists as well.
     for (int ui : single.spawn_units)
         if (ui >= 0 && (size_t)ui < units_.size()) units_[(size_t)ui].spawn_queued = true;
-    if (battle_spawn_queue_.size() < 32) battle_spawn_queue_.resize(32);
+    const VmWalkUnit* walk = nullptr;
+    for (const VmWalkUnit& w : single.walk_units)
+        if (w.unit_index == unit_index) { walk = &w; break; }
+    int x = 0, y = 0, facing = 0;
+    battle_spawn_dest(single, unit_index, x, y, facing);
+    if (battle_spawn_queue_.empty()) battle_spawn_queue_.resize(32);
     for (PendingSpawn& ps : battle_spawn_queue_) {
         if (ps.used) continue;
-        ps.ev = single;
-        ps.ev.spawn_from_queue = true;   // sub_51211 adds the second [+0Eh] increment
+        // loc_506A9..loc_506D7: [0]=stream offset, [4]=x, [5]=y, [6]=load, [7]=record pointer.
         ps.used = true;
-        return;
+        ps.count1_off = walk ? walk->count1_off : 0;
+        ps.x = x;
+        ps.y = y;
+        ps.load = facing;
+        ps.unit_index = unit_index;
+        break;
     }
+    ++battle_spawn_queue_count_;   // inc byte_110694 (also when every slot was occupied)
 }
 
 // sub_51211: re-test queue slots 0..31 in order, then walk all passing records with one sub_16D3E.
 void CombatII::battle_spawn_queue_step() {
-    if (battle_spawn_queue_.empty()) return;
-    std::vector<size_t> pass;
+    // `cmp byte_110694, 0; jz loc_51441`: no record has ever been queued, so the handler does
+    // not even draw a frame.
+    if (battle_spawn_queue_count_ == 0) return;
+    const uint8_t* const buf = script_buffer_.data();
+    const size_t bufsz = script_buffer_.size();
+    VmEvent merged;
+    merged.type = VmEventType::Spawn;
+    merged.spawn_mode = 0;
+    merged.spawn_from_queue = true;   // sub_51211 adds the second [+0Eh] increment
     // sub_51211 starts word_EDD74 at 0 and, for every slot that passes sub_16699, compares
     // var_8 = (count2-1) - E5A50 + 2 (8-bit) against it. A larger value updates word_EDD74 and
     // immediately recentres the camera on the queue's x/y through sub_111BE (88125-88135); the
@@ -3525,24 +3547,43 @@ void CombatII::battle_spawn_queue_step() {
     int edd74 = 0;
     for (size_t s = 0; s < battle_spawn_queue_.size() && s < 32; ++s) {
         PendingSpawn& ps = battle_spawn_queue_[s];
-        if (!ps.used || ps.ev.spawn_units.empty()) continue;
-        const int ui = ps.ev.spawn_units[0];
-        int x = 0, y = 0, f = 0;
-        battle_spawn_dest(ps.ev, ui, x, y, f);
-        if (!battle_16699(x, y, f, ui)) continue;
-        pass.push_back(s);
-        // sub_51211 computes var_8 as a byte (`dec dl; sub al, [E5A50]; add al, 2`) and compares
-        // it with `movsx ax,[var_8]; cmp ax,word_EDD74`, so the 8-bit result is sign-extended
-        // again: values above 127 are negative and do not update word_EDD74.
-        int var8 = 0;
-        for (const VmWalkUnit& w : ps.ev.walk_units)
-            var8 = std::max(var8, (int)(int8_t)(uint8_t)battle_spawn_var14(w.count2, w.spawn_delay));
-        if (ps.ev.walk_units.empty()) var8 = (int)(int8_t)(uint8_t)ps.ev.walk_frames;
+        if (!ps.used) continue;
+        if (ps.unit_index < 0 || (size_t)ps.unit_index >= units_.size()) continue;
+        // sub_51211 loc_51242: sub_1665B(record), then sub_16699(slot_x, slot_y, slot_load).
+        if (!battle_16699(ps.x, ps.y, ps.load, ps.unit_index)) continue;
+        // loc_51281..loc_512E4: re-read count1, load, count2 and the tile rows through the
+        // slot's stream offset. The record itself stayed in units_ (dword_F0648) while queued.
+        const uint32_t rec = ps.count1_off + 1;
+        if (rec + 0x88 > bufsz) continue;
+        const uint8_t count1 = buf[ps.count1_off];
+        uint32_t p = rec + 0x88;
+        if (buf[rec + 0x5C] != 0) p += 0x88;   // linked record: the load byte follows the link
+        if (p + 4 > bufsz) continue;
+        VmWalkUnit wu;
+        wu.unit_index = ps.unit_index;
+        wu.count1_off = ps.count1_off;
+        wu.load = buf[p++];                    // unk_E5AD0[record]
+        wu.count2 = (int)buf[p++];             // var_C (count2)
+        p += 2;                                 // payload x/y; the record keeps its own [0]/[1]
+        wu.spawn_delay = (int)count1;           // unk_E5A50[record] = -count1
+        // loc_512D9..loc_5137A copies only the count2-1 tile rows into unk_E5210 and puts the
+        // 0FFh terminator at index count2-1. sub_16D3E walks from the record's current tile to
+        // that first row, so the port's path keeps the start point at [0].
+        const CombatUnitPlacement& u = units_[(size_t)ps.unit_index];
+        wu.path.push_back({ (int)(int8_t)(uint8_t)u.x, (int)(int8_t)(uint8_t)u.y });
+        const int pts = wu.count2 >= 2 ? wu.count2 - 1 : 0;
+        for (int k = 0; k < pts; ++k) {
+            if (p + 2 > bufsz) break;
+            wu.path.push_back({ buf[p], buf[p + 1] });
+            p += 2;
+        }
+        // loc_51305..loc_51335: var_8 = (count2-1) - (int8)E5A50 + 2 as a byte, compared signed.
+        const int var8 = (int)(int8_t)(uint8_t)battle_spawn_var14(wu.count2, wu.spawn_delay);
         if (var8 > edd74) {
             edd74 = var8;
             // sub_111BE: cam_tile = (x-6, y-6) clamped to 0..map-12. Unlike sub_1124A it
             // neither scrolls nor draws, and it leaves the fine camera offsets alone.
-            int cx = x - 6, cy = y - 6;
+            int cx = ps.x - 6, cy = ps.y - 6;
             if (cx < 0) cx = 0;
             if (cy < 0) cy = 0;
             const int max_x = map_w_ > 12 ? (int)map_w_ - 12 : 0;
@@ -3555,24 +3596,28 @@ void CombatII::battle_spawn_queue_step() {
                 fprintf(stderr, "COMBAT: sub_51211 slot=%zu frames=%d camera=(%d,%d)\n",
                         s, edd74, cx, cy);
         }
-    }
-    if (pass.empty()) return;
-    VmEvent merged = battle_spawn_queue_[pass[0]].ev;
-    merged.spawn_units.clear();
-    merged.walk_units.clear();
-    merged.walk_frames = 0;
-    for (size_t s : pass) {
-        PendingSpawn& ps = battle_spawn_queue_[s];
-        for (int ui : ps.ev.spawn_units) merged.spawn_units.push_back(ui);
-        for (const VmWalkUnit& w : ps.ev.walk_units) merged.walk_units.push_back(w);
+        if (merged.walk_units.empty()) merged.offset = ps.count1_off;
+        merged.spawn_units.push_back(ps.unit_index);
+        merged.walk_units.push_back(std::move(wu));
+        // loc_513ED: clear the slot, decrement byte_110694, stop scanning at zero.
         ps.used = false;
+        ps.unit_index = -1;
+        --battle_spawn_queue_count_;          // dec bl (8-bit)
+        if (battle_spawn_queue_count_ == 0) break;
+    }
+    if (merged.walk_units.empty()) {
+        // sub_51211 loc_5141E: zero activated records skips sub_16D3E but still runs
+        // sub_4559F + sub_5E9E8.
+        camera_update_frame();
+        present_cutscene_frame();
+        return;
     }
     // word_EDD74 is the walk duration: sub_16D3E keeps stepping until its frame counter
     // reaches it (loc_1702A), so the merged event uses the same maximum. (The
     // `dword_F0B9C+2` write at loc_5141E is the activated record count, not this frame count.)
     merged.walk_frames = edd74;   // word_EDD74, even when it stayed 0
     if (battle_trace_)
-        fprintf(stderr, "COMBAT: sub_51211 activated=%zu\n", pass.size());
+        fprintf(stderr, "COMBAT: sub_51211 activated=%zu\n", merged.walk_units.size());
     battle_spawn_activate(merged);
 }
 
@@ -3927,7 +3972,7 @@ void CombatII::play_vm_events(const std::vector<VmEvent>& events) {
                 if (battle_16699(x, y, f, ui)) { ok.push_back(ui); continue; }
                 if (battle_trace_)
                     fprintf(stderr, "COMBAT: spawn blocked (unit %d dest=(%d,%d)) -> sub_5069C queue\n", ui, x, y);
-                battle_spawn_enqueue(battle_spawn_subevent(ev, std::vector<int>{ ui }));
+                battle_spawn_enqueue(battle_spawn_subevent(ev, std::vector<int>{ ui }), ui);
             }
             if (!ok.empty()) battle_spawn_activate(ok.size() == ev.spawn_units.size() ? ev
                                                                                       : battle_spawn_subevent(ev, ok));

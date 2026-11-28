@@ -1099,6 +1099,7 @@ void CombatII::init_dummy_units(bool parse_sce_snapshot) {
     units_.clear();
     battle_roster_cc990_.clear();                     // dword_CC990: a new battle process starts with an empty roster
     battle_spawn_queue_.clear();                      // sub_5069C queue: cleared when entering a new battlefield
+    battle_spawn_queue_count_ = 0;                    // byte_110694: fresh process/battle starts at 0
     battle_sce_snapshot_complete_ = false;
     battle_wc1_occupancy_state_known_ = false;
     if (parse_sce_snapshot && !sce_raw_.empty() && sce_raw_.size() > 0x19A) {

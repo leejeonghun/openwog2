@@ -320,6 +320,10 @@ struct VmWalkUnit {
     // decides the walk/drop frame counts. The 8-bit negate/sign-extend matters when
     // count1 >= 0x80, where the value is not count2 + count1 + 1.
     int count2 = 0;
+    // Stream offset of this record's count1 byte (one before the 0x88 record). sub_5069C's
+    // 11-byte queue slot keeps it as its first dword, and sub_51211 re-reads count1, load,
+    // count2 and the tile rows through it when the queued record finally activates.
+    uint32_t count1_off = 0;
     // sub_50D9F var_24 write for this record (loc_50E71..loc_50EDD): -1 = the record did not
     // write the slot (raw army != 0), 0/1 = sub_500ED failed/succeeded for a raw-army-0
     // record. The value is applied at playback, in record order, to spawn_var24_carry_.
@@ -604,10 +608,23 @@ private:
     void battle_spawn_dest(const VmEvent& ev, int unit_index, int& x, int& y, int& facing) const;
     // Partial event holding only the given units (walk list and frame count recomputed).
     VmEvent battle_spawn_subevent(const VmEvent& ev, const std::vector<int>& units) const;
-    // Mirrors the 11-byte unk_1006BC queue (32 slots); used==false is a free slot (original
-    // [+0]==0).
-    struct PendingSpawn { VmEvent ev; bool used = false; };
+    // sub_5069C's unk_1006BC slot, 11 bytes:
+    //   [0..3] dword stream offset (count1 byte, one before the 0x88 record)
+    //   [4] x, [5] y (destination tested by sub_16699), [6] load (facing)
+    //   [7..10] dword_F0648 record pointer -> units_ index
+    // used == false is a free slot (original [0] == 0).
+    struct PendingSpawn {
+        bool used = false;
+        uint32_t count1_off = 0;
+        int x = 0, y = 0;
+        int load = 0;
+        int unit_index = -1;
+    };
     std::vector<PendingSpawn> battle_spawn_queue_;
+    // byte_110694: sub_5069C increments it for every queued record, even when all 32 slots are
+    // full, and sub_51211 decrements it per activated slot and stops scanning when it reaches 0.
+    // It is a byte in the original, so 255 -> 0 wraps and makes sub_51211 return early.
+    uint8_t battle_spawn_queue_count_ = 0;
     // sub_50D9F var_24 is an uninitialised stack slot at [esp+24h-24h], the bottom of its 0x24
     // byte local area. sub_52E55 issues every 0x03 command from the same call site with the same
     // frame, so a raw-army-0 record's write carries over to later records and later 0x03
@@ -616,7 +633,7 @@ private:
     // not found -> 0) from there. The writes are applied while the Spawn event plays (execution
     // order), not while the parser scans.
     int spawn_var24_carry_ = 1;
-    void battle_spawn_enqueue(const VmEvent& single);    // sub_5069C
+    void battle_spawn_enqueue(const VmEvent& single, int unit_index);    // sub_5069C
 
     // ---- Camera scrolling (sub_50339 sets up, sub_5046B advances every frame) ----
     // The 0x0F handler only stores the target/speed globals (sub_50339) and returns
