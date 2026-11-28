@@ -2521,23 +2521,33 @@ int CombatII::battle_tile_187b1(int unit_index) const {
 }
 
 // sub_4ECE4(item): increments the count of stash record word_FDF85 and stores (item-1) in that
-// slot: inc byte_FE4FF[idx*30]; byte_FE4FF[idx*30 + count] = item-1.
-// The original overruns the 30-byte record into the next one; the port ignores items beyond 29.
+// slot: inc byte_FE4FF[idx*30]; byte_FE4FF[idx*30 + count] = item-1. Both the count and the
+// index are bytes and there is no range check (ASM 84916-84933), so the 30th item overwrites the
+// next record's count byte, and count wraps from 0FFh to 0. The port models the flat 100-record
+// block (3000 bytes, written to BLACKBOX.DAT at file offset 0x4158) and keeps writes inside it:
+// a write past its end only corrupts memory that sub_4E622 never saves.
 void CombatII::battle_stash_add(int item) {
     const size_t rec = (size_t)fdf85_word_ * 30u;
-    if (fdf85_word_ >= 100 || rec + 29u >= sizeof(battle_stash_)) {
-        if (battle_trace_) fprintf(stderr, "COMBAT: warning: stash add item=%d: word_FDF85=%u out of range - ignored\n", item, (unsigned)fdf85_word_);
+    const size_t block = sizeof(battle_stash_);               // 100 records * 30 bytes
+    if (rec >= block) {
+        if (battle_trace_) fprintf(stderr, "COMBAT: warning: stash add item=%d: word_FDF85=%u outside the 100-record stash block - not modelled\n", item, (unsigned)fdf85_word_);
         return;
     }
     uint8_t& cnt = battle_stash_[rec];
-    if (cnt >= 29) {
-        if (battle_trace_) fprintf(stderr, "COMBAT: stash add item=%d: record %u full - ignored\n", item, (unsigned)fdf85_word_);
+    ++cnt;                                                    // inc byte ptr: wraps at 100h
+    const size_t off = rec + (size_t)cnt;
+    if (off >= block) {
+        if (battle_trace_) fprintf(stderr, "COMBAT: warning: stash add item=%d: record %u count=%u writes past the 100-record stash block - not modelled\n", item, (unsigned)fdf85_word_, (unsigned)cnt);
         return;
     }
-    ++cnt;
-    battle_stash_[rec + cnt] = (uint8_t)(item - 1);
-    if (battle_trace_)
-        fprintf(stderr, "COMBAT: stash add item=%d -> record %u count=%u (sub_4ECE4)\n", item, (unsigned)fdf85_word_, (unsigned)cnt);
+    battle_stash_[off] = (uint8_t)(item - 1);
+    if (battle_trace_) {
+        if (cnt >= 30)
+            fprintf(stderr, "COMBAT: stash add item=%d -> record %u count=%u item[%u] runs into record +%u (sub_4ECE4 overrun)\n",
+                    item, (unsigned)fdf85_word_, (unsigned)cnt, (unsigned)cnt, (unsigned)(cnt / 30u));
+        else
+            fprintf(stderr, "COMBAT: stash add item=%d -> record %u count=%u (sub_4ECE4)\n", item, (unsigned)fdf85_word_, (unsigned)cnt);
+    }
 }
 
 // sub_4E622: writes the whole BLACKBOX.DAT block.
@@ -2620,8 +2630,12 @@ void CombatII::battle_blackbox_save(int open_mode) {
             if (fwrite(hdr, 1, 6, fp) != 6) { ok = false; break; }
             if (old_cnt && fwrite(old_items, 1, old_cnt, fp) != old_cnt) { ok = false; break; }
             if (add) {
-                const uint8_t* src = battle_stash_ + (size_t)i * 30u + 1u;
-                const size_t n = std::min<size_t>(add, 29u);
+                // sub_4E622 (ASM 84479-84498) writes `add` bytes from byte_FE4FF + i*30 + 1, not
+                // just the 29 slots of the record: an overrun count reads into the following
+                // records of the flat 100-record block. Clip only at the end of the array.
+                const size_t src_off = (size_t)i * 30u + 1u;
+                const uint8_t* src = battle_stash_ + src_off;
+                const size_t n = std::min<size_t>(add, sizeof(battle_stash_) - src_off);
                 if (fwrite(src, 1, n, fp) != n) { ok = false; break; }
             }
             if (old_items && op + 6u + old_cnt <= old.size()) op += 6u + old_cnt;
@@ -2678,7 +2692,9 @@ bool CombatII::battle_quick_save_4f4ef() {
     // flag arrays in the exact sub_4F4EF order (they live in genesis.qsv, not BLACKBOX.DAT).
     // V6 appends byte_BA84D (weather_), byte_FF0B7 (battle_bgm_id_), byte_FF0B8 (battle_sfx_id_).
     // V7 widens scenario_flags_ from 256 bytes to 65536 bytes (R3-048).
-    ok = ok && qsv_write_u32(f, 7);
+    // V8 stores the [+77h] linked (pre-transform) record inside the unit loop and the three
+    // word_FD8BC bytes after the media block (sub_4F4EF 85688-85712, 85871-85877).
+    ok = ok && qsv_write_u32(f, 8);
     const std::string& scen = current_scenario_name_;
     ok = ok && qsv_write_u32(f, (uint32_t)scen.size());
     if (ok && !scen.empty()) ok = fwrite(scen.data(), 1, scen.size(), f) == scen.size();
@@ -2705,6 +2721,16 @@ bool CombatII::battle_quick_save_4f4ef() {
         uint8_t rec[0x88] = {};
         battle_pack_unit_record(u, rec, true);
         ok = fwrite(rec, 1, sizeof(rec), f) == sizeof(rec);
+        // sub_4F4EF loc_4F592: `mov edx,[ecx+77h]; test edx,edx; jz loc_4F5B7` -> the linked
+        // record is written right after the unit record. The original uses the pointer value
+        // itself as the existence flag; the port writes an explicit flag first.
+        const bool has_link = u.stored_77 != nullptr;
+        ok = ok && qsv_write_u32(f, has_link ? 1u : 0u);
+        if (ok && has_link) {
+            uint8_t link[0x88] = {};
+            battle_pack_unit_record(*u.stored_77, link, true);
+            ok = fwrite(link, 1, sizeof(link), f) == sizeof(link);
+        }
         ok = ok && qsv_write_u32(f, u.list_seq);
         ok = ok && qsv_write_u32(f, u.active ? 1u : 0u);
     }
@@ -2766,6 +2792,16 @@ bool CombatII::battle_quick_save_4f4ef() {
             (uint8_t)(int8_t)battle_sfx_id_,
         };
         if (ok) ok = fwrite(media, 1, sizeof(media), f) == sizeof(media);
+    }
+    {
+        // sub_4F4EF (ASM 85871-85877): `mov ebx,3; mov edx,offset word_FD8BC; call write_`.
+        // The three bytes are word_FD8BC (2 bytes) plus the low byte of word_FD8BE; word_FD8C0
+        // is not written, so sub_4F85C leaves it at its current value.
+        const uint8_t one_shot[3] = {
+            (uint8_t)(battle_fd8bc_ & 0xFF), (uint8_t)(battle_fd8bc_ >> 8),
+            (uint8_t)(battle_fd8be_ & 0xFF),
+        };
+        if (ok) ok = fwrite(one_shot, 1, sizeof(one_shot), f) == sizeof(one_shot);
     }
     fclose(f);
     if (!ok) {
@@ -2855,7 +2891,7 @@ bool CombatII::battle_quick_load_4fd25() {
     uint32_t scen_len = 0, uw = 0;
     int32_t i32 = 0;
     ok = ok && qsv_read_u32(f, h.version) &&
-         (h.version >= 2 && h.version <= 7) &&
+         (h.version >= 2 && h.version <= 8) &&
          qsv_read_u32(f, scen_len) && scen_len < 256;
     if (ok && scen_len) {
         h.scen.resize(scen_len);
@@ -2908,7 +2944,7 @@ bool CombatII::battle_quick_load_4fd25() {
         char m2[8] = {};
         auto skip_u32 = [&](uint32_t& v) { return qsv_read_u32(f, v); };
         if (fread(m2, 1, 8, f) != 8 || memcmp(m2, "G2QSV2", 6) != 0 ||
-            !skip_u32(uw) || (uw < 2 || uw > 7) ||
+            !skip_u32(uw) || (uw < 2 || uw > 8) ||
             !skip_u32(uw) || uw >= 256) {
             fclose(f); return fail("quick load header corrupt (" + path + ")");
         }
@@ -2923,9 +2959,13 @@ bool CombatII::battle_quick_load_4fd25() {
     loaded.reserve(unit_count);
     if (ok) {
         for (uint32_t i = 0; i < unit_count; ++i) {
-            uint8_t rec[0x88]; uint32_t seq = 0, active = 1;
-            if (fread(rec, 1, sizeof(rec), f) != sizeof(rec) || !qsv_read_u32(f, seq) ||
-                (h.version >= 3 && !qsv_read_u32(f, active))) { ok = false; break; }
+            uint8_t rec[0x88]; uint32_t seq = 0, active = 1, has_link = 0;
+            uint8_t link_rec[0x88] = {};
+            if (fread(rec, 1, sizeof(rec), f) != sizeof(rec)) { ok = false; break; }
+            // V8: sub_4F4EF wrote the [+77h] linked record directly after the unit record.
+            if (h.version >= 8 && (!qsv_read_u32(f, has_link) || has_link > 1)) { ok = false; break; }
+            if (has_link && fread(link_rec, 1, sizeof(link_rec), f) != sizeof(link_rec)) { ok = false; break; }
+            if (!qsv_read_u32(f, seq) || (h.version >= 3 && !qsv_read_u32(f, active))) { ok = false; break; }
             CombatUnitPlacement u = battle_unpack_unit_record(rec);
             u.list_seq = seq;
             u.active = active != 0;
@@ -2939,6 +2979,14 @@ bool CombatII::battle_quick_load_4fd25() {
                 battle_slot_recolor(qsv_slot);
             } else {
                 u.slot_hint = battle_image_slot(u.sprite_type);
+            }
+            // sub_4F85C loc_4FA33 (ASM 86016-86036): `cmp dword ptr [ecx+77h],0` -> allocate a
+            // record, read the second 0x88 into it, link it and set `[stored+60h] =
+            // sub_11B77(unit)` (the pre-transform form's image slot via sub_1198D).
+            if (ok && has_link) {
+                u.stored_77 = std::make_shared<CombatUnitPlacement>(battle_unpack_unit_record(link_rec));
+                const int rider = battle_rider_image_type(u);
+                u.stored_77->slot_hint = (rider >= 0) ? battle_image_slot(rider) : 0;
             }
             loaded.push_back(u);
         }
@@ -3011,6 +3059,8 @@ bool CombatII::battle_quick_load_4fd25() {
     uint8_t qsv_weather = weather_;
     int8_t qsv_bgm_id = (int8_t)battle_bgm_id_;
     int8_t qsv_sfx_id = (int8_t)battle_sfx_id_;
+    uint16_t qsv_fd8bc = battle_fd8bc_;
+    uint16_t qsv_fd8be = battle_fd8be_;
     if (ok && tail_ok && h.version >= 6) {
         uint8_t media[3] = {};
         ok = fread(media, 1, sizeof(media), f) == sizeof(media);
@@ -3018,6 +3068,16 @@ bool CombatII::battle_quick_load_4fd25() {
             qsv_weather = media[0];
             qsv_bgm_id = (int8_t)media[1];
             qsv_sfx_id = (int8_t)media[2];
+        }
+    }
+    if (ok && tail_ok && h.version >= 8) {
+        // sub_4F85C (ASM 86193-86199): the same three bytes are read into word_FD8BC. Only the
+        // low byte of word_FD8BE is restored; word_FD8C0 is not saved and keeps its value.
+        uint8_t one_shot[3] = {};
+        ok = fread(one_shot, 1, sizeof(one_shot), f) == sizeof(one_shot);
+        if (ok) {
+            qsv_fd8bc = (uint16_t)(one_shot[0] | (one_shot[1] << 8));
+            qsv_fd8be = (uint16_t)((battle_fd8be_ & 0xFF00u) | one_shot[2]);
         }
     }
     fclose(f);
@@ -3094,6 +3154,10 @@ bool CombatII::battle_quick_load_4fd25() {
         weather_ = qsv_weather;
         battle_bgm_id_ = (int)qsv_bgm_id;
         battle_sfx_id_ = (int)qsv_sfx_id;
+    }
+    if (h.version >= 8) {
+        battle_fd8bc_ = qsv_fd8bc;
+        battle_fd8be_ = qsv_fd8be;   // word_FD8C0 untouched (not serialized by sub_4F4EF)
     }
     // sub_4F85C calls sub_4F3BD; sub_4FD25 then calls sub_44F30, sub_11FC4, sub_4F369, sub_4F427.
     battle_sfx_start_4f3bd();
@@ -7283,7 +7347,6 @@ CombatUnitPlacement battle_unpack_unit_record(const uint8_t* rec) {
     p.combat_mp_50 = r16(0x50); p.combat_mp_max_52 = r16(0x52);
     p.combat_value_54 = (int16_t)r16(0x54);
     p.battle_gauge = rec[0x56];
-    p.combat_acc57 = r16(0x57);
     p.combat_def59 = rec[0x59];
     p.combat_type_5a = rec[0x5A]; p.combat_type_5b = rec[0x5B]; p.code_b = rec[0x5C];
     p.combat_type_5d = rec[0x5D]; p.inv_5e = rec[0x5E]; p.inv_5f = rec[0x5F];
@@ -7303,6 +7366,10 @@ CombatUnitPlacement battle_unpack_unit_record(const uint8_t* rec) {
     p.reward_money_85 = r16(0x85);
     p.ai_target_unit = -1;
     apply_record_hp(p, rec);
+    // [+57h] is the TP accumulated during the battle. apply_record_hp follows the SCE loader
+    // (sub_4ED18), which ignores it, but the qsv and BLACKBOX 0x88 records are the live record
+    // that sub_4F85C / sub_4E81F restore as-is, so re-apply it after the zeroing above.
+    p.combat_acc57 = r16(0x57);
     p.active = true;
     p.occupancy_hp_known = battle_hp_raw(p) > 0;
     return p;
@@ -9828,6 +9895,11 @@ int CombatII::battle_spell_2c36a(int unit_index, int k) {
     }
     const int count = std::min(std::max(k + 1, 1), 3);           // 29C5A count = edx+1
     const int facing = (int)units_[(size_t)unit_index].facing & 3;
+    // sub_29C5A (ASM 35546-35570) always writes dirs[0], writes dirs[1] only when count > 1 and
+    // dirs[2] only when count > 2. sub_2C36A's raise loop nevertheless always runs si = 0..2
+    // (ASM 39060-39105), so for k = 0/1 the original's extra attempts read two stack bytes it
+    // never initialized. The port keeps the facing-derived values above as the deterministic
+    // stand-in for those bytes and mirrors the fixed three attempts.
     int dirs[3] = {facing, (facing + 1) & 3, (facing + 3) & 3};  // 29C5A var_C[0..2]
     // sub_29C5A: sub_14300(0x0C) -> sub_14032 -> sub_143F3 diffusion (budget 12).
     const std::vector<int> grid = battle_ai_build_diffusion(unit_index, 0x0C);
@@ -9838,7 +9910,7 @@ int CombatII::battle_spell_2c36a(int unit_index, int k) {
     const int ux = (int)(int8_t)units_[(size_t)unit_index].x;
     const int uy = (int)(int8_t)units_[(size_t)unit_index].y;
     int raised = 0;
-    for (int i = 0; i < count && !should_exit_; ++i) {
+    for (int i = 0; i < 3 && !should_exit_; ++i) {              // inc esi; cmp si,3; jl1
         int nx = ux, ny = uy;
         switch (dirs[i]) {                                       // sub_49ABC
             case 0: ++ny; break;
@@ -9900,7 +9972,7 @@ int CombatII::battle_spell_2c36a(int unit_index, int k) {
     if (!should_exit_ && (size_t)unit_index < units_.size())
         reset_unit_pose(units_[(size_t)unit_index]);             // sub_12124(caster)
     if (battle_trace_)
-        fprintf(stderr, "COMBAT: soul recall done unit=%d raised=%d/%d\n",
+        fprintf(stderr, "COMBAT: soul recall done unit=%d raised=%d/3 count=%d\n",
                 units_[(size_t)unit_index].id, raised, count);
     return 0;
 }

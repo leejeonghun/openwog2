@@ -95,14 +95,27 @@ void CombatII::camera_center_on(int tx, int ty) {
     if (cx > maxx) cx = maxx;                 // sub eax,0Ch; jle -> clamp to map-12
     if (cy > maxy) cy = maxy;
     if (cx == cam_tile_x_ && cy == cam_tile_y_) return;
+    // loc_112B7 (ASM 1795-1813): after either scroll path sub_1124A always runs
+    //   sub_4A321 -> sub_49FE1(tx,ty) -> sub_454B3 -> sub_4A106 -> sub_5E9E8.
+    // sub_49FE1 selects the unit standing on the *requested* tile (not the clamped camera tile)
+    // and sub_4A106 draws its selection box and HP over a fresh world frame. The port has no
+    // persistent dword_FB1BC, so it draws the box directly. (The cases where the camera is
+    // already on the target still skip the frame entirely; that is R2-007.)
+    auto draw_target_frame = [&](int sel_tx, int sel_ty) {
+        render_battle_frame();                                     // sub_454B3
+        const int su = battle_unit_index_at(sel_tx, sel_ty);       // sub_49FE1 -> sub_11DB2
+        if (su >= 0) draw_speaker_frame(su);                       // sub_4A106 (box + HP)
+        video_.present();                                          // sub_5E9E8
+    };
     if (battle_instant_camera_) { // equivalent of sub_111BE (FDAEA!=0, no animation)
         cam_tile_x_ = cx; cam_tile_y_ = cy;
         cam_fine_x_ = CAM_FINE_X_REST; cam_fine_y_ = CAM_FINE_Y_REST;
-        // sub_1124A's FDAEA path is sub_111BE + sub_454B3 (+ 49FE1/4A106/5E9E8) and never calls
-        // sub_5046B, so this frame must not draw or decrement a pending message window either.
+        // sub_1124A's FDAEA path is sub_111BE + sub_454B3, then the shared loc_112B7 sequence
+        // (4A321/49FE1 -> 454B3 -> 4A106 -> 5E9E8). It never calls sub_5046B, so these frames
+        // must not draw or decrement a pending message window either.
         msg_frame_due_ = false;
-        render_battle_frame(); // equivalent of sub_454B3
-        video_.present();
+        render_battle_frame(); // equivalent of the first sub_454B3
+        draw_target_frame(tx, ty);
         return;
     }
     camera_setup(0, cx, cy, 4);               // sub_11003+60: set the target via the scroll machinery
@@ -117,6 +130,8 @@ void CombatII::camera_center_on(int tx, int ty) {
         render_battle_frame();
         video_.present();
     }
+    msg_frame_due_ = false;   // loc_112B7's sub_454B3 also skips the message window
+    draw_target_frame(tx, ty);
 }
 
 // sub_454D5 dim gate (FA8B6). The original sets FA8B6=1 in the 4B767/4B8EB/4D674 loops
