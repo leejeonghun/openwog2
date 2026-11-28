@@ -2521,23 +2521,33 @@ int CombatII::battle_tile_187b1(int unit_index) const {
 }
 
 // sub_4ECE4(item): increments the count of stash record word_FDF85 and stores (item-1) in that
-// slot: inc byte_FE4FF[idx*30]; byte_FE4FF[idx*30 + count] = item-1.
-// The original overruns the 30-byte record into the next one; the port ignores items beyond 29.
+// slot: inc byte_FE4FF[idx*30]; byte_FE4FF[idx*30 + count] = item-1. Both the count and the
+// index are bytes and there is no range check (ASM 84916-84933), so the 30th item overwrites the
+// next record's count byte, and count wraps from 0FFh to 0. The port models the flat 100-record
+// block (3000 bytes, written to BLACKBOX.DAT at file offset 0x4158) and keeps writes inside it:
+// a write past its end only corrupts memory that sub_4E622 never saves.
 void CombatII::battle_stash_add(int item) {
     const size_t rec = (size_t)fdf85_word_ * 30u;
-    if (fdf85_word_ >= 100 || rec + 29u >= sizeof(battle_stash_)) {
-        if (battle_trace_) fprintf(stderr, "COMBAT: warning: stash add item=%d: word_FDF85=%u out of range - ignored\n", item, (unsigned)fdf85_word_);
+    const size_t block = sizeof(battle_stash_);               // 100 records * 30 bytes
+    if (rec >= block) {
+        if (battle_trace_) fprintf(stderr, "COMBAT: warning: stash add item=%d: word_FDF85=%u outside the 100-record stash block - not modelled\n", item, (unsigned)fdf85_word_);
         return;
     }
     uint8_t& cnt = battle_stash_[rec];
-    if (cnt >= 29) {
-        if (battle_trace_) fprintf(stderr, "COMBAT: stash add item=%d: record %u full - ignored\n", item, (unsigned)fdf85_word_);
+    ++cnt;                                                    // inc byte ptr: wraps at 100h
+    const size_t off = rec + (size_t)cnt;
+    if (off >= block) {
+        if (battle_trace_) fprintf(stderr, "COMBAT: warning: stash add item=%d: record %u count=%u writes past the 100-record stash block - not modelled\n", item, (unsigned)fdf85_word_, (unsigned)cnt);
         return;
     }
-    ++cnt;
-    battle_stash_[rec + cnt] = (uint8_t)(item - 1);
-    if (battle_trace_)
-        fprintf(stderr, "COMBAT: stash add item=%d -> record %u count=%u (sub_4ECE4)\n", item, (unsigned)fdf85_word_, (unsigned)cnt);
+    battle_stash_[off] = (uint8_t)(item - 1);
+    if (battle_trace_) {
+        if (cnt >= 30)
+            fprintf(stderr, "COMBAT: stash add item=%d -> record %u count=%u item[%u] runs into record +%u (sub_4ECE4 overrun)\n",
+                    item, (unsigned)fdf85_word_, (unsigned)cnt, (unsigned)cnt, (unsigned)(cnt / 30u));
+        else
+            fprintf(stderr, "COMBAT: stash add item=%d -> record %u count=%u (sub_4ECE4)\n", item, (unsigned)fdf85_word_, (unsigned)cnt);
+    }
 }
 
 // sub_4E622: writes the whole BLACKBOX.DAT block.
@@ -2620,8 +2630,12 @@ void CombatII::battle_blackbox_save(int open_mode) {
             if (fwrite(hdr, 1, 6, fp) != 6) { ok = false; break; }
             if (old_cnt && fwrite(old_items, 1, old_cnt, fp) != old_cnt) { ok = false; break; }
             if (add) {
-                const uint8_t* src = battle_stash_ + (size_t)i * 30u + 1u;
-                const size_t n = std::min<size_t>(add, 29u);
+                // sub_4E622 (ASM 84479-84498) writes `add` bytes from byte_FE4FF + i*30 + 1, not
+                // just the 29 slots of the record: an overrun count reads into the following
+                // records of the flat 100-record block. Clip only at the end of the array.
+                const size_t src_off = (size_t)i * 30u + 1u;
+                const uint8_t* src = battle_stash_ + src_off;
+                const size_t n = std::min<size_t>(add, sizeof(battle_stash_) - src_off);
                 if (fwrite(src, 1, n, fp) != n) { ok = false; break; }
             }
             if (old_items && op + 6u + old_cnt <= old.size()) op += 6u + old_cnt;
@@ -2678,7 +2692,11 @@ bool CombatII::battle_quick_save_4f4ef() {
     // flag arrays in the exact sub_4F4EF order (they live in genesis.qsv, not BLACKBOX.DAT).
     // V6 appends byte_BA84D (weather_), byte_FF0B7 (battle_bgm_id_), byte_FF0B8 (battle_sfx_id_).
     // V7 widens scenario_flags_ from 256 bytes to 65536 bytes (R3-048).
-    ok = ok && qsv_write_u32(f, 7);
+    // V8 stores the [+77h] linked (pre-transform) record inside the unit loop and the three
+    // word_FD8BC bytes after the media block (sub_4F4EF 85688-85712, 85871-85877). V9 stores
+    // each unit's scheduler group: sub_4F85C restores the original's six army lists in order and
+    // uses that list index for its recolor branch (cmp bx,4), while the port's unit vector is flat.
+    ok = ok && qsv_write_u32(f, 9);
     const std::string& scen = current_scenario_name_;
     ok = ok && qsv_write_u32(f, (uint32_t)scen.size());
     if (ok && !scen.empty()) ok = fwrite(scen.data(), 1, scen.size(), f) == scen.size();
@@ -2705,8 +2723,19 @@ bool CombatII::battle_quick_save_4f4ef() {
         uint8_t rec[0x88] = {};
         battle_pack_unit_record(u, rec, true);
         ok = fwrite(rec, 1, sizeof(rec), f) == sizeof(rec);
+        // sub_4F4EF loc_4F592: `mov edx,[ecx+77h]; test edx,edx; jz loc_4F5B7` -> the linked
+        // record is written right after the unit record. The original uses the pointer value
+        // itself as the existence flag; the port writes an explicit flag first.
+        const bool has_link = u.stored_77 != nullptr;
+        ok = ok && qsv_write_u32(f, has_link ? 1u : 0u);
+        if (ok && has_link) {
+            uint8_t link[0x88] = {};
+            battle_pack_unit_record(*u.stored_77, link, true);
+            ok = fwrite(link, 1, sizeof(link), f) == sizeof(link);
+        }
         ok = ok && qsv_write_u32(f, u.list_seq);
         ok = ok && qsv_write_u32(f, u.active ? 1u : 0u);
+        ok = ok && qsv_write_u32(f, (uint32_t)u.group);          // V9: per-group loop index
     }
     auto write_list = [&](const std::vector<int>& v) {
         ok = ok && qsv_write_u32(f, (uint32_t)v.size());
@@ -2766,6 +2795,16 @@ bool CombatII::battle_quick_save_4f4ef() {
             (uint8_t)(int8_t)battle_sfx_id_,
         };
         if (ok) ok = fwrite(media, 1, sizeof(media), f) == sizeof(media);
+    }
+    {
+        // sub_4F4EF (ASM 85871-85877): `mov ebx,3; mov edx,offset word_FD8BC; call write_`.
+        // The three bytes are word_FD8BC (2 bytes) plus the low byte of word_FD8BE; word_FD8C0
+        // is not written, so sub_4F85C leaves it at its current value.
+        const uint8_t one_shot[3] = {
+            (uint8_t)(battle_fd8bc_ & 0xFF), (uint8_t)(battle_fd8bc_ >> 8),
+            (uint8_t)(battle_fd8be_ & 0xFF),
+        };
+        if (ok) ok = fwrite(one_shot, 1, sizeof(one_shot), f) == sizeof(one_shot);
     }
     fclose(f);
     if (!ok) {
@@ -2855,7 +2894,7 @@ bool CombatII::battle_quick_load_4fd25() {
     uint32_t scen_len = 0, uw = 0;
     int32_t i32 = 0;
     ok = ok && qsv_read_u32(f, h.version) &&
-         (h.version >= 2 && h.version <= 7) &&
+         (h.version >= 2 && h.version <= 9) &&
          qsv_read_u32(f, scen_len) && scen_len < 256;
     if (ok && scen_len) {
         h.scen.resize(scen_len);
@@ -2908,7 +2947,7 @@ bool CombatII::battle_quick_load_4fd25() {
         char m2[8] = {};
         auto skip_u32 = [&](uint32_t& v) { return qsv_read_u32(f, v); };
         if (fread(m2, 1, 8, f) != 8 || memcmp(m2, "G2QSV2", 6) != 0 ||
-            !skip_u32(uw) || (uw < 2 || uw > 7) ||
+            !skip_u32(uw) || (uw < 2 || uw > 9) ||
             !skip_u32(uw) || uw >= 256) {
             fclose(f); return fail("quick load header corrupt (" + path + ")");
         }
@@ -2923,12 +2962,37 @@ bool CombatII::battle_quick_load_4fd25() {
     loaded.reserve(unit_count);
     if (ok) {
         for (uint32_t i = 0; i < unit_count; ++i) {
-            uint8_t rec[0x88]; uint32_t seq = 0, active = 1;
-            if (fread(rec, 1, sizeof(rec), f) != sizeof(rec) || !qsv_read_u32(f, seq) ||
-                (h.version >= 3 && !qsv_read_u32(f, active))) { ok = false; break; }
+            uint8_t rec[0x88]; uint32_t seq = 0, active = 1, has_link = 0, group = 2;
+            uint8_t link_rec[0x88] = {};
+            if (fread(rec, 1, sizeof(rec), f) != sizeof(rec)) { ok = false; break; }
+            // V8: sub_4F4EF wrote the [+77h] linked record directly after the unit record.
+            if (h.version >= 8 && (!qsv_read_u32(f, has_link) || has_link > 1)) { ok = false; break; }
+            if (has_link && fread(link_rec, 1, sizeof(link_rec), f) != sizeof(link_rec)) { ok = false; break; }
+            if (!qsv_read_u32(f, seq) || (h.version >= 3 && !qsv_read_u32(f, active))) { ok = false; break; }
+            if (h.version >= 9 && !qsv_read_u32(f, group)) { ok = false; break; }
             CombatUnitPlacement u = battle_unpack_unit_record(rec);
             u.list_seq = seq;
             u.active = active != 0;
+            u.group = (int)group;    // V9: restore the scheduler group (v8 and older: 2, unpack default)
+            // sub_4F85C: when the loaded record has [+12h] != 0 (summon/revive) and its group
+            // is below 4, the type tag is set to FFh, a fresh slot is assigned and the same
+            // LUT page 2 recolor runs. Every other record takes the type's normal slot
+            // (`[60h] = sub_1198D([61h])`).
+            if (u.item_use_12 != 0 && u.group < 4) {
+                const int qsv_slot = battle_image_slot_force_new();
+                u.slot_hint = qsv_slot;
+                battle_slot_recolor(qsv_slot);
+            } else {
+                u.slot_hint = battle_image_slot(u.sprite_type);
+            }
+            // sub_4F85C loc_4FA33 (ASM 86016-86036): `cmp dword ptr [ecx+77h],0` -> allocate a
+            // record, read the second 0x88 into it, link it and set `[stored+60h] =
+            // sub_11B77(unit)` (the pre-transform form's image slot via sub_1198D).
+            if (ok && has_link) {
+                u.stored_77 = std::make_shared<CombatUnitPlacement>(battle_unpack_unit_record(link_rec));
+                const int rider = battle_rider_image_type(u);
+                u.stored_77->slot_hint = (rider >= 0) ? battle_image_slot(rider) : 0;
+            }
             loaded.push_back(u);
         }
     }
@@ -3000,6 +3064,8 @@ bool CombatII::battle_quick_load_4fd25() {
     uint8_t qsv_weather = weather_;
     int8_t qsv_bgm_id = (int8_t)battle_bgm_id_;
     int8_t qsv_sfx_id = (int8_t)battle_sfx_id_;
+    uint16_t qsv_fd8bc = battle_fd8bc_;
+    uint16_t qsv_fd8be = battle_fd8be_;
     if (ok && tail_ok && h.version >= 6) {
         uint8_t media[3] = {};
         ok = fread(media, 1, sizeof(media), f) == sizeof(media);
@@ -3007,6 +3073,16 @@ bool CombatII::battle_quick_load_4fd25() {
             qsv_weather = media[0];
             qsv_bgm_id = (int8_t)media[1];
             qsv_sfx_id = (int8_t)media[2];
+        }
+    }
+    if (ok && tail_ok && h.version >= 8) {
+        // sub_4F85C (ASM 86193-86199): the same three bytes are read into word_FD8BC. Only the
+        // low byte of word_FD8BE is restored; word_FD8C0 is not saved and keeps its value.
+        uint8_t one_shot[3] = {};
+        ok = fread(one_shot, 1, sizeof(one_shot), f) == sizeof(one_shot);
+        if (ok) {
+            qsv_fd8bc = (uint16_t)(one_shot[0] | (one_shot[1] << 8));
+            qsv_fd8be = (uint16_t)((battle_fd8be_ & 0xFF00u) | one_shot[2]);
         }
     }
     fclose(f);
@@ -3083,6 +3159,10 @@ bool CombatII::battle_quick_load_4fd25() {
         weather_ = qsv_weather;
         battle_bgm_id_ = (int)qsv_bgm_id;
         battle_sfx_id_ = (int)qsv_sfx_id;
+    }
+    if (h.version >= 8) {
+        battle_fd8bc_ = qsv_fd8bc;
+        battle_fd8be_ = qsv_fd8be;   // word_FD8C0 untouched (not serialized by sub_4F4EF)
     }
     // sub_4F85C calls sub_4F3BD; sub_4FD25 then calls sub_44F30, sub_11FC4, sub_4F369, sub_4F427.
     battle_sfx_start_4f3bd();
@@ -3724,7 +3804,9 @@ void CombatII::play_unit_death_anim(int unit_index) {
         return;
     }
     // ---- sub_463FB ----
-    const NC2Frame* f0 = nc2_frame_for(U.sprite_type, 0, 0);
+    // sub_10194 decodes dword_D66B1[slot*572], the unit slot's facing-0/pose-0 sprite, so a
+    // recoloured slot feeds LUT page 2 colours into unk_F8A88 as well.
+    const NC2Frame* f0 = nc2_frame_for_slot(U.sprite_type, 0, 0, U.slot_hint);
     // sub_10194(unk_F8A88, dword_D66B1[slot*572] = the facing-0/pose-0 sprite) decodes the RLE,
     // counts the PIXELS and stores each decoded pixel value in order in unk_F8A88. When the total
     // would pass 0x100 it rewinds that run and stops (hence the 255 cap). The returned di is the
@@ -5160,15 +5242,22 @@ bool CombatII::battle_player_input() {
                     return false;
                 }
                 case SubRingKind::Item: {
-                    battle_item_pending_dx_ = opt;
                     if (battle_trace_)
                         fprintf(stderr, "COMBAT: item dx=%d (4CDBD)\n", opt);
-                    // Warp (dx 0) and mount/dismount (dx 5) open the sub_4A483 destination cursor.
-                    if (opt == 0 || opt == 5) {
+                    // Warp (dx 0), mount/dismount (dx 5) and teleport (dx 9) open the
+                    // sub_4A483 destination cursor. sub_3BFAC paints the E8F46 diamond before
+                    // entering that loop, so the teleport marks happen here as well. The
+                    // pending dx is stored after the close animation: 44D67(1) only comes on
+                    // once the marking is done, so the collapsing ring must not shade the
+                    // previous battle_e8_grid_.
+                    if (opt == 0 || opt == 5 || opt == 9) {
                         ring_sub_close();
+                        battle_item_pending_dx_ = opt;
+                        if (opt == 9) battle_teleport_prepare(ui);
                         return false;
                     }
                     // Immediate items run right away, as on the number-key path.
+                    battle_item_pending_dx_ = opt;
                     ring_sub_close();
                     battle_item_select_ = false;
                     battle_item_pending_dx_ = -1;
@@ -5768,8 +5857,10 @@ bool CombatII::battle_player_input() {
         if (battle_item_select_ && (size_t)k < battle_item_options_.size()) {
             const int dx = battle_item_options_[(size_t)k];
             battle_item_pending_dx_ = dx;
-            if (dx == 0 || dx == 5) {
-                // Warp (3C7D1) and mount/dismount (3B7CE/3B614) open the target click cursor.
+            if (dx == 0 || dx == 5 || dx == 9) {
+                // Warp (3C7D1), mount/dismount (3B7CE/3B614) and teleport (3BFAC) open the
+                // target click cursor.
+                if (dx == 9) battle_teleport_prepare(ui);
                 return false;
             }
             battle_item_select_ = false;
@@ -6706,7 +6797,10 @@ void CombatII::battle_panel_ai_4b4ca(int unit_index) {
     int16_t residue = 0;
 
     auto unit_portrait_and_name = [&](const CombatUnitPlacement& t) {
-        if (const NC2Frame* fr = nc2_frame_for(t.sprite_type, 0, 0)) blit_nc2_frame(0x18, y, *fr);   // sub_5F3FD
+        // sub_5F3FD draws D66A8[slot*572 + 9] (facing 0, pose 0) of the unit's image slot, so a
+        // recoloured slot (soul recall) shows the recoloured portrait here as well.
+        if (const NC2Frame* fr = nc2_frame_for_slot(t.sprite_type, 0, 0, t.slot_hint))
+            blit_nc2_frame(0x18, y, *fr);                                                         // sub_5F3FD
         draw_text_wrapped(0x38, y + 4, t.name);                                                       // sub_5E048(0x38, y+4, "%s")
         residue = 0;                                          // sub_5F3FD leaves bx at 0
     };
@@ -7258,7 +7352,6 @@ CombatUnitPlacement battle_unpack_unit_record(const uint8_t* rec) {
     p.combat_mp_50 = r16(0x50); p.combat_mp_max_52 = r16(0x52);
     p.combat_value_54 = (int16_t)r16(0x54);
     p.battle_gauge = rec[0x56];
-    p.combat_acc57 = r16(0x57);
     p.combat_def59 = rec[0x59];
     p.combat_type_5a = rec[0x5A]; p.combat_type_5b = rec[0x5B]; p.code_b = rec[0x5C];
     p.combat_type_5d = rec[0x5D]; p.inv_5e = rec[0x5E]; p.inv_5f = rec[0x5F];
@@ -7278,6 +7371,10 @@ CombatUnitPlacement battle_unpack_unit_record(const uint8_t* rec) {
     p.reward_money_85 = r16(0x85);
     p.ai_target_unit = -1;
     apply_record_hp(p, rec);
+    // [+57h] is the TP accumulated during the battle. apply_record_hp follows the SCE loader
+    // (sub_4ED18), which ignores it, but the qsv and BLACKBOX 0x88 records are the live record
+    // that sub_4F85C / sub_4E81F restore as-is, so re-apply it after the zeroing above.
+    p.combat_acc57 = r16(0x57);
     p.active = true;
     p.occupancy_hp_known = battle_hp_raw(p) > 0;
     return p;
@@ -8501,7 +8598,14 @@ int CombatII::battle_item_3c548(int unit_index, int form) {
     u.combat_flags_1e = 0;
     u.hp = u.max_hp; u.hp_deficit = u.max_hp_deficit;                       // [48h]=[4Ch]
     u.combat_flags_15 = 0;
-    u.ail_1f = u.ail_23 = u.ail_25 = u.ail_27 = 0xFFFF;                      // [16h..27h] = FFFF
+    // loc_3C61F: [1Fh+2k] = FFFF and [16h+2k] = the same word for k = 0..4, i.e. all nine
+    // words [16h]/[18h]/[1Ah]/[1Ch]/[1Fh]/[21h]/[23h]/[25h]/[27h]. The loop writes 16h..25h
+    // from the four 1Fh..25h stores and then 27h once more after edx == 4.
+    u.buff_16 = u.buff_18 = u.buff_1a = u.buff_1c = 0xFFFF;
+    u.ail_1f = u.ail_21 = u.ail_23 = u.ail_25 = u.ail_27 = 0xFFFF;           // [16h..27h] = FFFF
+    // sub_1198D([+61h]) -> [+60h] after the form change (ASM 59344-59348). The port has no
+    // image-slot refcount, but [60h] is part of the qsv 0x88 record and of the 21944 argument.
+    u.slot_hint = battle_image_slot((int16_t)(uint16_t)u.sprite_type);
     camera_center_on((int)(int8_t)u.x, (int)(int8_t)u.y);                   // sub_1124A
     battle_wc1_occupancy_preserve_or_close("recall transform");             // sub_11EE4/119B6/1198D/11E04 (large-sprite occupancy)
     // Presentation: 61147(1) -> 1124A -> 10971/10988(+0Ch) -> 1FEA4("recall.nsp") ->
@@ -8576,6 +8680,9 @@ void CombatII::battle_item_3c70c(int unit_index) {
     units_[(size_t)unit_index].death_dissolve = 0;
     battle_restore_stored_1808a(unit_index, true, true);             // sub_1808A + 12124 + 45559
     if ((size_t)unit_index >= units_.size()) return;
+    // sub_1198D([+61h]) -> [+60h] after the restore (ASM 59414-59418).
+    units_[(size_t)unit_index].slot_hint =
+        battle_image_slot((int16_t)(uint16_t)units_[(size_t)unit_index].sprite_type);
     units_[(size_t)unit_index].facing = saved_facing;                // mov [ecx+63h],al
 }
 
@@ -8671,9 +8778,15 @@ int CombatII::battle_item_3b7ce(int unit_index, int tx, int ty) {
     merged.linked_class = saved.combat_class;            // sub_174CF: [[77h]+11h] = the stash record's class
     units_[(size_t)unit_index] = merged;
     battle_form_17e6d(units_[(size_t)unit_index], units_[(size_t)unit_index].code_b); // sub_17E6D
-    // sub_11B77: the stash [60h] is the rider image slot (forms 0..4 -> word_706D4[61h],
-    // 5/6 -> word_70896[61h], +0x1F4). The port has no slot table; the overlay draw recomputes
-    // the same mapped type from the stash record and the live form (battle_rider_image_type).
+    // sub_11B77: [stash+60h] = 1198D(rider type). The rider type is word_706D4[stash+61h]
+    // for forms 0..4, word_70896[stash+61h] for 5/6, plus 1F4h; battle_rider_image_type
+    // returns that mapped type and battle_image_slot the 1198D slot number.
+    {
+        auto& mounted = units_[(size_t)unit_index];
+        const int mapped = battle_rider_image_type(mounted);
+        if (mounted.stored_77)
+            mounted.stored_77->slot_hint = (mapped >= 0) ? battle_image_slot(mapped) : 0;
+    }
     battle_wc1_occupancy_preserve_or_close("mount (3B7CE)");          // sub_11E04
     present_cutscene_frame();                                         // sub_45559
     if (battle_trace_)
@@ -8730,7 +8843,8 @@ int CombatII::battle_item_3b614(int unit_index, int tx, int ty) {
     u.x = (int8_t)tx; u.y = (int8_t)ty;                  // [ebp] = the clicked tile
     u.code_b = 0;                                        // [5Ch]=0
     u.stored_77.reset();                                 // [ebp+77h]=0
-    // sub_1198D([61h]) -> [60h]: the port stores slot_hint on the stash record instead.
+    // sub_1198D([61h]) -> [60h] (ASM 58086-58091) before sub_11F74 occupies the click tile.
+    u.slot_hint = battle_image_slot((int16_t)(uint16_t)u.sprite_type);
     battle_wc1_occupancy_preserve_or_close("dismount (3B614)");       // sub_11F74
     present_cutscene_frame();                                         // sub_45559
     if (battle_trace_)
@@ -8746,6 +8860,9 @@ void CombatII::battle_clone_3bc67(int unit_index) {
     auto& u = units_[(size_t)unit_index];
         std::vector<int> grid;
         battle_ai_169d7_reset(unit_index, grid);                  // sub_169D7
+        // sub_1033B(6) runs once, outside the var_8 = 1,3 loop, so both clones rotate with a
+        // 6-tick period (12 x 6 = 72 ticks each) instead of restarting a 3-tick timer.
+        game_timer_set(6);                                        // mov eax,6; mov edx,1
         const int caster_id = u.id;
         const int caster_index = unit_index;
         for (int v = 1; v < 4 && !should_exit_; v += 2) {          // var_8 = 1, 3
@@ -8760,6 +8877,7 @@ void CombatII::battle_clone_3bc67(int unit_index) {
             CombatUnitPlacement nu = src;                                      // copy 0x88 bytes
             nu.auto_battle = 2;                                                // [83h]=2
             nu.item_use_12 = (uint8_t)(src.id + 10);                           // [12h]=[0Fh]+10
+            nu.owner_87 = 0;                                                   // mov byte [ebx+87h],0
             nu.x = nx; nu.y = ny;
             nu.list_seq = battle_next_list_seq();                              // sub_1134F tail insert
             nu.battle_gauge = src.battle_gauge;
@@ -8768,7 +8886,6 @@ void CombatII::battle_clone_3bc67(int unit_index) {
             const size_t ci = units_.size() - 1;
             battle_wc1_occupancy_preserve_or_close("clone");
             camera_center_on(nx, ny);                                          // sub_1124A
-            game_timer_set(3);
             for (int s = 0; s < 12 && !should_exit_; ++s) {                    // [63h]+1 &3, 12 times
                 units_[ci].facing = (int8_t)((units_[ci].facing + 1) & 3);
                 present_cutscene_frame();
@@ -9783,6 +9900,11 @@ int CombatII::battle_spell_2c36a(int unit_index, int k) {
     }
     const int count = std::min(std::max(k + 1, 1), 3);           // 29C5A count = edx+1
     const int facing = (int)units_[(size_t)unit_index].facing & 3;
+    // sub_29C5A (ASM 35546-35570) always writes dirs[0], writes dirs[1] only when count > 1 and
+    // dirs[2] only when count > 2. sub_2C36A's raise loop nevertheless always runs si = 0..2
+    // (ASM 39060-39105), so for k = 0/1 the original's extra attempts read two stack bytes it
+    // never initialized. The port keeps the facing-derived values above as the deterministic
+    // stand-in for those bytes and mirrors the fixed three attempts.
     int dirs[3] = {facing, (facing + 1) & 3, (facing + 3) & 3};  // 29C5A var_C[0..2]
     // sub_29C5A: sub_14300(0x0C) -> sub_14032 -> sub_143F3 diffusion (budget 12).
     const std::vector<int> grid = battle_ai_build_diffusion(unit_index, 0x0C);
@@ -9793,7 +9915,7 @@ int CombatII::battle_spell_2c36a(int unit_index, int k) {
     const int ux = (int)(int8_t)units_[(size_t)unit_index].x;
     const int uy = (int)(int8_t)units_[(size_t)unit_index].y;
     int raised = 0;
-    for (int i = 0; i < count && !should_exit_; ++i) {
+    for (int i = 0; i < 3 && !should_exit_; ++i) {              // inc esi; cmp si,3; jl1
         int nx = ux, ny = uy;
         switch (dirs[i]) {                                       // sub_49ABC
             case 0: ++ny; break;
@@ -9833,7 +9955,13 @@ int CombatII::battle_spell_2c36a(int unit_index, int k) {
         z.walk_off_x = z.walk_off_y = 0;
         z.knock_dx = z.knock_dy = 0;
         z.list_seq = battle_next_list_seq();                     // sub_1134F
-        z.slot_hint = battle_image_slot(z.sprite_type);          // [60h] = sub_1198D([61h])
+        // sub_2B5C4: unk_E502D[type] = FFh, then sub_1198D allocates a fresh slot and
+        // [60h] = slot; sub_6104A(2) + sub_100F2 recolor its 44 frames with LUT page 2.
+        // sub_2B5C4 restores the type's tag afterwards, so other units of this type keep
+        // the original slot and colors.
+        const int soul_slot = battle_image_slot_force_new();
+        z.slot_hint = soul_slot;                                 // [60h]
+        battle_slot_recolor(soul_slot);
         z.occupancy_hp_known = true;
         battle_ssp_play("regen.ssp", 0x32);                      // 4F460("regen.ssp", 32h)
         battle_ssp_play("summon.ssp", 0x33);                     // 4F460("summon.ssp", 33h)
@@ -9849,7 +9977,7 @@ int CombatII::battle_spell_2c36a(int unit_index, int k) {
     if (!should_exit_ && (size_t)unit_index < units_.size())
         reset_unit_pose(units_[(size_t)unit_index]);             // sub_12124(caster)
     if (battle_trace_)
-        fprintf(stderr, "COMBAT: soul recall done unit=%d raised=%d/%d\n",
+        fprintf(stderr, "COMBAT: soul recall done unit=%d raised=%d/3 count=%d\n",
                 units_[(size_t)unit_index].id, raised, count);
     return 0;
 }
@@ -10157,8 +10285,32 @@ void CombatII::battle_ssp_play(const char* name, int id) {
     Audio::stop_sfx_channels();                      // 5CD0D(2..7)
     battle_ssp_slot_path_[(size_t)slot] =
         game_path((std::string("MAGICSPR/") + name).c_str());
+    // sub_5CA62 reads the file into dword_1124B0[slot] immediately (after the 0x40 header), so
+    // the later 4F4CD play has no load latency. Decode the chunk here for the same effect.
+    Audio::preload_cached(battle_ssp_slot_path_[(size_t)slot]);
     if (battle_trace_) fprintf(stderr, "COMBAT: ssp load '%s' id %d -> slot %d (4F460)\n",
                                name, id, slot);
+}
+
+// sub_55B59 (ASM 94625-94673 and 94688-94721): after sub_4F3BD it loads the 34 basic battle
+// samples through sub_4F460, ids 1..0x22, with a sub_44C75 progress mark after id 0x12. The
+// original loops the two blocks unconditionally; the caller splits them at the marks.
+void CombatII::battle_sfx_preload_55b59(int first_id, int last_id) {
+    static const char* const kSamples[] = {
+        nullptr,
+        "sword.vsp",    "fist.vsp",     "bow.vsp",       "whip.vsp",     "cannon.vsp",
+        "bow2.vsp",     "battler.vsp",  "gun.vsp",       "shout.vsp",    "shield.vsp",
+        "dry-step.vsp", "sno-step.vsp", "gra-step.vsp",  "wat-step.vsp", "walkmany.vsp",
+        "horse-w.vsp",  "fly-mech.vsp", "fly-dra.vsp",   "wong.vsp",     "ha-m.vsp",
+        "ha-f.vsp",     "damage-m.vsp", "damage-f.vsp",  "dmg-mech.vsp", "dead-m.vsp",
+        "dead-f.vsp",   "bury.vsp",     "dead-c.vsp",    "turn.vsp",     "item.vsp",
+        "command.vsp",  "skeleton.vsp", "l_mon-a.vsp",   "dragon.vsp",
+    };
+    if (first_id < 1) first_id = 1;
+    if (last_id > 0x22) last_id = 0x22;
+    for (int id = first_id; id <= last_id; ++id) {
+        if (kSamples[id]) battle_ssp_play(kSamples[id], id);
+    }
 }
 
 // All SSPs a handler loads through 4F460, with the slot id of each call site (the id is not
@@ -10173,7 +10325,9 @@ void CombatII::battle_spell_load_ssps(int r_code) {
             else { load("f-arrow.ssp", 0x32); load("f-wave.ssp", 0x33); }
             break;
         case 1:  case 8:  case 15: load("enchant.ssp", 0x32); break;
-        case 2:  load("f-field.ssp", 0x32); break;
+        case 2:  // 2B75A: f-field 32h, ddoing 33h, effect2 34h (all three before 29514)
+            load("f-field.ssp", 0x32); load("ddoing.ssp", 0x33); load("effect2.ssp", 0x34);
+            break;
         case 16:  // 2B919
             load("f-field.ssp", 0x32); load("ddoing.ssp", 0x33); load("bolt3.ssp", 0x34);
             break;
@@ -10227,7 +10381,9 @@ void CombatII::battle_spell_load_ssps(int r_code) {
         case 44:  // 2C28F
             load("death1.ssp", 0x32); load("death2.ssp", 0x33);
             break;
-        case 47: load("b-hole.ssp", 0x32); break;
+        case 47:  // 2C566: b-hole 32h then bolt3 33h (both after 28B24 succeeds)
+            load("b-hole.ssp", 0x32); load("bolt3.ssp", 0x33);
+            break;
         case 48:  // 2A1C6 kind 5
             if (k == 1) load("f-meteo2.ssp", 0x32);
             else { load("atomic.ssp", 0x32); load("darkzone.ssp", 0x33); }
@@ -11761,7 +11917,7 @@ int CombatII::battle_weapon_f1474(int unit_index, int idx, int dx) {
         // then stamps pose 9 silhouettes plus the pose 9/pose 6 main frame at the target.
         const NC2Frame* poses[5] = {};
         for (int i = 0; i < 5; ++i)
-            poses[i] = nc2_frame_for(u.sprite_type, u.facing & 3, 5 + i);
+            poses[i] = nc2_frame_for_slot(u.sprite_type, u.facing & 3, 5 + i, u.slot_hint);
         const int ax = ((int)u.x - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X + 0x0C;
         const int ay = ((int)u.y - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y - 2;
         int ex = ax, ey = ay;
@@ -12459,8 +12615,10 @@ int CombatII::battle_weapon_collect_rect_actor(int unit_index, int x, int y, int
     return (int)battle_target_list_.size();
 }
 
-// sub_1AC08/1AC59 + sub_1A1F8 diamond collection around (x,y,r). Rebuilds F0648.
-int CombatII::battle_weapon_collect_dia_at(int unit_index, int x, int y, int r) {
+// sub_1AC08/1AC59 + sub_1A1F8 (or sub_1A25F when actor_rule) diamond collection around
+// (x,y,r). Rebuilds F0648. sub_3B9E1 is the one caller that collects through sub_1A25F (ASM
+// 58309-58330), so its [+14h]&1 filter has to be selectable here.
+int CombatII::battle_weapon_collect_dia_at(int unit_index, int x, int y, int r, bool actor_rule) {
     battle_target_list_.clear();
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return 0;
     const g2range::Env env = battle_range_env_make();
@@ -12468,10 +12626,34 @@ int CombatII::battle_weapon_collect_dia_at(int unit_index, int x, int y, int r) 
     const g2range::Unit au = battle_range_unit(unit_index);
     rg.dia_init(x, y, r);                                         // sub_1AC08
     int px = 0, py = 0;
-    for (int guard = 0; guard < 0x10000 && rg.dia_next(px, py); ++guard) // sub_1AC59
-        rg.add_by_army(px, py, au.army);                          // sub_1A1F8
+    for (int guard = 0; guard < 0x10000 && rg.dia_next(px, py); ++guard) { // sub_1AC59
+        if (actor_rule) rg.add_by_actor(px, py, au);              // sub_1A25F
+        else            rg.add_by_army(px, py, au.army);          // sub_1A1F8
+    }
     battle_target_list_ = rg.list;
     return (int)battle_target_list_.size();
+}
+
+// sub_3BFAC prologue: sub_169D7 rebuilds E8F46, then sub_1AC08/sub_1AC59 walk the radius
+// 5/7 diamond and sub_13D02 writes 1 into every cell that is still empty (-1). The marking
+// is what makes sub_165C2's `13CBD >= 0` test accept the clicked destination; a footprint
+// cell outside the diamond stays -1 and still fails there (the original limitation).
+void CombatII::battle_teleport_prepare(int unit_index) {
+    battle_e8_grid_.clear();
+    if (unit_index < 0 || (size_t)unit_index >= units_.size()) return;
+    battle_ai_169d7_reset(unit_index, battle_e8_grid_);                // sub_169D7
+    if (battle_e8_grid_.size() != (size_t)map_w_ * (size_t)map_h_) return;
+    const CombatUnitPlacement& u = units_[(size_t)unit_index];
+    // sub_3BFAC reads unk_731B4[class*15] (class_stat_guard_kind): 1 -> 5, else 7.
+    const int radius = ((int)class_stat_guard_kind(u.combat_class) == 1) ? 5 : 7;
+    const g2range::Env env = battle_range_env_make();
+    g2range::Range rg(env);
+    rg.dia_init((int)(int8_t)u.x, (int)(int8_t)u.y, radius);           // sub_1AC08
+    int px = 0, py = 0;
+    for (int guard = 0; guard < 0x10000 && rg.dia_next(px, py); ++guard) { // sub_1AC59
+        if (battle_ai_wc5_diff_read(battle_e8_grid_, px, py) != -1) continue; // sub_13CBD
+        battle_ai_wc5_diff_write(battle_e8_grid_, px, py, 1);          // sub_13D02(..., 1)
+    }
 }
 
 // sub_1A1DE+1A146: the attacker's front tile.
@@ -13842,6 +14024,10 @@ int CombatII::battle_use_item(int unit_index, int dx, int tx, int ty) {
         }
         case 1: { // sub_3B5B4 (jump table index 1): toggles [14h]&1 - sprite type +/-1 plus
                    //   image slot reallocation. Costs 40, returns -2.
+            //   Both branches release the old [60h] (sub_119B6), inc/dec [61h], then take the
+            //   slot of the new type (sub_1198D) into [60h] (ASM 57928-57963). The port does
+            //   not refcount slots (its NC2 cache is keyed by type), but [60h] itself is part
+            //   of the saved 0x88 record, so it must follow the new type.
             if (u.combat_flags_14 & 1) {
                 u.sprite_type = (int)(uint16_t)(u.sprite_type - 1);   // dec word [+61h]
                 u.combat_flags_14 = (uint8_t)(u.combat_flags_14 & 0xFE);
@@ -13849,6 +14035,7 @@ int CombatII::battle_use_item(int unit_index, int dx, int tx, int ty) {
                 u.sprite_type = (int)(uint16_t)(u.sprite_type + 1);   // inc word [+61h]
                 u.combat_flags_14 = (uint8_t)(u.combat_flags_14 | 1);
             }
+            u.slot_hint = battle_image_slot((int16_t)(uint16_t)u.sprite_type); // mov [edx+60h],al
             reset_unit_pose(u);                                       // equivalent of the 45559 redraw
             present_cutscene_frame();
             if (battle_trace_)
@@ -13857,16 +14044,16 @@ int CombatII::battle_use_item(int unit_index, int dx, int tx, int ty) {
             battle_consume_tp(unit_index, 0x28);                       // sub_45B4E(0x28)
             return -2;
         }
-        case 9: { // sub_3BFAC: teleport - click-move to an E8F46 == -1 tile inside the diamond of
-                   //   radius 5 (wc1) or 7. Costs 40, returns -2.
+        case 9: { // sub_3BFAC: teleport - click-move to an E8F46-marked tile inside the diamond
+                   //   of radius 5 (class guard kind 1) or 7. Costs 40, returns -2.
             if (tx < 0 || ty < 0 || tx >= (int)map_w_ || ty >= (int)map_h_) return 3;
-            const int radius = (weapon_class(u) == 1) ? 5 : 7;          // unk_731B4 == 1
-            const int ux = (int)(int8_t)u.x, uy = (int)(int8_t)u.y;
-            if (std::abs(tx - ux) + std::abs(ty - uy) > radius) return 3;
-            std::vector<int> grid;
-            battle_ai_169d7_reset(unit_index, grid);                    // sub_169D7 (-1 = walkable, empty)
-            if (grid.empty() || battle_ai_wc5_diff_read(grid, tx, ty) != -1) return 3;
-            if (!battle_ai_165c2_ok(tx, ty, unit_index, grid, (int)u.facing & 3)) return 3; // sub_165C2 re-check
+            // sub_169D7 + the empty-cell marking (sub_13D02) of the diamond. Clicking outside
+            // the diamond leaves the cell at -1/-2, so sub_13CBD rejects it and the cursor
+            // keeps waiting (sub_3BFAC loc_3C03C).
+            battle_teleport_prepare(unit_index);
+            if (battle_e8_grid_.size() != (size_t)map_w_ * (size_t)map_h_) return 3;
+            if (battle_ai_wc5_diff_read(battle_e8_grid_, tx, ty) < 0) return 3; // sub_13CBD
+            if (!battle_ai_165c2_ok(tx, ty, unit_index, battle_e8_grid_, (int)u.facing & 3)) return 3; // sub_165C2
             if (!battle_warp_unit(unit_index, tx, ty)) return 3;         // sub_3BF00
             if (should_exit_) return 0;
             battle_consume_tp(unit_index, 0x28);                         // 4CB8B: sub_45B4E(0x28)
@@ -14343,6 +14530,9 @@ void CombatII::render_battle_clock() {
     int yyyy = (int)tod_day_ / 0xDC + 0x4B7;
     int dd = (int)tod_day_ % 0xDC + 1;
     char date[32], hm[32];
+    // sub_45844's format string is "%04d %02d": the data definition (COMBATII.ASM 156973)
+    // and the EXE bytes both hold 0x20 (the code listing's comment shows a raw tab byte from
+    // the comment text, not the format data).
     snprintf(date, sizeof(date), "%04d %02d", yyyy, dd);
     snprintf(hm, sizeof(hm), "%02d:%02d", ecx, edi);
     if (!small_font_tried_) load_small_font();

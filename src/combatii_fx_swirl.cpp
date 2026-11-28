@@ -43,7 +43,8 @@ int CombatII::battle_fx_3b9e1(int unit_index, int tx, int ty, int k) {
     // (1) radius-1 diamond collection (1AC08 ebx=1). An empty list returns -1 (ASM 3BA2C).
     magic_fx_draws_.clear();                                     // dword_F0B9C+2 = 0
     battle_target_list_.clear();
-    const int n = battle_weapon_collect_dia_at(unit_index, (int)(int8_t)u.x, (int)(int8_t)u.y, 1);
+    // sub_3B9E1 collects through sub_1A25F, not sub_1A1F8: the [+14h]&1 filter applies.
+    const int n = battle_weapon_collect_dia_at(unit_index, (int)(int8_t)u.x, (int)(int8_t)u.y, 1, true);
     if (n <= 0) return -1;
 
     // (2) table load + centre + period

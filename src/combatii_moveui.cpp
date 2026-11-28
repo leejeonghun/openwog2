@@ -493,13 +493,15 @@ void CombatII::render_move_overlay() {
     if (!bb) return;
     // sub_49E4E/49EEE/49CB1: the destination marker is not a plain 0x0F line but the same style
     // as the speaker frame: border colour 9->10->11 (dword_75021+3) plus the MAIN.CUR corners
-    // (sub_5F3FD). Its size is 1x1 = 24x16 (the 49E4E dl==4/5 path) and clipping follows 4A106
+    // (sub_5F3FD). Phase 1 uses 49E4E's dl==5 fixed 24x16; phase 2 uses the D66A8 footprint.
+    // Clipping follows 4A106
     // (clamp x2>0x130, y2>0xC3, x1<0x10, y1<4). The port redraws the world every frame, so the
     // background backup/restore (5EECF/4A210) is skipped.
-    auto box = [&](int tx, int ty) {
-        // Footprint: raw D66A8 entry[0]*24 / entry[1]*16 (as 49E4E). 1x1 = 24x16.
+    auto box = [&](int tx, int ty, bool destination_cursor) {
         int tw = TOWN_TILE_W, th = TOWN_TILE_H;
-        if (battle_player_unit_ >= 0 && (size_t)battle_player_unit_ < units_.size()) {
+        if (!destination_cursor && battle_player_unit_ >= 0 &&
+            (size_t)battle_player_unit_ < units_.size()) {
+            // Footprint: raw D66A8 entry[0]*24 / entry[1]*16 (as 49E4E). 1x1 = 24x16.
             const auto& mu = units_[(size_t)battle_player_unit_];
             int foot_w = 1, foot_h = 1;
             battle_d66a8_footprint(mu.sprite_type, mu.facing & 3, &foot_w, &foot_h);
@@ -522,12 +524,15 @@ void CombatII::render_move_overlay() {
             const auto& o = units_[i];
             if (o.active && o.hp > 0 && o.x == tx && o.y == ty && (int)i != battle_player_unit_) return;
         }
-        box(tx, ty);
+        // loc_4A6D7: sub_49E4E(unit, dl=5) fixes the phase-1 marker at 24x16 regardless of
+        // the unit's D66A8 footprint (sub_49E4E's `cmp dl,5` branch). Only dl=4 and the
+        // footprint path (dl=0..3) scale by the unit box.
+        box(tx, ty, true);
         return;
     }
 
     // Phase 2: destination tile marker + facing arrow cursor (sub_5D3C5: 24x24, hotspot (8,8)).
-    box(battle_move_dest_x_, battle_move_dest_y_);
+    box(battle_move_dest_x_, battle_move_dest_y_, false);
     const int X = (battle_move_dest_x_ - cam_tile_x_) * TOWN_TILE_W + cam_fine_x_ + TILE_ANCHOR_X;
     const int Y = (battle_move_dest_y_ - cam_tile_y_) * TOWN_TILE_H + cam_fine_y_ + TILE_ANCHOR_Y;
     const g2move::Box cb = g2move::confine_box(X, Y);

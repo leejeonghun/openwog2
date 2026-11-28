@@ -4030,15 +4030,14 @@ bool CombatII::battle_ai_step(int unit_index) {
                 if (di == 2 || (move_dist >= 3 && move_dist <= warp_max_dist)) {
                     // loc_413F6 warp arm: di == 2 (early/state path) skips the distance
                     // gate. Even with dest == current cell the original calls sub_3BF00 and
-                    // spends 40 (the port only skips the warp call). Facing is written from
-                    // sel_af when it is 0..3 (413F6..4142B).
-                    if (sel_dx != actor_x || sel_dy != actor_y) {
-                        if (!battle_warp_unit(unit_index, sel_dx, sel_dy)) break;
-                        if (unit_index < 0 || (size_t)unit_index >= units_.size() ||
-                            !units_[(size_t)unit_index].active ||
-                            units_[(size_t)unit_index].id != attacker_id)
-                            return true;
-                    }
+                    // spends 40 (sub_40295 loc_4076A / sub_40DFD loc_413F6 have no
+                    // same-cell test). Facing is written from sel_af when it is 0..3
+                    // (413F6..4142B).
+                    if (!battle_warp_unit(unit_index, sel_dx, sel_dy)) break;
+                    if (unit_index < 0 || (size_t)unit_index >= units_.size() ||
+                        !units_[(size_t)unit_index].active ||
+                        units_[(size_t)unit_index].id != attacker_id)
+                        return true;
                     attack_gauge -= 0x28;
                     if (attack_gauge < 0) attack_gauge = 0;
                     battle_ai_gauge_baseline_ = (int16_t)attack_gauge;
@@ -4721,9 +4720,11 @@ void CombatII::battle_spell_announce(int unit_index, const char* name) {
 bool CombatII::battle_warp_unit(int unit_index, int destination_x, int destination_y) {
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return false;
     const CombatUnitPlacement& source = units_[(size_t)unit_index];
+    // sub_3BF00 has no same-cell branch: the original plays "Warp!", the 12-frame facing
+    // rotation and the redraw even when the destination equals the current cell (ASM
+    // 58731-58789). Only the occupancy/range tests reject a destination.
     if (!source.active || source.hp <= 0 || destination_x < 0 || destination_y < 0 ||
-        destination_x >= (int)map_w_ || destination_y >= (int)map_h_ ||
-        (destination_x == source.x && destination_y == source.y)) return false;
+        destination_x >= (int)map_w_ || destination_y >= (int)map_h_) return false;
     const int occupant = battle_unit_index_at(destination_x, destination_y);
     if (occupant >= 0 && occupant != unit_index) return false;
 

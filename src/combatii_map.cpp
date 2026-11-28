@@ -182,10 +182,80 @@ int CombatII::battle_image_slot(int type_code) {
             return slot;
         }
     }
-    // Slot Full: sub_114EF reports "Slot Full" and returns 0x64 (after an out-of-range
-    // refcount write at index 100); the port returns 0 as a safe fallback. Unreachable until
-    // 100 distinct character types have been loaded.
-    return 0;
+    // Slot Full (ASM loc_1154B): sub_55EBC + the "Character Enter Too Many!!!" / "Slot Full"
+    // messages, then the out-of-range refcount write unk_E4FC8[100] = 1 and ax = 0x64. Returning
+    // 0x64 keeps slot 0 (which may be recoloured) from being handed to the failed type.
+    // Unreachable until 100 distinct character types have been loaded.
+    return 0x64;
+}
+
+// sub_114EF with unk_E502D[type] == FFh: claim the first slot whose refcount is 0 without
+// storing the type in unk_E502D. sub_2B5C4/sub_4F85C use this to give a summoned unit its own
+// recolored slot, then restore the type's tag so other units of that type keep the old slot.
+int CombatII::battle_image_slot_force_new() {
+    for (int slot = 0; slot < 100; ++slot) {
+        if (battle_image_slot_ref_[slot] == 0) {
+            battle_image_slot_ref_[slot] = 1;
+            return slot;
+        }
+    }
+    // sub_114EF reports "Slot Full" and returns 0x64 (after its out-of-range refcount write).
+    // Returning the same 0x64 keeps sub_100F2's slot loop out of range and lets every render
+    // path fall back to the unrecoloured frame instead of recolouring slot 0.
+    return 0x64;
+}
+
+// sub_60DDE(palette 0Eh) + sub_60EE5(entry) + sub_610B6(2, 0Eh): LUT page 2. sub_60DDE
+// normalises palette 14 to a 0..100 base colour (all zero -> 100,100,100); sub_60EE5 scales
+// that base by the source entry's brightness (3R+5G+2B)/10 percent and returns the palette
+// index with the smallest |dR|+|dG|+|dB|. sub_100F2 then maps every sprite pixel of the slot
+// through this page. The original builds it once at startup (ASM 94599-94610), after
+// sub_4ED18 loaded the map palette into unk_12824C. Like row 1 (battle_move_shade_lut), the
+// base is the weather-adjusted palette snapshot taken right after the scenario load.
+void CombatII::battle_build_lut2() {
+    if (battle_lut2_ready_) return;
+    if (!dlg_shade_pal_set_) snapshot_dialog_shade_palette();
+    const auto& pal = dlg_shade_pal_;
+    int br = pal[0x0E][0], bg = pal[0x0E][1], bb = pal[0x0E][2];
+    const int mx = std::max(br, std::max(bg, bb));
+    if (mx == 0) { br = bg = bb = 100; }
+    else { br = br * 100 / mx; bg = bg * 100 / mx; bb = bb * 100 / mx; }
+    for (int i = 0; i < 256; ++i) {
+        const int r = pal[i][0], g = pal[i][1], b = pal[i][2];
+        const int bright = (r * 3 + g * 5 + b * 2) / 10;          // 60EE5 luma chain / 10
+        const int tr = br * bright / 100, tg = bg * bright / 100, tb = bb * bright / 100;
+        int best = 0, best_d = 0x7FFF;                            // `mov ecx, 7FFFh`
+        for (int j = 0; j < 256; ++j) {
+            const int d = std::abs(pal[j][0] - tr) + std::abs(pal[j][1] - tg) +
+                          std::abs(pal[j][2] - tb);
+            if (d < best_d) { best_d = d; best = j; }             // `cmp dx,cx; jge`
+        }
+        battle_lut2_[i] = (uint8_t)best;
+    }
+    battle_lut2_ready_ = true;
+    if (DevUtil::nc2_trace())
+        fprintf(stderr, "COMBAT: LUT page 2 built (palette 0Eh base=%d,%d,%d)\n", br, bg, bb);
+}
+
+void CombatII::battle_slot_recolor(int slot) {
+    if (slot < 0 || slot >= 100) return;
+    battle_build_lut2();                                       // sub_6104A(2)
+    battle_slot_recolored_[slot] = true;                       // sub_100F2 over 44 frames
+}
+
+const NC2Frame* CombatII::nc2_frame_for_slot(int type_code, int dir, int pose, int slot) const {
+    const NC2Frame* base = nc2_frame_for(type_code, dir, pose);
+    if (!base || slot < 0 || slot >= 100 || !battle_slot_recolored_[slot]) return base;
+    const uint64_t key = ((uint64_t)(uint32_t)type_code << 16) |
+                         ((uint64_t)(dir & 3) << 8) | (uint64_t)(pose & 0xFF);
+    auto it = battle_recolored_frames_.find(key);
+    if (it == battle_recolored_frames_.end()) {
+        NC2Frame copy = *base;
+        for (uint8_t& px : copy.pixels)
+            if (px != 0xFF) px = battle_lut2_[px];             // sub_100F2
+        it = battle_recolored_frames_.emplace(key, std::move(copy)).first;
+    }
+    return &it->second;
 }
 
 // Blit a strip (w*h, 0xFF = transparent), matching the staging-buffer layout made by sub_10083.
@@ -681,6 +751,10 @@ void CombatII::snapshot_dialog_shade_palette() {
     dlg_shade_pal_set_ = true;
     dlg_shade_valid_   = false;                        // rebuild on next use
     move_shade_valid_  = false;                        // the move-range LUT (row 1) uses the same base, invalidate too
+    // sub_610B6(2, 0Eh) runs once per sub_4ED18 load, so page 2 is rebuilt for the new
+    // weather-adjusted palette; the frames already remapped with the old page must follow.
+    battle_lut2_ready_ = false;
+    battle_recolored_frames_.clear();
 }
 
 const uint8_t* CombatII::dialog_shade_lut() {
@@ -1906,11 +1980,14 @@ bool CombatII::load_scenario(const std::string& sce_filename) {
     battle_load_time_of_day();
     // Ensure sprites available for cutscene overlay (sub_55B59's VSP stage).
     load_battle_sprites();
+    // sub_55B59: sub_4F460 loads the 34 basic battle samples (MAGICSPR/*.VSP, ids 1..0x22).
+    // The original splits the block with two sub_44C75 marks: ids 1..0x12, then 0x13..0x22.
+    battle_sfx_preload_55b59(1, 0x12);
+    if (show_start_banner) battle_g2msg_progress_tick();           // sub_44C75
+    battle_sfx_preload_55b59(0x13, 0x22);
     if (show_start_banner) {
-        // sub_55B59: two sub_44C75 marks, after the first 18 VSPs and after the remaining 16.
         // The original reloads them in a fresh process; the port draws the marks per scenario
         // load even when the sprite bank is already cached in this process.
-        battle_g2msg_progress_tick();                              // sub_44C75
         battle_g2msg_progress_tick();                              // sub_44C75
     }
     return true;
@@ -2365,7 +2442,7 @@ void CombatII::render_battle_map(bool magic_pass, bool overlay_only, bool skip_m
             // draw it like sub_5EE51. entry is facing*143 + pose 0, and 5EE51 applies no
             // shadow/sink/clip.
             if (u.death_dissolve > 0) {
-                const NC2Frame* df = nc2_frame_for(u.sprite_type, dir, 0);
+                const NC2Frame* df = nc2_frame_for_slot(u.sprite_type, dir, 0, u.slot_hint);
                 if (df && !df->pixels.empty() && df->w == u.death_w && df->h == u.death_h &&
                     u.death_mask.size() == (size_t)(u.death_w * u.death_h)) {
                     NC2Frame copy = *df;
@@ -2389,14 +2466,15 @@ void CombatII::render_battle_map(bool magic_pass, bool overlay_only, bool skip_m
                 }
                 continue;
             }
-            const NC2Frame* ncf = nc2_frame_for(u.sprite_type, dir, pose);
+            const NC2Frame* ncf = nc2_frame_for_slot(u.sprite_type, dir, pose, u.slot_hint);
             if (ncf) {
                 // loc_13165: the preserved record's rider image slot (sub_11B77) drawn after
                 // the unit and decal.
                 auto push_stored_form = [&](int depth) {
                     if (!u.stored_77 || u.code_b > 6) return;
-                    const NC2Frame* wf = nc2_frame_for(battle_rider_image_type(u),
-                                                       u.facing & 3, (int)u.anim_frame);
+                    const NC2Frame* wf = nc2_frame_for_slot(battle_rider_image_type(u),
+                                                           u.facing & 3, (int)u.anim_frame,
+                                                           u.stored_77 ? u.stored_77->slot_hint : -1);
                     if (wf) unit_push({sx, sy + depth, foot_y, 2, 0, wf, 0, 0, nullptr});
                 };
                 if (frame_trace && i < 64 &&

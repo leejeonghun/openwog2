@@ -94,15 +94,28 @@ void CombatII::camera_center_on(int tx, int ty) {
     int maxy = (int)map_h_ - 12; if (maxy < 0) maxy = 0;
     if (cx > maxx) cx = maxx;                 // sub eax,0Ch; jle -> clamp to map-12
     if (cy > maxy) cy = maxy;
-    if (cx == cam_tile_x_ && cy == cam_tile_y_) return;
+    // loc_112B7 (ASM 1795-1813): after either scroll path sub_1124A always runs
+    //   sub_4A321 -> sub_49FE1(tx,ty) -> sub_454B3 -> sub_4A106 -> sub_5E9E8.
+    // There is no same-tile early return: when (cx,cy) already equals the camera, sub_11003
+    // computes si/di == 0 and returns without drawing, but loc_112B7 still draws this frame.
+    // sub_49FE1 selects the unit standing on the *requested* tile (not the clamped camera tile)
+    // and sub_4A106 draws its selection box and HP over a fresh world frame. The port has no
+    // persistent dword_FB1BC, so it draws the box directly.
+    auto draw_target_frame = [&](int sel_tx, int sel_ty) {
+        render_battle_frame();                                     // sub_454B3
+        const int su = battle_unit_index_at(sel_tx, sel_ty);       // sub_49FE1 -> sub_11DB2
+        if (su >= 0) draw_speaker_frame(su);                       // sub_4A106 (box + HP)
+        video_.present();                                          // sub_5E9E8
+    };
     if (battle_instant_camera_) { // equivalent of sub_111BE (FDAEA!=0, no animation)
         cam_tile_x_ = cx; cam_tile_y_ = cy;
         cam_fine_x_ = CAM_FINE_X_REST; cam_fine_y_ = CAM_FINE_Y_REST;
-        // sub_1124A's FDAEA path is sub_111BE + sub_454B3 (+ 49FE1/4A106/5E9E8) and never calls
-        // sub_5046B, so this frame must not draw or decrement a pending message window either.
+        // sub_1124A's FDAEA path is sub_111BE + sub_454B3, then the shared loc_112B7 sequence
+        // (4A321/49FE1 -> 454B3 -> 4A106 -> 5E9E8). It never calls sub_5046B, so these frames
+        // must not draw or decrement a pending message window either.
         msg_frame_due_ = false;
-        render_battle_frame(); // equivalent of sub_454B3
-        video_.present();
+        render_battle_frame(); // equivalent of the first sub_454B3
+        draw_target_frame(tx, ty);
         return;
     }
     camera_setup(0, cx, cy, 4);               // sub_11003+60: set the target via the scroll machinery
@@ -117,6 +130,8 @@ void CombatII::camera_center_on(int tx, int ty) {
         render_battle_frame();
         video_.present();
     }
+    msg_frame_due_ = false;   // loc_112B7's sub_454B3 also skips the message window
+    draw_target_frame(tx, ty);
 }
 
 // sub_454D5 dim gate (FA8B6). The original sets FA8B6=1 in the 4B767/4B8EB/4D674 loops
@@ -524,9 +539,19 @@ bool CombatII::wait_key_or_ticks(int ticks) {
     while (true) {
         input_.update();
         if (input_.quit_requested()) { should_exit_ = true; return true; }
-        if (input_.is_key_pressed(SDLK_ESCAPE)) { skip_cutscene_ = true; return true; }
-        if (input_.was_left_clicked() || input_.is_key_pressed(SDLK_SPACE)
-            || input_.is_key_pressed(SDLK_RETURN)) {
+        // loc_49A04/loc_49A27: any key in the BIOS buffer ends the wait (getch_ consumes it;
+        // an extended key is consumed with its second byte). Modifier-only input never enters
+        // the buffer, which any_getch_key_pressed() reproduces. Esc keeps the port-only cutscene
+        // skip, but it is still consumed exactly like the original's getch_.
+        if (input_.any_getch_key_pressed()) {
+            const bool esc = input_.is_key_pressed(SDLK_ESCAPE);
+            input_.consume_event();
+            if (esc) { skip_cutscene_ = true; return true; }
+            return false;
+        }
+        // sub_5D22E mouse event 2: the click is popped from the queue before returning.
+        if (input_.was_left_clicked()) {
+            input_.consume_event();
             return false;
         }
         if (game_timer_poll()) return false;
@@ -649,7 +674,10 @@ bool CombatII::show_scenario_condition() {
     battle_dim_row0_ = true; // sub_44D6E(1)
     render_battle_frame();
     battle_dim_row0_ = false; // main_ clears sub_44D6E(0) after the display; the dim is in the frame
-    // Header at EXE 0x77D63, "[ scenario condition ] \n" (Johab; 5E048 treats 0x0A as a newline).
+    // Header at EXE 0x77D63, "[ scenario condition ] \n" (Johab; 5E048 treats 0x0A as a
+    // newline). The data definition (COMBATII.ASM 156987) and the EXE bytes both hold 0x20
+    // around the brackets; the code listing's comment carries raw tab bytes in the comment
+    // text, not in the string data.
     static const std::string kHeader(
         "\x5b\x20\xaf\xa1\x90\x61\x9f\xa1\xb5\xa1\x20\xb9\xa1\x88\xe5\x20\x5d\x20\x0a",
         19);

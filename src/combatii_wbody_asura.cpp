@@ -543,7 +543,9 @@ int CombatII::battle_fx_31283_anim(int unit_index) {
     //   running 30F98 + target effects + 12F2A(caster). After that, var_38 = 0x12C stepping
     //   down by 1Eh and var_60 += 14h drop the D66A8 record (+0D0h = facing 1, pose 5)
     //   through 5F517 (solid, six rows) and 5F3FD, incrementing var_24.
-    const NC2Frame* sil = nc2_frame_for(C.sprite_type, 1, 5);   // D66A8 + 0D0h
+    // D66A8 + 0D0h is the unit slot's frame, so a recoloured slot keeps the LUT page 2 pixels
+    // in the final sub_5F3FD draw (the six 5F517 passes above use solid colours).
+    const NC2Frame* sil = nc2_frame_for_slot(C.sprite_type, 1, 5, C.slot_hint); // D66A8 + 0D0h
     while (!should_exit_) {
         C.y = (int8_t)(C.y - 1);                             // dec [ebp+1]
         const bool off_top = screen_y(C.y) < 0;              // sub_10988 < 0

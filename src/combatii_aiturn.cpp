@@ -37,8 +37,9 @@ void CombatII::battle_ai_3c993(int unit_index, int amount) {
 }
 
 // sub_3B9E1: swirl. Collects hostile units into F0648 with sub_1A25F(actor) over the 1AC08(x,y,1)
-// diamond and returns -1 when it is empty. Then plays the 12-frame swirl.nsp spin, sub_28728(6000,
-// 20, 1) and sub_1ED45; the 12 rotations restore the facing.
+// diamond and returns -1 when it is empty. Then plays the 12-frame swirl.nsp spin, followed by
+// sub_28728(6000, 20, 1) -> sub_287AF (all targets at once, 24 frames) -> sub_1ED45.
+// The 12 rotations restore the facing.
 int CombatII::battle_ai_3b9e1(int unit_index) {
     battle_target_list_.clear();
     if (unit_index < 0 || (size_t)unit_index >= units_.size()) return -1;
@@ -58,7 +59,14 @@ int CombatII::battle_ai_3b9e1(int unit_index) {
     battle_fx_3b9e1(unit_index, actor.x, actor.y, 0);
     if (should_exit_) return 1;
     const std::vector<int> victims = battle_target_list_;
-    battle_apply_spell_hit(unit_index, victims, 0x1770, 0x14, 1);
+    // sub_28728 only applies damage and queues 45BFB/45ED2 (knockback direction is the
+    // target's own [63h]); the shared 287AF driver animates every target at once, then
+    // sub_1ED45 settles deaths/HP triggers (ASM 58307-58410, 33675-33812, 21642-21683).
+    battle_apply_spell_hit(unit_index, victims, 0x1770, 0x14, 1, /*defer=*/true);
+    if (should_exit_) return 1;
+    battle_spell_pace_287af();                                      // sub_287AF
+    if (should_exit_) return 1;
+    battle_spell_1ed45_targets(unit_index, victims);                // sub_1ED45
     battle_target_list_.clear();
     return 1;
 }

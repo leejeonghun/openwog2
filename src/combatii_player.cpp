@@ -657,8 +657,12 @@ void CombatII::render_attack_range() {
     // sub_2E25B keeps the 44D67(1) gate on while its landing cursor waits; the first forward
     // ray painted by 13D02 is held in battle_e8_grid_. The pick clears the pending state
     // before the second-pass collection, so only the cursor frame shades that grid.
+    // sub_3BFAC is the other handler that keeps 44D67(1) on while its destination cursor
+    // waits: it paints the diamond into E8F46 before the 4A483 loop, so the marks are shaded
+    // until the click runs 44D67(0).
     const bool landing_cursor =
-        battle_weapon_pending_si_ >= 0 && battle_weapon_pending_kind_ == 5;
+        (battle_weapon_pending_si_ >= 0 && battle_weapon_pending_kind_ == 5) ||
+        (battle_item_select_ && battle_item_pending_dx_ == 9);
     auto shade_grid = [&](const auto& e8) {
         if (e8.size() != (size_t)map_w_ * (size_t)map_h_) return;
         for (int r = 0; r < 13; ++r) {
