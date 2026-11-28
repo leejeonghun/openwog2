@@ -8501,7 +8501,14 @@ int CombatII::battle_item_3c548(int unit_index, int form) {
     u.combat_flags_1e = 0;
     u.hp = u.max_hp; u.hp_deficit = u.max_hp_deficit;                       // [48h]=[4Ch]
     u.combat_flags_15 = 0;
-    u.ail_1f = u.ail_23 = u.ail_25 = u.ail_27 = 0xFFFF;                      // [16h..27h] = FFFF
+    // loc_3C61F: [1Fh+2k] = FFFF and [16h+2k] = the same word for k = 0..4, i.e. all nine
+    // words [16h]/[18h]/[1Ah]/[1Ch]/[1Fh]/[21h]/[23h]/[25h]/[27h]. The loop writes 16h..25h
+    // from the four 1Fh..25h stores and then 27h once more after edx == 4.
+    u.buff_16 = u.buff_18 = u.buff_1a = u.buff_1c = 0xFFFF;
+    u.ail_1f = u.ail_21 = u.ail_23 = u.ail_25 = u.ail_27 = 0xFFFF;           // [16h..27h] = FFFF
+    // sub_1198D([+61h]) -> [+60h] after the form change (ASM 59344-59348). The port has no
+    // image-slot refcount, but [60h] is part of the qsv 0x88 record and of the 21944 argument.
+    u.slot_hint = battle_image_slot((int16_t)(uint16_t)u.sprite_type);
     camera_center_on((int)(int8_t)u.x, (int)(int8_t)u.y);                   // sub_1124A
     battle_wc1_occupancy_preserve_or_close("recall transform");             // sub_11EE4/119B6/1198D/11E04 (large-sprite occupancy)
     // Presentation: 61147(1) -> 1124A -> 10971/10988(+0Ch) -> 1FEA4("recall.nsp") ->
@@ -8576,6 +8583,9 @@ void CombatII::battle_item_3c70c(int unit_index) {
     units_[(size_t)unit_index].death_dissolve = 0;
     battle_restore_stored_1808a(unit_index, true, true);             // sub_1808A + 12124 + 45559
     if ((size_t)unit_index >= units_.size()) return;
+    // sub_1198D([+61h]) -> [+60h] after the restore (ASM 59414-59418).
+    units_[(size_t)unit_index].slot_hint =
+        battle_image_slot((int16_t)(uint16_t)units_[(size_t)unit_index].sprite_type);
     units_[(size_t)unit_index].facing = saved_facing;                // mov [ecx+63h],al
 }
 
@@ -8671,9 +8681,15 @@ int CombatII::battle_item_3b7ce(int unit_index, int tx, int ty) {
     merged.linked_class = saved.combat_class;            // sub_174CF: [[77h]+11h] = the stash record's class
     units_[(size_t)unit_index] = merged;
     battle_form_17e6d(units_[(size_t)unit_index], units_[(size_t)unit_index].code_b); // sub_17E6D
-    // sub_11B77: the stash [60h] is the rider image slot (forms 0..4 -> word_706D4[61h],
-    // 5/6 -> word_70896[61h], +0x1F4). The port has no slot table; the overlay draw recomputes
-    // the same mapped type from the stash record and the live form (battle_rider_image_type).
+    // sub_11B77: [stash+60h] = 1198D(rider type). The rider type is word_706D4[stash+61h]
+    // for forms 0..4, word_70896[stash+61h] for 5/6, plus 1F4h; battle_rider_image_type
+    // returns that mapped type and battle_image_slot the 1198D slot number.
+    {
+        auto& mounted = units_[(size_t)unit_index];
+        const int mapped = battle_rider_image_type(mounted);
+        if (mounted.stored_77)
+            mounted.stored_77->slot_hint = (mapped >= 0) ? battle_image_slot(mapped) : 0;
+    }
     battle_wc1_occupancy_preserve_or_close("mount (3B7CE)");          // sub_11E04
     present_cutscene_frame();                                         // sub_45559
     if (battle_trace_)
@@ -8730,7 +8746,8 @@ int CombatII::battle_item_3b614(int unit_index, int tx, int ty) {
     u.x = (int8_t)tx; u.y = (int8_t)ty;                  // [ebp] = the clicked tile
     u.code_b = 0;                                        // [5Ch]=0
     u.stored_77.reset();                                 // [ebp+77h]=0
-    // sub_1198D([61h]) -> [60h]: the port stores slot_hint on the stash record instead.
+    // sub_1198D([61h]) -> [60h] (ASM 58086-58091) before sub_11F74 occupies the click tile.
+    u.slot_hint = battle_image_slot((int16_t)(uint16_t)u.sprite_type);
     battle_wc1_occupancy_preserve_or_close("dismount (3B614)");       // sub_11F74
     present_cutscene_frame();                                         // sub_45559
     if (battle_trace_)
@@ -8746,6 +8763,9 @@ void CombatII::battle_clone_3bc67(int unit_index) {
     auto& u = units_[(size_t)unit_index];
         std::vector<int> grid;
         battle_ai_169d7_reset(unit_index, grid);                  // sub_169D7
+        // sub_1033B(6) runs once, outside the var_8 = 1,3 loop, so both clones rotate with a
+        // 6-tick period (12 x 6 = 72 ticks each) instead of restarting a 3-tick timer.
+        game_timer_set(6);                                        // mov eax,6; mov edx,1
         const int caster_id = u.id;
         const int caster_index = unit_index;
         for (int v = 1; v < 4 && !should_exit_; v += 2) {          // var_8 = 1, 3
@@ -8760,6 +8780,7 @@ void CombatII::battle_clone_3bc67(int unit_index) {
             CombatUnitPlacement nu = src;                                      // copy 0x88 bytes
             nu.auto_battle = 2;                                                // [83h]=2
             nu.item_use_12 = (uint8_t)(src.id + 10);                           // [12h]=[0Fh]+10
+            nu.owner_87 = 0;                                                   // mov byte [ebx+87h],0
             nu.x = nx; nu.y = ny;
             nu.list_seq = battle_next_list_seq();                              // sub_1134F tail insert
             nu.battle_gauge = src.battle_gauge;
@@ -8768,7 +8789,6 @@ void CombatII::battle_clone_3bc67(int unit_index) {
             const size_t ci = units_.size() - 1;
             battle_wc1_occupancy_preserve_or_close("clone");
             camera_center_on(nx, ny);                                          // sub_1124A
-            game_timer_set(3);
             for (int s = 0; s < 12 && !should_exit_; ++s) {                    // [63h]+1 &3, 12 times
                 units_[ci].facing = (int8_t)((units_[ci].facing + 1) & 3);
                 present_cutscene_frame();
@@ -13842,6 +13862,10 @@ int CombatII::battle_use_item(int unit_index, int dx, int tx, int ty) {
         }
         case 1: { // sub_3B5B4 (jump table index 1): toggles [14h]&1 - sprite type +/-1 plus
                    //   image slot reallocation. Costs 40, returns -2.
+            //   Both branches release the old [60h] (sub_119B6), inc/dec [61h], then take the
+            //   slot of the new type (sub_1198D) into [60h] (ASM 57928-57963). The port does
+            //   not refcount slots (its NC2 cache is keyed by type), but [60h] itself is part
+            //   of the saved 0x88 record, so it must follow the new type.
             if (u.combat_flags_14 & 1) {
                 u.sprite_type = (int)(uint16_t)(u.sprite_type - 1);   // dec word [+61h]
                 u.combat_flags_14 = (uint8_t)(u.combat_flags_14 & 0xFE);
@@ -13849,6 +13873,7 @@ int CombatII::battle_use_item(int unit_index, int dx, int tx, int ty) {
                 u.sprite_type = (int)(uint16_t)(u.sprite_type + 1);   // inc word [+61h]
                 u.combat_flags_14 = (uint8_t)(u.combat_flags_14 | 1);
             }
+            u.slot_hint = battle_image_slot((int16_t)(uint16_t)u.sprite_type); // mov [edx+60h],al
             reset_unit_pose(u);                                       // equivalent of the 45559 redraw
             present_cutscene_frame();
             if (battle_trace_)
@@ -13858,9 +13883,11 @@ int CombatII::battle_use_item(int unit_index, int dx, int tx, int ty) {
             return -2;
         }
         case 9: { // sub_3BFAC: teleport - click-move to an E8F46 == -1 tile inside the diamond of
-                   //   radius 5 (wc1) or 7. Costs 40, returns -2.
+                   //   radius 5 (class guard kind 1) or 7. Costs 40, returns -2.
             if (tx < 0 || ty < 0 || tx >= (int)map_w_ || ty >= (int)map_h_) return 3;
-            const int radius = (weapon_class(u) == 1) ? 5 : 7;          // unk_731B4 == 1
+            // sub_3BFAC reads byte unk_731B4[class*15] (the class AI stat record's first byte,
+            // class_stat_guard_kind), not the wc1 weapon_class table: 1 -> radius 5, else 7.
+            const int radius = ((int)class_stat_guard_kind(u.combat_class) == 1) ? 5 : 7;
             const int ux = (int)(int8_t)u.x, uy = (int)(int8_t)u.y;
             if (std::abs(tx - ux) + std::abs(ty - uy) > radius) return 3;
             std::vector<int> grid;
