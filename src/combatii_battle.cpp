@@ -10296,7 +10296,9 @@ void CombatII::battle_spell_load_ssps(int r_code) {
             else { load("f-arrow.ssp", 0x32); load("f-wave.ssp", 0x33); }
             break;
         case 1:  case 8:  case 15: load("enchant.ssp", 0x32); break;
-        case 2:  load("f-field.ssp", 0x32); break;
+        case 2:  // 2B75A: f-field 32h, ddoing 33h, effect2 34h (all three before 29514)
+            load("f-field.ssp", 0x32); load("ddoing.ssp", 0x33); load("effect2.ssp", 0x34);
+            break;
         case 16:  // 2B919
             load("f-field.ssp", 0x32); load("ddoing.ssp", 0x33); load("bolt3.ssp", 0x34);
             break;
@@ -10350,7 +10352,9 @@ void CombatII::battle_spell_load_ssps(int r_code) {
         case 44:  // 2C28F
             load("death1.ssp", 0x32); load("death2.ssp", 0x33);
             break;
-        case 47: load("b-hole.ssp", 0x32); break;
+        case 47:  // 2C566: b-hole 32h then bolt3 33h (both after 28B24 succeeds)
+            load("b-hole.ssp", 0x32); load("bolt3.ssp", 0x33);
+            break;
         case 48:  // 2A1C6 kind 5
             if (k == 1) load("f-meteo2.ssp", 0x32);
             else { load("atomic.ssp", 0x32); load("darkzone.ssp", 0x33); }
